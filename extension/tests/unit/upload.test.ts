@@ -36,3 +36,34 @@ describe('the in-page function strings', () => {
     expect(INJECT_FN).toContain('composed:true');
   });
 });
+
+describe('LOCATE_FN (functional, in happy-dom)', () => {
+  // Materialize the in-page locator string and run it against a real DOM so the
+  // selection heuristic the live upload depends on is actually exercised.
+  const locate = new Function('return ' + LOCATE_FN)() as (label: string) => Element | null;
+
+  it('returns null when the page has no file input', () => {
+    document.body.innerHTML = '<div>no inputs here</div>';
+    expect(locate('')).toBeNull();
+  });
+
+  it('prefers the input whose label/name/aria matches labelContains', () => {
+    document.body.innerHTML =
+      '<input type="file" name="resume_field" id="a">' +
+      '<input type="file" aria-label="Cover letter" id="b">';
+    expect((locate('cover') as HTMLElement).id).toBe('b');
+  });
+
+  it('falls back to the résumé/cv input when no label hint is given', () => {
+    document.body.innerHTML =
+      '<input type="file" name="portfolio" id="a">' +
+      '<label for="b">Upload CV</label><input type="file" id="b">';
+    expect((locate('') as HTMLElement).id).toBe('b');
+  });
+
+  it('falls back to the first file input when nothing matches', () => {
+    document.body.innerHTML =
+      '<input type="file" name="doc1" id="a"><input type="file" name="doc2" id="b">';
+    expect((locate('') as HTMLElement).id).toBe('a');
+  });
+});
