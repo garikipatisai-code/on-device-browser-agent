@@ -95,6 +95,7 @@ export type PanelCommand =
   | { type: 'settings.set'; settings: Partial<Settings> }
   | { type: 'domainTier.set'; host: string; tier: DomainTier }
   | { type: 'profile.extract'; resumeText: string }
+  | { type: 'resume.store'; name: string; mime: string; base64: string }
   | { type: 'models.list' }
   | { type: 'preflight' };
 
@@ -117,6 +118,7 @@ export type SwUpdate =
   | { type: 'preflight'; ok: boolean; details: Record<string, unknown> }
   | { type: 'models'; ok: boolean; models: string[]; error?: string }
   | { type: 'profileExtracted'; ok: boolean; profileJson?: string; error?: string }
+  | { type: 'resumeStored'; ok: boolean; name?: string; error?: string }
   | { type: 'metrics'; metrics: MetricsSnapshot }
   | { type: 'error'; message: string };
 
