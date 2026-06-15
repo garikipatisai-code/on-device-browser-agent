@@ -1,0 +1,8 @@
+# dependencies / build artifacts
+node_modules/
+
+# a stray root lockfile (the real one is extension/package-lock.json)
+/package-lock.json
+
+# os
+.DS_Store
