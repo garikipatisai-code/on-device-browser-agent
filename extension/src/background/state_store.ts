@@ -331,6 +331,29 @@ export async function memoryList(): Promise<string[]> {
   }
 }
 
+// ---------- Résumé file (warm; base64 bytes for in-page upload) ----------
+
+export interface ResumeFile {
+  name: string;
+  mime: string;
+  base64: string;
+  savedAt: number;
+}
+
+const RESUME_KEY = 'resume:file';
+
+export async function saveResumeFile(f: { name: string; mime: string; base64: string }): Promise<void> {
+  await memorySet(RESUME_KEY, { ...f, savedAt: Date.now() });
+}
+
+export async function loadResumeFile(): Promise<ResumeFile | null> {
+  const v = await memoryGet(RESUME_KEY);
+  if (v && typeof v === 'object' && typeof (v as ResumeFile).base64 === 'string') {
+    return v as ResumeFile;
+  }
+  return null;
+}
+
 export async function setScratchpad(taskId: string, content: string): Promise<void> {
   try {
     const d = await db();
