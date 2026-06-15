@@ -43,6 +43,14 @@ describe('matchWorkflow', () => {
     const wf = matchWorkflow('apply to the software engineer job and fill the application form', SEED_WORKFLOWS);
     expect(wf?.id).toBe('seed-job-application');
   });
+
+  it('the job recipe attaches the résumé via tab.upload_file and never submits', () => {
+    const wf = SEED_WORKFLOWS.find((w) => w.id === 'seed-job-application')!;
+    const hints = wf.steps.map((s) => s.toolHint ?? '');
+    expect(hints).toContain('tab.upload_file');
+    expect(JSON.stringify(wf.steps).toLowerCase()).toContain('do not submit');
+    expect(hints.some((h) => h.includes('submit:true'))).toBe(false);
+  });
 });
 
 describe('renderRecipe', () => {
