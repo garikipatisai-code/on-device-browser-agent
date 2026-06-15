@@ -2,12 +2,12 @@ import type { ManifestV3Export } from '@crxjs/vite-plugin';
 
 export const manifest: ManifestV3Export = {
   manifest_version: 3,
-  name: 'Browser Agent',
-  description: 'Goal-anchored autonomous browser agent (local-first, MV3).',
+  name: 'On-Device Browser Agent',
+  description: 'A goal-anchored browser agent that runs entirely on your device via a local Ollama model. MV3.',
   version: '0.1.0',
   minimum_chrome_version: '116',
   action: {
-    default_title: 'Open Browser Agent',
+    default_title: 'Open On-Device Browser Agent',
   },
   side_panel: {
     default_path: 'src/sidepanel/index.html',

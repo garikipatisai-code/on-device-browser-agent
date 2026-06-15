@@ -1,5 +1,6 @@
 {
-  "name": "browser-agent",
+  "name": "on-device-browser-agent",
+  "description": "Goal-anchored browser agent that runs entirely on-device via a local Ollama model (MV3 Chrome extension).",
   "private": true,
   "version": "0.1.0",
   "type": "module",
