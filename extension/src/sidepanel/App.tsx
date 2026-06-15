@@ -11,12 +11,14 @@ import { DEFAULT_SETTINGS, PORT_NAME } from '@/shared/messages';
 import { Timeline } from './components/Timeline';
 import { SettingsPanel } from './components/SettingsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
+import { buildApplyGoal } from './apply';
 
 type Tab = 'agent' | 'settings' | 'metrics';
 
 export function App() {
   const [tab, setTab] = useState<Tab>('agent');
   const [goal, setGoal] = useState('');
+  const [applyUrl, setApplyUrl] = useState('');
   const [status, setStatus] = useState<AgentStatus>({
     phase: 'IDLE',
     goal: null,
@@ -138,6 +140,17 @@ export function App() {
     send({ type: 'agent.start', goal: trimmed });
   };
 
+  const handleApply = () => {
+    const u = applyUrl.trim();
+    if (!u) return;
+    const g = buildApplyGoal(u);
+    setGoal(g);
+    setEvents([]);
+    setNotice(null);
+    send({ type: 'preflight' });
+    send({ type: 'agent.start', goal: g });
+  };
+
   const handleAbort = () => send({ type: 'agent.abort' });
 
   return (
@@ -156,6 +169,21 @@ export function App() {
 
       {tab === 'agent' && (
         <>
+          <div className="apply-row" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            <input
+              className="goal-input"
+              placeholder="Apply to a job: paste a Greenhouse/Lever job URL"
+              value={applyUrl}
+              onChange={(e) => setApplyUrl(e.target.value)}
+              disabled={running}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !running) handleApply();
+              }}
+            />
+            <button className="btn" onClick={handleApply} disabled={running || !applyUrl.trim()}>
+              Apply
+            </button>
+          </div>
           <div className="goal-row">
             <input
               className="goal-input"
