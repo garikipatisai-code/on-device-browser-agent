@@ -1,66 +1,68 @@
-# Browser Agent Blueprint — Complete Bootstrap Kit
+# On-Device Browser Agent
 
-> **Purpose:** Give a fresh Claude Code session everything it needs to build a
-> production-grade autonomous browser agent from scratch — architecture, model
-> strategy, tool catalog, safety guardrails, lessons learned, and implementation
-> roadmap. No tribal knowledge required.
+A goal-anchored autonomous browser agent that runs **entirely on your device** — a Chrome (MV3) extension driven by a **local LLM via [Ollama](https://ollama.com)** (default: `gemma4:e4b`). You give it a goal in plain language; it plans, reads pages, clicks/types, and reports back. No cloud, no API keys — your browsing and your data stay local.
 
-## What you're building
+## What it does
 
-A Chrome MV3 extension that turns the browser into a **goal-anchored
-autonomous agent**. The user states any goal they'd open a browser to accomplish
-("Find me a wireless mouse under $30 with next-day delivery", "Book a flight to
-Chicago next Tuesday morning", "Fill out this multi-page tax form"), and the
-agent pursues it autonomously — navigating, clicking, typing, reading pages,
-comparing options — while staying locked on the original intent even as its
-working context fills.
+- **Goal → multi-step execution.** A `Planner → Executor → Evaluator → Compactor` loop decomposes a goal, acts one tool at a time, and judges progress.
+- **Reads pages via the accessibility tree** (indexed, compact) — not brittle screenshots — and falls back to a vision read only when a page exposes no a11y tree.
+- **Acts:** open tabs, search the web, open a result, click elements, type into fields, submit forms, scroll.
+- **Self-improving:** records successful task flows ("workflow memory") and replays them as recipes on similar tasks.
+- **Job-apply (v1):** upload a résumé (`.pdf`/`.docx`/`.txt`); the model extracts your profile, which it then uses to fill application form fields. (Filling the résumé *file* into an upload widget isn't supported yet — see Caveats.)
+- **Safety by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only`/`full-action` before the agent can interact. PII is redacted from logs.
 
-**Scope:** Everything a human with access to a browser can do. Not just shopping.
-Any web-based task.
+## Requirements
 
-## How to use this kit
+- **Chrome 116+**
+- **[Ollama](https://ollama.com)** running locally (`ollama serve`, default `http://localhost:11434`)
+- Models pulled:
+  ```
+  ollama pull gemma4:e4b            # planner / executor / evaluator / compactor / vision
+  ollama pull mxbai-embed-large     # embeddings
+  ```
+- Node 20+ for building.
 
-Read in order for the full picture, or jump to specific files:
+## Setup
 
-| File | When to read |
-|------|-------------|
-| [`01-vision-and-scope.md`](./01-vision-and-scope.md) | First — understand the north star |
-| [`02-architecture.md`](./02-architecture.md) | Understand the agent loop design |
-| [`03-model-strategy.md`](./03-model-strategy.md) | Pick models for each role |
-| [`04-technical-stack.md`](./04-technical-stack.md) | Set up the dev environment |
-| [`05-agent-tools.md`](./05-agent-tools.md) | Build the tool catalog |
-| [`06-prompts-and-budgets.md`](./06-prompts-and-budgets.md) | Write role prompts |
-| [`07-safety-and-constraints.md`](./07-safety-and-constraints.md) | Add guardrails |
-| [`08-lessons-learned.md`](./08-lessons-learned.md) | Avoid known pitfalls |
-| [`09-implementation-roadmap.md`](./09-implementation-roadmap.md) | Build in the right order |
-| [`10-testing-strategy.md`](./10-testing-strategy.md) | Keep it working |
-| [`11-real-world-examples.md`](./11-real-world-examples.md) | See expected behavior |
+```bash
+cd extension
+npm install
+npm run build          # tsc + vite build → extension/dist
+```
 
-## Quick orientation
+Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `extension/dist`. It opens in the side panel from the toolbar.
 
-**Architecture:** Hierarchical Planner → Executor → Evaluator loop (NOT flat ReAct).
-The user's goal lives outside model context in persistent storage. Three specialized
-roles with different models and context budgets.
+> Behind a TLS-intercepting corporate proxy and `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`? Point npm at your corp CA bundle (`npm config set cafile /path/to/corp-ca.pem`) or, as a last resort, `npm config set strict-ssl false` (npm still verifies package integrity hashes).
 
-**Models (current, June 2026):** Gemma 4 family via Ollama — `gemma4:2b` (fast/cheap),
-`gemma4:4b` (balanced), `gemma4:26b` (reasoning). Local-first; cloud BYOK is opt-in.
+## Usage
 
-**Platform:** Chrome MV3 extension — Side Panel (UI) + Service Worker (orchestration).
-Tools use Chrome DevTools Protocol (CDP) for page actions. ARIA tree for page extraction.
+1. **Settings → Models:** confirm Ollama is reachable and the models are installed (Refresh).
+2. **Settings → Domain tiers:** add the site(s) you want the agent to act on and set `click-only` or `full-action`. (Unlisted sites stay read-only.)
+3. *(For job-apply)* **Settings → Profile:** upload a résumé — the model fills the profile JSON; review and **Save**.
+4. **Agent tab:** type a goal and **Run**, e.g.:
+   - `search amazon for a wireless mouse and list the first 3 results`
+   - `go to amazon.com, search for "wireless mouse", open the first product, and report its title, price, and rating`
 
-**Safety:** Domain-tier system (read-only / click-only / full-action per host).
-Circuit breaker detects loops. PII redacted at persistence boundaries.
+## Architecture
 
-## Prerequisites for the implementing session
+- **Service worker** (`src/background`) — owns the orchestrator and the Ollama client; kept alive across long runs (20s keepalive + a detached run loop).
+- **Side panel** (`src/sidepanel`, React) — goal input, live timeline, settings, and résumé parsing (`mammoth`/`pdfjs`).
+- **Agent** (`src/agent`) — roles (`planner`/`executor`/`evaluator`/`compactor`), the tool registry + browser tools (CDP-based, with command timeouts), the ARIA simplifier, workflow memory, profile, and the safety layer (domain tiers, redaction, circuit breaker).
 
-- Node.js 20+, TypeScript, Vite + CRXJS (extension bundling)
-- Ollama running locally with models pulled
-- Chrome 148+ for MV3 side panel + CDP access
-- Understanding of Chrome extension APIs (sidePanel, debugger, tabs, storage)
+## Development
 
-## Reference implementation
+```bash
+npm run typecheck      # tsc --noEmit
+npm test               # vitest (unit + integration + property)
+npm run build          # production build into dist/
+```
 
-The Polaris project at `~/Documents/Projects/Polaris` is a working reference
-implementation covering M1 (scaffold) through M3.5 (browser tools + safety).
-Use it to see concrete code patterns, not as a constraint — the next build
-can be cleaner.
+## Caveats
+
+- **Small-model ceiling.** It runs on a ~4B local model; long interactive chains are made reliable by harness scaffolding (observe-then-act gating, auto-re-read after navigation, workflow-memory recipes) rather than raw model capability.
+- **Résumé parsing is text-layer only** — a scanned/image PDF (no text) won't extract; use a text-based PDF or `.docx`.
+- **Résumé file upload into a page is not supported** (a Chrome extension can't inject an on-disk file into a page's `<input type=file>` via CDP). Text fields fill from your profile; upload the file manually.
+
+## License
+
+Personal project. No warranty.
