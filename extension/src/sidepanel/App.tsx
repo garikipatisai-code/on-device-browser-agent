@@ -82,6 +82,13 @@ export function App() {
             setNotice({ msg: msg.error ?? 'Profile extraction failed.', kind: 'error' });
           }
           break;
+        case 'resumeStored':
+          if (msg.ok) {
+            setNotice({ msg: `Résumé "${msg.name}" stored — the agent can attach it to applications.`, kind: 'warn' });
+          } else {
+            setNotice({ msg: msg.error ?? 'Could not store the résumé file.', kind: 'error' });
+          }
+          break;
         case 'preflight':
           if (!msg.ok) {
             setNotice({
@@ -202,6 +209,7 @@ export function App() {
             setNotice(null);
             send({ type: 'profile.extract', resumeText });
           }}
+          onStoreResume={(payload) => send({ type: 'resume.store', ...payload })}
         />
       )}
 
