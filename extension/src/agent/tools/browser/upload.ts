@@ -8,8 +8,14 @@
 // the approach real automation uses when it only has bytes, not a file path.
 //
 // This module holds the pure pieces (in-page function strings + CDP param
-// builders); the tool dispatch that wires them through CDP is appended in the
-// next step alongside its imports.
+// builders) and the tab.upload_file tool that wires them through CDP.
+
+import { z } from 'zod';
+import type { ToolDefDescriptor } from '../registry';
+import { withCdp } from './lifecycle';
+import { assertCanAct } from '@/agent/safety/domain_tiers';
+import { clearExtractionCache } from './aria_tool';
+import { loadResumeFile } from '@/background/state_store';
 
 // Runs IN THE PAGE. Returns the file input to use: the one whose label/name/aria
 // matches `label` if given, else the résumé/cv one, else the first. null if none.
@@ -64,3 +70,46 @@ export function buildInjectParams(
     returnByValue: true,
   };
 }
+
+async function tabUrl(tabId: number): Promise<string> {
+  return new Promise((resolve) => chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')));
+}
+
+export const tabUploadFileTool: ToolDefDescriptor<{ tabId: number; labelContains?: string }> = {
+  name: 'tab.upload_file',
+  description:
+    "Attach the user's stored résumé to a file-upload field. The file input is usually hidden (display:none) and has NO ARIA index — call this with just tabId (optionally labelContains to choose among several upload fields). Do NOT use tab.click for file uploads. Requires click-only tier.",
+  argsSchema: z.object({
+    tabId: z.number().int(),
+    labelContains: z.string().optional(),
+  }),
+  async dispatch({ tabId, labelContains }, ctx) {
+    const url = await tabUrl(tabId);
+    assertCanAct(url, 'click-only', ctx.settings.domainTiers);
+    const resume = await loadResumeFile();
+    if (!resume) {
+      return { ok: false, content: 'No résumé stored. Upload one in Settings → Profile first.' };
+    }
+    const data = await withCdp(tabId, async (send) => {
+      const located = await send<{ result?: { objectId?: string; subtype?: string } }>('Runtime.evaluate', {
+        expression: buildLocateExpression(labelContains),
+        returnByValue: false,
+      });
+      const objectId = located.result?.objectId;
+      if (!objectId || located.result?.subtype === 'null') return null;
+      const injected = await send<{ result?: { value?: Record<string, unknown> } }>(
+        'Runtime.callFunctionOn',
+        buildInjectParams(objectId, resume) as unknown as Record<string, unknown>,
+      );
+      return injected.result?.value ?? {};
+    });
+    clearExtractionCache(tabId);
+    if (data === null) {
+      return {
+        ok: false,
+        content: 'No <input type=file> found on this page (it may be inside an iframe, which is unsupported in v1).',
+      };
+    }
+    return { ok: true, content: `Attached résumé "${resume.name}" to the upload field.`, data: data as Record<string, unknown> };
+  },
+};
