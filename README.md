@@ -6,9 +6,9 @@ A goal-anchored autonomous browser agent that runs **entirely on your device** �
 
 - **Goal → multi-step execution.** A `Planner → Executor → Evaluator → Compactor` loop decomposes a goal, acts one tool at a time, and judges progress.
 - **Reads pages via the accessibility tree** (indexed, compact) — not brittle screenshots — and falls back to a vision read only when a page exposes no a11y tree.
-- **Acts:** open tabs, search the web, open a result, click elements, type into fields, submit forms, scroll.
+- **Acts:** open tabs, search the web, open a result, click elements, type into fields, submit forms, scroll, attach a file to an upload field.
 - **Self-improving:** records successful task flows ("workflow memory") and replays them as recipes on similar tasks.
-- **Job-apply (v1):** upload a résumé (`.pdf`/`.docx`/`.txt`); the model extracts your profile, which it then uses to fill application form fields. (Filling the résumé *file* into an upload widget isn't supported yet — see Caveats.)
+- **Job-apply (v1):** upload a résumé (`.pdf`/`.docx`/`.txt`); the model extracts your profile to fill application form fields, and **attaches the résumé file itself** to the form. Use the **"Apply to a job"** box with a Greenhouse/Lever URL — the agent fills + attaches, then **stops before submit** for your review (it never auto-submits). See Caveats for ATS coverage.
 - **Safety by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only`/`full-action` before the agent can interact. PII is redacted from logs.
 
 ## Requirements
@@ -42,6 +42,7 @@ Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → 
 4. **Agent tab:** type a goal and **Run**, e.g.:
    - `search amazon for a wireless mouse and list the first 3 results`
    - `go to amazon.com, search for "wireless mouse", open the first product, and report its title, price, and rating`
+5. **Job-apply:** after uploading your résumé (step 3), grant the ATS host `click-only` (step 2 — e.g. `boards.greenhouse.io`, `jobs.lever.co`), then use the **"Apply to a job"** box on the Agent tab: paste the posting URL → **Apply**. The agent fills the form from your profile, attaches your résumé, and stops for you to review and submit.
 
 ## Architecture
 
@@ -61,7 +62,7 @@ npm run build          # production build into dist/
 
 - **Small-model ceiling.** It runs on a ~4B local model; long interactive chains are made reliable by harness scaffolding (observe-then-act gating, auto-re-read after navigation, workflow-memory recipes) rather than raw model capability.
 - **Résumé parsing is text-layer only** — a scanned/image PDF (no text) won't extract; use a text-based PDF or `.docx`.
-- **Résumé file upload into a page is not supported** (a Chrome extension can't inject an on-disk file into a page's `<input type=file>` via CDP). Text fields fill from your profile; upload the file manually.
+- **Résumé file upload (job-apply)** works on standard ATS forms (Greenhouse/Lever) by injecting the stored file into the page's `<input type=file>`. Chrome blocks the on-disk CDP path (`DOM.setFileInputFiles`) for extensions, so the bytes are injected in-page via a `DataTransfer`. Not yet covered: Workday's drag-drop/direct-to-S3 uploader, and forms embedded in a cross-origin iframe. The agent fills and attaches but **never submits** — you review and submit.
 
 ## License
 
