@@ -146,6 +146,7 @@ Output: ONLY a JSON object of the form:
 - Judge the RESULT, not the path. The Executor often does MORE than the active step in one turn (it may already have searched, clicked, or reached a later stage) — that is GOOD. If the step's criteria are met OR already surpassed, verdict PASS. NEVER FAIL or replan just because extra actions were taken, the step was "overshot", or the agent is ahead of the plan.
 - shouldReplan=true ONLY for a wrong overall approach (wrong site, a genuine dead end) — NEVER for overshoot, extra steps, or a single failed action.
 - An error/empty page is NOT success: if the page shows "Page Not Found"/404, "no results", a captcha, a login wall, or near-empty content, the step FAILED — verdict FAIL. Never rationalize an error or empty page as a pass.
+- VERIFY against the page: CURRENT PAGE CONTENT below (when present) is the ACTUAL page. If the result asserts a specific fact, number, or rating that is NOT present there, the step has NOT succeeded — verdict FAIL and name the unsupported claim. Never trust the executor's summary over the page.
 - finishVerdict MUST be null in almost every case. Set it ONLY when the TASK IS OVER:
     • "success" — the ENTIRE user goal is verified complete (not just this step).
     • "blocked"/"failed" — the goal is impossible or hard-blocked (captcha, login wall, dead end).
@@ -156,6 +157,9 @@ Output: ONLY a JSON object of the form:
     `SUCCESS CRITERIA: ${step.successCriteria}`,
     ctx.recentActions ? `ACTIONS TAKEN THIS STEP (judge the whole sequence, not just the last):\n${ctx.recentActions}` : '',
     `MOST RECENT EXECUTOR OUTPUT:\n${lastResult.slice(0, 4_000)}`,
+    ctx.pageContentBlock
+      ? `CURRENT PAGE CONTENT (the actual page — verify the result's claims against THIS, not the executor's words):\n${ctx.pageContentBlock}`
+      : '',
     ctx.findingsBlock ? `FINDINGS:\n${ctx.findingsBlock}` : '',
   ]
     .filter(Boolean)
