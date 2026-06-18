@@ -1,6 +1,7 @@
 // Pure, deterministic scorer for a single benchmark run. No model calls.
 
 import type { Expectation } from './fixtures';
+import { ungroundedNumbers } from '@/agent/verify/grounding';
 
 export interface BenchRun {
   phase: 'DONE' | 'ABORTED';
@@ -16,27 +17,6 @@ export interface Score {
   correct: boolean;
   grounded: boolean;
   reasons: string[];      // human-readable failure notes
-}
-
-// Currency, decimals (ratings/prices), or multi-digit integers (years, counts).
-// Bare single digits (list markers "1.", "top 3") are intentionally NOT matched,
-// so they never produce a false hallucination flag.
-const NUM_RE = /\$\s?\d[\d,]*(?:\.\d+)?|\b\d+\.\d+\b|\b\d{2,}\b/g;
-
-function normNum(tok: string): string {
-  return tok.replace(/[$\s,]/g, '');
-}
-
-export function dataNumbers(s: string): string[] {
-  const m = s.match(NUM_RE);
-  if (!m) return [];
-  return [...new Set(m.map(normNum))];
-}
-
-/** Numbers in `summary` that do NOT appear anywhere in `observed`. */
-export function ungroundedNumbers(summary: string, observed: string): string[] {
-  const obs = observed.replace(/[$\s,]/g, '');
-  return dataNumbers(summary).filter((n) => !obs.includes(n));
 }
 
 function matches(summary: string, m: string | RegExp): boolean {
