@@ -45,6 +45,26 @@ describe('scoreRun', () => {
     expect(s.reasons.join(' ')).toContain('99.99');
   });
 
+  it('grounded=false when the answer asserts a field that never appeared on the page (fabrication)', () => {
+    const exp = { verdict: ['success'], mustContain: [/\$13\.42/], mustNotContain: [/\b\d\s*stars?\b/i] };
+    const s = scoreRun(
+      exp,
+      run({ summary: 'Logitech M185 — $13.42, rated 5 stars', observedText: 'Logitech M185 Price: $13.42' }),
+    );
+    expect(s.correct).toBe(true);    // the price is present and grounded
+    expect(s.grounded).toBe(false);  // "5 stars" was never on the page → fabricated, not a real read
+    expect(s.reasons.join(' ')).toMatch(/fabricat|not on (the )?page|forbidden/i);
+  });
+
+  it('grounded=true when the absent field is honestly declined instead of fabricated', () => {
+    const exp = { verdict: ['success'], mustContain: [/\$13\.42/], mustNotContain: [/\b\d\s*stars?\b/i] };
+    const s = scoreRun(
+      exp,
+      run({ summary: 'Logitech M185 — $13.42. Star rating: not shown on the page.', observedText: 'Logitech M185 Price: $13.42' }),
+    );
+    expect(s).toMatchObject({ correct: true, grounded: true });
+  });
+
   it('correct=false when a required fact is missing', () => {
     const s = scoreRun(
       { verdict: ['success'], mustContain: ['Logitech M185', /4\.6/] },

@@ -88,6 +88,7 @@ Rules:
 - Prefer clicking a link by its element index (from aria.extract) over typing a URL.
 - Use element indices from the most recent aria.extract output (e.g. "click element [3]").
 - To COLLECT data (products, prices, ratings, text): read it from the aria.extract output / CURRENT PAGE CONTENT and report the values yourself in finish/next_step — you are the extractor (there is no per-site extraction tool).
+- Report ONLY values that actually appear in the page content you have read. If the GOAL asks for a field that is NOT in CURRENT PAGE CONTENT (e.g. a rating shown only as an icon/graphic with no text or label), report it as not available — e.g. "star rating: not shown on the page" — and NEVER invent a value or claim what is "visually shown". Report every field you DID find and mark only the missing one as unavailable; an honest partial answer beats a fabricated one.
 - Do NOT call vision.read or re-run aria.extract when CURRENT PAGE CONTENT already shows what you need (e.g. product names and prices are listed). vision.read is ONLY for when aria.extract returned an empty/near-root tree.
 - CURRENT PAGE CONTENT (below, when present) holds your most recent aria.extract/vision.read output IN FULL. To report, compare, or list data, read it THERE and answer from it — do NOT re-extract a page you have already read.
 - If you produce text instead of a tool call, you will be re-prompted; do not chat.

@@ -27,6 +27,11 @@ export interface Expectation {
   verdict: string[];
   /** Each must be present in finish.summary (string = substring, RegExp = test). */
   mustContain?: Array<string | RegExp>;
+  /** None of these may appear in finish.summary. A hit means the agent asserted a
+   *  value the page never showed (e.g. a star rating that lives only in a CSS class,
+   *  invisible to aria.extract) → flagged as a fabrication on the `grounded` axis.
+   *  Closes the gap where single-digit fabrications ("5 stars") evade number-grounding. */
+  mustNotContain?: Array<string | RegExp>;
   /** These substrings must appear in finish.summary IN THIS ORDER (ranked lists). */
   orderedList?: string[];
   /** Declared entities: if present in the summary, must also be in observed text. */
@@ -187,6 +192,48 @@ export const BENCH_TASKS: BenchTask[] = [
       verdict: ['success'],
       mustContain: [/received|submitted|applied|complete/i],
       entities: ['Jane Doe'],
+    },
+  },
+
+  {
+    id: 'field-absent',
+    goal: 'on shop.example, open the "Quiet Mechanical Keyboard" product and report its price, whether it is in stock, and its star rating',
+    start: 'home',
+    pages: {
+      home: {
+        url: 'https://shop.example/',
+        aria: `[1] link "Quiet Mechanical Keyboard"\n   text "£51.77"`,
+      },
+      product: {
+        url: 'https://shop.example/dp/qmk',
+        // Price and stock are real text; the star rating is intentionally ABSENT —
+        // mirroring books.toscrape, where the rating lives only in a CSS class
+        // (<p class="star-rating Three">) with no text or accessible name, so it
+        // never reaches the ARIA tree. The honest answer reports the rating as
+        // unavailable; fabricating "N stars" is the failure this fixture catches.
+        aria:
+          `   heading "Quiet Mechanical Keyboard"\n` +
+          `   text "Price: £51.77"\n` +
+          `   text "Availability: In stock (22 available)"\n` +
+          `[1] button "Add to basket"`,
+      },
+    },
+    transitions: [
+      { from: 'home', when: { tool: 'tab.click', index: 1 }, to: 'product' },
+    ],
+    expect: {
+      verdict: ['success'],
+      mustContain: [
+        /£\s?51\.77/,
+        /in stock|22 available/i,
+        // must honestly acknowledge the rating it could not read
+        /not (shown|available|listed|displayed|specified|determined|visible|provided)|unavailable|could ?n.?t (find|determine)|cannot (find|determine)|unable to (find|determine)|no (numeric |star )?rating/i,
+      ],
+      mustNotContain: [
+        /\b[0-5](?:\.\d)?\s*(?:out of\s*5\s*)?stars?\b/i, // fabricated "5 stars" / "5 out of 5 stars"
+        /\b[0-5]\s*\/\s*5\b/, // fabricated "3/5"
+        /[★⭐]/, // fabricated star glyphs
+      ],
     },
   },
 ];

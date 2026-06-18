@@ -92,6 +92,15 @@ export function scoreRun(exp: Expectation, run: BenchRun): Score {
       reasons.push(`ungrounded entity: "${e}"`);
     }
   }
+  // A forbidden pattern means the answer asserted a field the page never showed
+  // (e.g. a CSS-only star rating). That is a fabrication — fail it on `grounded`,
+  // since number-grounding alone can't catch single-digit values like "5 stars".
+  for (const m of exp.mustNotContain ?? []) {
+    if (matches(run.summary, m)) {
+      grounded = false;
+      reasons.push(`fabricated / not on page: ${m.toString()}`);
+    }
+  }
 
   return { completed, correct, grounded, reasons };
 }
