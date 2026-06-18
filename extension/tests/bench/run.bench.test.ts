@@ -53,7 +53,7 @@ async function runTrial(task: BenchTask): Promise<{ run: BenchRun; score: Score;
   const ac = new AbortController();
   const orch = new Orchestrator({
     ollama, registry, settings, emit: () => undefined,
-    signal: ac.signal, maxStepTurns: 6, maxReplans: 1,
+    signal: ac.signal,
   });
 
   const t0 = Date.now();
@@ -78,7 +78,10 @@ async function runTrial(task: BenchTask): Promise<{ run: BenchRun; score: Score;
 
   const run: BenchRun = {
     phase, verdict, summary,
-    observedText: `${state.observedText()}\n${task.profileJson ?? ''}`,
+    // Grounding corpus = the user's GOAL + everything observed (pages/search) +
+    // the profile. A number the user themselves provided (e.g. a product name's
+    // "9000") is legitimate knowledge, not a hallucination.
+    observedText: `${task.goal}\n${state.observedText()}`,
     turns, replans: 0,
   };
   return { run, score: scoreRun(task.expect, run), ms: Date.now() - t0 };
