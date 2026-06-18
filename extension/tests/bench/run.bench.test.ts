@@ -51,8 +51,10 @@ async function runTrial(task: BenchTask): Promise<{ run: BenchRun; score: Score;
   };
 
   const ac = new AbortController();
+  let toolCalls = 0; // count real tool.call events (orchestrator's result.turns caps at 5)
   const orch = new Orchestrator({
-    ollama, registry, settings, emit: () => undefined,
+    ollama, registry, settings,
+    emit: (e) => { if (e.kind === 'tool.call') toolCalls += 1; },
     signal: ac.signal,
   });
 
@@ -60,7 +62,6 @@ async function runTrial(task: BenchTask): Promise<{ run: BenchRun; score: Score;
   let phase: 'DONE' | 'ABORTED' = 'ABORTED';
   let verdict = 'aborted';
   let summary = '';
-  let turns = 0;
   const timer = setTimeout(() => ac.abort(new Error('bench per-task timeout')), TASK_TIMEOUT_MS);
   try {
     const initial = await orch.start(task.goal);
@@ -68,7 +69,6 @@ async function runTrial(task: BenchTask): Promise<{ run: BenchRun; score: Score;
     phase = result.phase;
     verdict = result.verdict;
     summary = result.summary;
-    turns = result.turns;
   } catch (err) {
     summary = `ERROR: ${(err as Error).message}`;
     verdict = ac.signal.aborted ? 'timeout' : 'error';
@@ -82,7 +82,7 @@ async function runTrial(task: BenchTask): Promise<{ run: BenchRun; score: Score;
     // the profile. A number the user themselves provided (e.g. a product name's
     // "9000") is legitimate knowledge, not a hallucination.
     observedText: `${task.goal}\n${state.observedText()}`,
-    turns, replans: 0,
+    turns: toolCalls, replans: 0,
   };
   return { run, score: scoreRun(task.expect, run), ms: Date.now() - t0 };
 }
@@ -109,7 +109,7 @@ describe.skipIf(!RUN)('task-success benchmark (live model)', () => {
           // Stream the result NOW so a later timeout never discards it.
           const flag = (ok: boolean) => (ok ? '✓' : '✗');
           log(
-            `[bench] ${task.id.padEnd(14)} ${i + 1}/${TRIALS}  ${(ms / 1000).toFixed(0).padStart(3)}s  ` +
+            `[bench] ${task.id.padEnd(14)} ${i + 1}/${TRIALS}  ${(ms / 1000).toFixed(0).padStart(3)}s ${String(run.turns).padStart(2)}t  ` +
             `verdict=${run.verdict.padEnd(8)} ${flag(score.completed)}done ${flag(score.correct)}correct ${flag(score.grounded)}grounded`,
           );
           log(`        answer: ${run.summary.replace(/\s+/g, ' ').trim().slice(0, 220)}`);
