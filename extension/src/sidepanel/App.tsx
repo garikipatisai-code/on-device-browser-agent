@@ -7,7 +7,8 @@ import type {
   SwUpdate,
   TimelineEvent,
 } from '@/shared/messages';
-import { DEFAULT_SETTINGS, PORT_NAME } from '@/shared/messages';
+import { DEFAULT_SETTINGS } from '@/shared/messages';
+import { createPortClient, type PortClient } from './port';
 import { Timeline } from './components/Timeline';
 import { SettingsPanel } from './components/SettingsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
@@ -31,7 +32,7 @@ export function App() {
   const [notice, setNotice] = useState<{ msg: string; kind: 'warn' | 'error' } | null>(null);
   const [installedModels, setInstalledModels] = useState<string[]>([]);
   const [extractingProfile, setExtractingProfile] = useState(false);
-  const portRef = useRef<chrome.runtime.Port | null>(null);
+  const clientRef = useRef<PortClient | null>(null);
 
   useEffect(() => {
     const c = (globalThis as { chrome?: typeof chrome }).chrome;
@@ -39,10 +40,7 @@ export function App() {
       setNotice({ msg: 'Running outside Chrome — SW connection unavailable.', kind: 'warn' });
       return;
     }
-    const port = c.runtime.connect({ name: PORT_NAME });
-    portRef.current = port;
-    const send = (cmd: PanelCommand) => port.postMessage(cmd);
-    port.onMessage.addListener((msg: SwUpdate) => {
+    const onUpdate = (msg: SwUpdate) => {
       switch (msg.type) {
         case 'status':
           setStatus(msg.status);
@@ -93,24 +91,20 @@ export function App() {
           }
           break;
       }
-    });
-    port.onDisconnect.addListener(() => {
-      portRef.current = null;
-    });
-    send({ type: 'settings.get' });
-    send({ type: 'agent.status' });
-    send({ type: 'models.list' });
+    };
+    const client = createPortClient(onUpdate);
+    clientRef.current = client;
+    client.send({ type: 'settings.get' });
+    client.send({ type: 'agent.status' });
+    client.send({ type: 'models.list' });
     return () => {
-      try {
-        port.disconnect();
-      } catch {
-        /* noop */
-      }
+      client.disconnect();
+      clientRef.current = null;
     };
   }, []);
 
   const send = (cmd: PanelCommand) => {
-    portRef.current?.postMessage(cmd);
+    clientRef.current?.send(cmd);
   };
 
   const running = status.phase !== 'IDLE' && status.phase !== 'DONE' && status.phase !== 'ABORTED';
