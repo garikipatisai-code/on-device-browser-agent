@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { ToolDefDescriptor } from '../registry';
 import { NUM_CTX } from '@/agent/budget';
 import { sleep } from '@/background/signal';
+import { withCdp } from './lifecycle';
 
 /** Strip the `data:image/png;base64,` prefix → raw base64 (what Ollama wants). */
 export function stripDataUri(uri: string): string {
@@ -15,17 +16,15 @@ export function stripDataUri(uri: string): string {
 }
 
 async function captureTabPng(tabId: number): Promise<string> {
-  // captureVisibleTab grabs the active tab of its window, so activate first.
-  await new Promise<void>((resolve) => chrome.tabs.update(tabId, { active: true }, () => resolve()));
-  const tab = await new Promise<chrome.tabs.Tab>((resolve) => chrome.tabs.get(tabId, (t) => resolve(t)));
-  // A just-activated / freshly-navigated tab can capture blank before it paints.
-  await sleep(500);
-  return new Promise<string>((resolve, reject) => {
-    chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }, (uri) => {
-      const err = chrome.runtime.lastError;
-      if (err) reject(new Error(err.message));
-      else resolve(uri ?? '');
-    });
+  // Capture via CDP — the debugger is already used for reads/clicks. Unlike
+  // chrome.tabs.captureVisibleTab, Page.captureScreenshot grabs the TARGET tab
+  // without making it the active/foreground tab: no focus steal, and it works on
+  // a background tab. Returns raw base64 PNG (no data: prefix).
+  await sleep(300); // brief settle so a freshly-navigated page has painted
+  return withCdp(tabId, async (send) => {
+    await send('Page.enable').catch(() => undefined);
+    const res = await send<{ data?: string }>('Page.captureScreenshot', { format: 'png' });
+    return res.data ?? '';
   });
 }
 
@@ -44,8 +43,16 @@ export const visionReadTool: ToolDefDescriptor<{ tabId: number; question?: strin
       .describe('What to look for on the page. Defaults to a full literal transcription.'),
   }),
   async dispatch({ tabId, question }, ctx) {
-    const dataUri = await captureTabPng(tabId);
-    const b64 = stripDataUri(dataUri);
+    let b64: string;
+    try {
+      b64 = stripDataUri(await captureTabPng(tabId));
+    } catch (err) {
+      return {
+        ok: false,
+        content: `vision.read: screenshot capture failed (${(err as Error).message}) — use aria.extract instead.`,
+        data: { error: (err as Error).message },
+      };
+    }
     console.log(`[BA] vision.read: captured ${b64.length} base64 chars for tab ${tabId}`);
     // A near-empty capture means the tab wasn't the visible/painted foreground tab.
     // Calling the model with no real image yields "you have not provided me with an
