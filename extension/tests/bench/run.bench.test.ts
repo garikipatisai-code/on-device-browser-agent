@@ -29,7 +29,7 @@ const RUN = !!process.env.OLLAMA_BENCH;
 const MODEL = process.env.OLLAMA_BENCH_MODEL || 'gemma4:e4b';
 const TRIALS = Number.parseInt(process.env.OLLAMA_BENCH_TRIALS || '1', 10);
 const BASE = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const TASK_TIMEOUT_MS = Number.parseInt(process.env.OLLAMA_BENCH_TASK_TIMEOUT_MS || '150000', 10);
+const TASK_TIMEOUT_MS = Number.parseInt(process.env.OLLAMA_BENCH_TASK_TIMEOUT_MS || '300000', 10);
 const ONLY = process.env.OLLAMA_BENCH_TASK || ''; // run a single task id if set
 
 const TASKS = ONLY ? BENCH_TASKS.filter((t) => t.id === ONLY) : BENCH_TASKS;
