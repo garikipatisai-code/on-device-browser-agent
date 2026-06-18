@@ -1,7 +1,7 @@
 # Theme A — Page-Grounded Verification
 
 **Date:** 2026-06-18
-**Status:** Approved (design); implementation pending
+**Status:** Implemented, then revised. **Revision (2026-06-18):** the page-aware LLM finish-verify was dropped after the live benchmark showed e4b false-rejecting correct/honest answers (correct 80%→67%). The finish gate is now **deterministic number-grounding only**; the page-aware *step* Evaluator, the grounding corpus, self-correction, and downgrade all stay. §4 below describes the originally-built design; the LLM-verify step within it is no longer used.
 **Branch:** `feat/theme-a-page-grounded-verification`
 
 ## Context & problem
