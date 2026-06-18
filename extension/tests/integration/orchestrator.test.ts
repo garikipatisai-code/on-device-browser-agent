@@ -555,3 +555,87 @@ describe('orchestrator — verified finish', () => {
     expect(result.summary).toContain('10.00');
   });
 });
+
+describe('orchestrator — consent/modal dismissal', () => {
+  function consentReg(wall: string, content: string) {
+    let dismissed = false;
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.open',
+      description: 'open a tab',
+      argsSchema: z.object({ url: z.string() }),
+      async dispatch({ url }) {
+        return { ok: true, content: `Opened ${url}`, data: { tabId: 777, url } };
+      },
+    });
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: dismissed ? content : wall, data: { url: 'https://shop.example/' } };
+      },
+    });
+    reg.register({
+      name: 'tab.click',
+      description: 'click an element',
+      argsSchema: z.object({ tabId: z.number().int(), elementIndex: z.number().int() }),
+      async dispatch() {
+        dismissed = true;
+        return { ok: true, content: 'Clicked' };
+      },
+    });
+    return reg;
+  }
+
+  it('dismisses a consent wall on a click-only domain, then reads the real page', async () => {
+    const wall = `   heading "We value your privacy"\n   text "We use cookies."\n[1] button "Accept all"\n[2] button "Reject all"`;
+    const content = `   heading "Quiet Keyboard"\n   text "Price: £42.00 MARKER_CONTENT in stock"`;
+    const events: TimelineEvent[] = [];
+    const execPrompts: string[] = [];
+    const ollama = makeFakeOllama(
+      {
+        planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'open and report', successCriteria: 'done' }] }) })],
+        executor: [
+          rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://shop.example/' } }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Price £42.00' } }] }),
+        ],
+        evaluator: [],
+      },
+      { onChat: (_m, role, messages) => { if (role === 'executor') execPrompts.push(JSON.stringify(messages)); } },
+    );
+    const orch = new Orchestrator({
+      ollama,
+      registry: consentReg(wall, content),
+      settings: { ...DEFAULT_SETTINGS, domainTiers: { 'shop.example': 'click-only' } },
+      emit: (e) => events.push(e),
+    });
+    const result = await orch.runUntilTerminal(await orch.start('open shop.example and report the price'));
+    expect(result.phase).toBe('DONE');
+    expect(events.some((e) => e.kind === 'log' && /dismissed consent/i.test(e.message))).toBe(true);
+    // the real page (post-dismiss re-read) reached a later executor turn as CURRENT PAGE CONTENT
+    expect(execPrompts.slice(1).join('\n')).toContain('MARKER_CONTENT');
+  });
+
+  it('does NOT dismiss on a read-only domain (acts only where authorized)', async () => {
+    const wall = `   heading "We value your privacy"\n   text "We use cookies."\n[1] button "Reject all"`;
+    const content = `   text "real content MARKER2"`;
+    const events: TimelineEvent[] = [];
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'open and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://shop.example/' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'blocked', summary: 'A cookie consent wall blocked the page.' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({
+      ollama,
+      registry: consentReg(wall, content),
+      settings: { ...DEFAULT_SETTINGS, domainTiers: {} }, // read-only
+      emit: (e) => events.push(e),
+    });
+    await orch.runUntilTerminal(await orch.start('open shop.example and report'));
+    expect(events.some((e) => e.kind === 'log' && /dismissed consent/i.test(e.message))).toBe(false);
+  });
+});
