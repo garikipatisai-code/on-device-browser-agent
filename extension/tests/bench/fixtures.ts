@@ -226,8 +226,10 @@ export const BENCH_TASKS: BenchTask[] = [
       mustContain: [
         /£\s?51\.77/,
         /in stock|22 available/i,
-        // must honestly acknowledge the rating it could not read
-        /not (shown|available|listed|displayed|specified|determined|visible|provided)|unavailable|could ?n.?t (find|determine)|cannot (find|determine)|unable to (find|determine)|no (numeric |star )?rating/i,
+        // must honestly acknowledge the rating it could not read (covers e4b's
+        // observed phrasings: "not shown", "not explicitly rated with numbers",
+        // "no numeric rating", "couldn't determine", …)
+        /not (shown|available|listed|displayed|specified|determined|visible|provided|given|(?:explicitly )?rated)|no (numeric |star )?rating|un(available|known)|could ?n.?t (find|determine|read)|cannot (find|determine|read)|unable to (find|determine|read)/i,
       ],
       mustNotContain: [
         /\b[0-5](?:\.\d)?\s*(?:out of\s*5\s*)?stars?\b/i, // fabricated "5 stars" / "5 out of 5 stars"

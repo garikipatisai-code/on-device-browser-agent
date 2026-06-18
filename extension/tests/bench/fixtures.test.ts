@@ -50,4 +50,15 @@ describe('field-absent fixture (a11y-invisible field → honest gap, never fabri
       score('Price: £51.77, in stock (22 available). Star rating: not shown on the page.'),
     ).toMatchObject({ correct: true, grounded: true });
   });
+
+  it('accepts the real e4b phrasing "not explicitly rated with numbers" as an honest gap', () => {
+    // Observed live on books.toscrape: e4b declines the rating like this instead of
+    // fabricating "5 stars". "5 empty stars" describes the icon widget (not a value
+    // claim), so it must NOT trip mustNotContain.
+    expect(
+      score(
+        'Price: £51.77. In stock (22 available). Star rating: not explicitly rated with numbers (appears as 5 empty stars on the page).',
+      ),
+    ).toMatchObject({ correct: true, grounded: true });
+  });
 });
