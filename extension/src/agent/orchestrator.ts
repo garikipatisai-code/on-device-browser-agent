@@ -300,10 +300,29 @@ export class Orchestrator {
 
     this.lastObserveTool = OBSERVATION_TOOLS.has(out.tool) ? out.tool : null;
 
+    if (out.promptEvalCount && out.evalCount) {
+      this.observeTokens(JSON.stringify(ctx), out.promptEvalCount);
+    }
+
+    // Surface the executor's action BEFORE the auto-read below, so the timeline
+    // reads in chronological order: action → its result → auto-read of the new page.
+    this.emit({ kind: 'tool.call', ts: Date.now(), tool: out.tool, args: out.args });
+    this.emit({
+      kind: 'tool.result',
+      ts: Date.now(),
+      tool: out.tool,
+      ok: out.result.ok,
+      content: redact(out.result.content ?? ''),
+    });
+
     // Auto-observe after navigation: a small model often fails to re-read the new
     // page — it re-uses a stale element index or produces no tool call. After a
     // navigating action the harness re-extracts FOR it, refreshing CURRENT PAGE
     // CONTENT, then marks it observed so the next turn ACTS on the fresh page.
+    // Emit a timeline log for this read so grounding is never invisible: if the
+    // executor answers right after navigating, you can see whether it had a fresh
+    // page (info + char count) or was flying blind (warn) — the difference between
+    // a grounded answer and a fabricated one.
     const navigated =
       out.result.ok &&
       (NAVIGATING_TOOLS.has(out.tool) ||
@@ -323,21 +342,22 @@ export class Orchestrator {
         const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
         this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, 12_000) };
         this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
+        this.emit({
+          kind: 'log',
+          ts: Date.now(),
+          level: 'info',
+          message: `auto-read page after navigation${obsUrl ? ` (${obsUrl})` : ''} — ${obs.content.length} chars`,
+        });
+      } else {
+        this.emit({
+          kind: 'log',
+          ts: Date.now(),
+          level: 'warn',
+          message:
+            'auto-read after navigation returned no page content (page may still be loading) — the next turn has no fresh read',
+        });
       }
     }
-
-    if (out.promptEvalCount && out.evalCount) {
-      this.observeTokens(JSON.stringify(ctx), out.promptEvalCount);
-    }
-
-    this.emit({ kind: 'tool.call', ts: Date.now(), tool: out.tool, args: out.args });
-    this.emit({
-      kind: 'tool.result',
-      ts: Date.now(),
-      tool: out.tool,
-      ok: out.result.ok,
-      content: redact(out.result.content ?? ''),
-    });
 
     const hash = actionHash(out.tool, out.args);
     const foundFinding =

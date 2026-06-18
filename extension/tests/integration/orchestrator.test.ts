@@ -431,3 +431,55 @@ describe('orchestrator — workflow memory', () => {
     expect(plannerMsgs[0]).not.toContain('known-good sequence');
   });
 });
+
+describe('orchestrator — auto-read visibility', () => {
+  it('emits a timeline log for the post-navigation auto-read, after the action that triggered it', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'PAGE: heading "Product" price "£9.99"', data: { url: 'https://x/p' } };
+      },
+    });
+    reg.register({
+      name: 'tab.click',
+      description: 'click an element',
+      argsSchema: z.object({ tabId: z.number().int(), elementIndex: z.number().int() }),
+      async dispatch() {
+        return { ok: true, content: 'Clicked' };
+      },
+    });
+
+    const events: TimelineEvent[] = [];
+    const ollama = makeFakeOllama({
+      planner: [
+        rawResponse({ content: JSON.stringify({ steps: [{ description: 'click and report', successCriteria: 'done' }] }) }),
+      ],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'tab.click', args: { tabId: 1, elementIndex: 2 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'reported' } }] }),
+      ],
+      evaluator: [],
+    });
+
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: (e) => events.push(e) });
+    const initial = await orch.start('click the product and report its price');
+    const result = await orch.runUntilTerminal(initial);
+    expect(result.phase).toBe('DONE');
+
+    // The auto-read used to be invisible (dispatched directly, never emitted) — which
+    // made it impossible to tell whether an answer was grounded or guessed.
+    const autoReadIdx = events.findIndex((e) => e.kind === 'log' && /auto-read/i.test(e.message));
+    expect(autoReadIdx).toBeGreaterThanOrEqual(0);
+    const log = events[autoReadIdx] as Extract<TimelineEvent, { kind: 'log' }>;
+    expect(log.level).toBe('info');
+
+    // It must come AFTER the tab.click result that triggered it (chronological order).
+    const clickIdx = events.findIndex((e) => e.kind === 'tool.result' && e.tool === 'tab.click');
+    expect(clickIdx).toBeGreaterThanOrEqual(0);
+    expect(autoReadIdx).toBeGreaterThan(clickIdx);
+  });
+});
