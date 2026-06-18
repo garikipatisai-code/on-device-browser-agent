@@ -2,7 +2,7 @@
 // IDLE → PLANNING → EXECUTING → EVALUATING → EXECUTING (next step) → ... → DONE | ABORTED.
 
 import type { OllamaClient } from '@/background/ollama';
-import type { Plan, Settings, Step, TimelineEvent } from '@/shared/messages';
+import type { Plan, Settings, TimelineEvent } from '@/shared/messages';
 import {
   type AgentStateHot,
   _setHot,
@@ -147,7 +147,7 @@ export class Orchestrator {
         if (fin.verdict !== 'success') {
           return this.finishOk(hot, fin.verdict, fin.summary);
         }
-        const v = await this.verifyFinish(hot, fin.summary);
+        const v = this.verifyFinish(fin.summary);
         if (v.ok) {
           return this.finishOk(hot, 'success', fin.summary);
         }
@@ -514,37 +514,15 @@ export class Orchestrator {
   }
 
   /** Verify a success answer is grounded in what was actually read.
-   *  Fast deterministic number check first; then a page-aware LLM verify. */
-  private async verifyFinish(hot: AgentStateHot, summary: string): Promise<{ ok: boolean; reason: string }> {
+   *  Deterministic number check only: an e4b LLM verify was tried but false-rejected
+   *  correct/honest answers in the benchmark (correct 80%→67%), so it was dropped —
+   *  see docs/superpowers/specs/2026-06-18-theme-a-page-grounded-verification-design.md. */
+  private verifyFinish(summary: string): { ok: boolean; reason: string } {
     const ungrounded = ungroundedNumbers(summary, this.observedText);
     if (ungrounded.length) {
       return { ok: false, reason: `value(s) not found on any page read: ${ungrounded.join(', ')}` };
     }
-    // No page was read this task → nothing for the LLM to verify against; the
-    // deterministic number check above is the only guard that applies.
-    if (!this.observedText.trim()) return { ok: true, reason: '' };
-    try {
-      const verifyStep: Step = {
-        id: 'verify',
-        description: 'Verify the final answer is fully supported by the page content',
-        successCriteria: 'every specific fact, number, and rating in the answer appears in CURRENT PAGE CONTENT',
-        status: 'active',
-      };
-      const ev = await runEvaluator({
-        ctx: this.commonCtx(hot),
-        model: this.opts.settings.evaluatorModel,
-        ollama: this.opts.ollama,
-        lastExecutorResult: summary,
-        step: verifyStep,
-        signal: this.signal,
-      });
-      if (ev.verdict === 'FAIL') return { ok: false, reason: ev.reason };
-      return { ok: true, reason: '' };
-    } catch (err) {
-      // A flaky verifier must not trap a finished task — accept, but surface it.
-      this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `finish verifier errored, accepting: ${(err as Error).message}` });
-      return { ok: true, reason: '' };
-    }
+    return { ok: true, reason: '' };
   }
 
   private async finishOk(

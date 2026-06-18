@@ -272,9 +272,6 @@ describe('orchestrator — carries the full page read into later executor turns'
           rawResponse({
             content: JSON.stringify({ verdict: 'PASS', reason: 'page read', shouldReplan: false, finishVerdict: null, finishSummary: null }),
           }),
-          rawResponse({
-            content: JSON.stringify({ verdict: 'PASS', reason: 'verified', shouldReplan: false, finishVerdict: null, finishSummary: null }),
-          }),
         ],
       },
       { onChat: (_m, role, messages) => { if (role === 'executor') execPrompts.push(JSON.stringify(messages)); } },
@@ -324,9 +321,7 @@ describe('orchestrator — observe-then-act gate', () => {
           rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
           rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'X' } }] }),
         ],
-        evaluator: [
-          rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'verified', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
-        ],
+        evaluator: [],
       },
       { onChat: (_m, role, _msgs, toolNames) => { if (role === 'executor') execTools.push(toolNames); } },
     );
@@ -373,9 +368,7 @@ describe('orchestrator — observe-then-act gate', () => {
         rawResponse({ toolCalls: [{ name: 'tab.click', args: { tabId: 1, elementIndex: 5 } }] }),
         rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'X' } }] }),
       ],
-      evaluator: [
-        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'verified', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
-      ],
+      evaluator: [],
     });
 
     const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
@@ -469,9 +462,7 @@ describe('orchestrator — auto-read visibility', () => {
         rawResponse({ toolCalls: [{ name: 'tab.click', args: { tabId: 1, elementIndex: 2 } }] }),
         rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'reported' } }] }),
       ],
-      evaluator: [
-        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'verified', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
-      ],
+      evaluator: [],
     });
 
     const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: (e) => events.push(e) });
@@ -523,16 +514,14 @@ describe('orchestrator — verified finish', () => {
     expect(result.summary).toContain('unverified against page');
   });
 
-  it('accepts a finish whose numbers are all grounded (after the LLM verify passes)', async () => {
+  it('accepts a finish whose numbers are all grounded', async () => {
     const ollama = makeFakeOllama({
       planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
       executor: [
         rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
         rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The price is £99.99' } }] }),
       ],
-      evaluator: [
-        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'grounded', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
-      ],
+      evaluator: [],
     });
     const orch = new Orchestrator({ ollama, registry: pageReg('Widget price £99.99 in stock'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
     const result = await orch.runUntilTerminal(await orch.start('report the price'));
@@ -550,22 +539,19 @@ describe('orchestrator — verified finish', () => {
     expect(result.verdict).toBe('blocked');
   });
 
-  it('self-corrects: a textual fabrication is rejected, then an honest re-finish passes', async () => {
+  it('self-corrects: an ungrounded number is rejected, then a grounded re-finish passes', async () => {
     const ollama = makeFakeOllama({
       planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
       executor: [
         rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
-        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Rating: 5 stars' } }] }),
-        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Rating: not available on the page' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The price is £99.99' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The price is £10.00' } }] }),
       ],
-      evaluator: [
-        rawResponse({ content: JSON.stringify({ verdict: 'FAIL', reason: 'no rating on the page', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
-        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'grounded', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
-      ],
+      evaluator: [],
     });
     const orch = new Orchestrator({ ollama, registry: pageReg('Widget price £10.00 in stock'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
-    const result = await orch.runUntilTerminal(await orch.start('report the rating'));
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
     expect(result.verdict).toBe('success');
-    expect(result.summary).toContain('not available');
+    expect(result.summary).toContain('10.00');
   });
 });
