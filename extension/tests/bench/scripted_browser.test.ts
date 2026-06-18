@@ -51,6 +51,18 @@ describe('ScriptedBrowser', () => {
     expect(state.observedText()).toContain('RTINGS');
   });
 
+  it('reflects typed values back into the page so a re-read shows filled fields', async () => {
+    const jobApply = BENCH_TASKS.find((t) => t.id === 'job-apply')!;
+    const state = new ScriptedBrowser(jobApply);
+    const reg = buildScriptedRegistry(state);
+    const c = ctx();
+    const open = await reg.dispatch('tab.open', { url: 'https://jobs.example/apply' }, c);
+    const tabId = open.data!.tabId as number;
+    await reg.dispatch('tab.type', { tabId, elementIndex: 1, text: 'Jane Doe' }, c);
+    const form = await reg.dispatch('aria.extract', { tabId }, c);
+    expect(form.content).toContain('"Full name" ="Jane Doe"');
+  });
+
   it('finish surfaces the verdict/summary to the orchestrator', async () => {
     const state = new ScriptedBrowser(shopDetail);
     const reg = buildScriptedRegistry(state);

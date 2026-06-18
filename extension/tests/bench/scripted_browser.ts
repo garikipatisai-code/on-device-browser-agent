@@ -13,6 +13,8 @@ export class ScriptedBrowser {
   private tabState = new Map<number, string>();
   private lastResults: SearchHit[] = [];
   private observed: string[] = [];
+  // Per-tab typed-in field values (elementIndex → text), reflected back by extract().
+  private filled = new Map<number, Map<number, string>>();
 
   constructor(public task: BenchTask) {
     if (task.profileJson) this.observed.push(task.profileJson); // profile is ground truth
@@ -57,13 +59,38 @@ export class ScriptedBrowser {
   extract(tabId: number): ToolResult {
     const key = this.tabState.get(tabId) ?? this.task.start;
     const { url, aria } = this.pageAria(key);
-    this.record(aria);
-    return { ok: true, content: aria, data: { url, nodeCount: 2, interactiveCount: 1, truncated: false, sparse: false } };
+    const text = this.applyFilled(tabId, aria);
+    this.record(text);
+    return { ok: true, content: text, data: { url, nodeCount: 2, interactiveCount: 1, truncated: false, sparse: false } };
+  }
+
+  // Reflect typed-in values back into the indexed lines (like real aria.extract
+  // shows `="value"`), so the evaluator can verify a form was actually filled.
+  private applyFilled(tabId: number, aria: string): string {
+    const f = this.filled.get(tabId);
+    if (!f || !f.size) return aria;
+    return aria
+      .split('\n')
+      .map((line) => {
+        const m = line.match(/^\s*\[(\d+)\]/);
+        if (!m) return line;
+        const v = f.get(Number(m[1]));
+        return v === undefined ? line : `${line} ="${v}"`;
+      })
+      .join('\n');
   }
 
   act(tool: string, tabId: number, args: Record<string, unknown>): ToolResult {
     const from = this.tabState.get(tabId) ?? this.task.start;
-    this.tabState.set(tabId, this.transition(from, tool, args));
+    // Record a typed value so a later aria.extract shows the field as filled.
+    if (tool === 'tab.type' && typeof args.text === 'string' && typeof args.elementIndex === 'number') {
+      const f = this.filled.get(tabId) ?? new Map<number, string>();
+      f.set(args.elementIndex, args.text);
+      this.filled.set(tabId, f);
+    }
+    const to = this.transition(from, tool, args);
+    if (to !== from) this.filled.delete(tabId); // navigated away → the form view resets
+    this.tabState.set(tabId, to);
     const label =
       tool === 'tab.type'
         ? `Typed ${(args.text as string)?.length ?? 0} chars${args.submit ? ' and submitted' : ''}`
