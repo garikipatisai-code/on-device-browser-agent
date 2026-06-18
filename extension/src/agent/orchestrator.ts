@@ -35,6 +35,8 @@ import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
 import { redact, redactDeep } from './safety/redact';
 import { ungroundedNumbers } from './verify/grounding';
+import { findConsentDismiss } from './tools/browser/consent';
+import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
 import { sleep } from '@/background/signal';
 import { clearSearchResults } from './tools/browser/search';
 import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, deriveDomain, type Workflow } from './workflow_memory';
@@ -376,6 +378,29 @@ export class Orchestrator {
           level: 'info',
           message: `auto-read page after navigation${obsUrl ? ` (${obsUrl})` : ''} — ${obs.content.length} chars`,
         });
+        // Consent/cookie wall? Dismiss it (privacy-preferring) so the model reads
+        // the real page — but only where the user upgraded this domain to act.
+        const consent = findConsentDismiss(obs.content);
+        if (consent && this.canActUrl(obsUrl)) {
+          await this.opts.registry
+            .dispatch('tab.click', { tabId: navTabId, elementIndex: consent.index }, toolCtx)
+            .catch(() => null);
+          this.emit({
+            kind: 'log',
+            ts: Date.now(),
+            level: 'info',
+            message: `dismissed consent overlay (${consent.kind}): "${consent.label}"`,
+          });
+          await sleep(1200);
+          const after = await this.opts.registry
+            .dispatch('aria.extract', { tabId: navTabId }, toolCtx)
+            .catch(() => null);
+          if (after && after.ok && after.content) {
+            const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
+            this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, 12_000) };
+            this.recordObserved(after.content);
+          }
+        }
       } else {
         this.emit({
           kind: 'log',
@@ -463,6 +488,13 @@ export class Orchestrator {
   private recordObserved(content: string): void {
     if (!content) return;
     this.observedText = `${this.observedText}\n${content}`.slice(-60_000);
+  }
+
+  /** True if this URL's domain is upgraded to click-only or higher — gates the
+   *  harness's consent auto-dismiss (auto-accepting/rejecting cookies has privacy weight). */
+  private canActUrl(url: string | undefined): boolean {
+    if (!url || isBlockedUrl(url)) return false;
+    return TIER_ORDER[getDomainTier(hostFor(url), this.opts.settings.domainTiers)] >= TIER_ORDER['click-only'];
   }
 
   private commonCtx(hot: AgentStateHot, scratchpad?: string) {
