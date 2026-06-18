@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { BENCH_TASKS } from './fixtures';
+import { scoreRun } from './scorer';
 
 describe('bench fixtures are well-formed', () => {
   it('has at least the 5 seed tasks with unique ids', () => {
@@ -21,5 +22,32 @@ describe('bench fixtures are well-formed', () => {
       }
       expect(t.expect.verdict.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('field-absent fixture (a11y-invisible field → honest gap, never fabricated)', () => {
+  const find = () => BENCH_TASKS.find((t) => t.id === 'field-absent');
+  const score = (summary: string) =>
+    scoreRun(find()!.expect, {
+      phase: 'DONE',
+      verdict: 'success',
+      turns: 3,
+      replans: 0,
+      summary,
+      observedText: 'Price: £51.77 Availability: In stock (22 available)',
+    });
+
+  it('is registered', () => {
+    expect(find()).toBeTruthy();
+  });
+
+  it('flags a fabricated star rating as not grounded', () => {
+    expect(score('Price: £51.77, in stock (22 available). Star rating: 5 stars.').grounded).toBe(false);
+  });
+
+  it('accepts an honest "rating not shown" answer as correct and grounded', () => {
+    expect(
+      score('Price: £51.77, in stock (22 available). Star rating: not shown on the page.'),
+    ).toMatchObject({ correct: true, grounded: true });
   });
 });
