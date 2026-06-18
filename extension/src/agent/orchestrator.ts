@@ -2,7 +2,7 @@
 // IDLE → PLANNING → EXECUTING → EVALUATING → EXECUTING (next step) → ... → DONE | ABORTED.
 
 import type { OllamaClient } from '@/background/ollama';
-import type { Plan, Settings, TimelineEvent } from '@/shared/messages';
+import type { Plan, Settings, Step, TimelineEvent } from '@/shared/messages';
 import {
   type AgentStateHot,
   _setHot,
@@ -34,6 +34,7 @@ import { currentStep, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
 import { redact, redactDeep } from './safety/redact';
+import { ungroundedNumbers } from './verify/grounding';
 import { sleep } from '@/background/signal';
 import { clearSearchResults } from './tools/browser/search';
 import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, deriveDomain, type Workflow } from './workflow_memory';
@@ -82,6 +83,10 @@ export class Orchestrator {
   // Full content of the most recent page read (aria.extract / vision.read / search).
   // Re-injected into every executor turn so synthesis/report steps can see the data.
   private lastRead: { tool: string; url?: string; content: string } | null = null;
+  // Everything read this task (capped) — the corpus the finish-verifier grounds against.
+  private observedText = '';
+  // How many times a success finish failed verification this task (bounds self-correction).
+  private verifyAttempts = 0;
   // Observe-then-act gate: the observation tool used on the previous turn (blocked
   // on the next turn) and the step it applies to (reset when the step changes).
   private lastObserveTool: string | null = null;
@@ -102,6 +107,8 @@ export class Orchestrator {
     this.breaker = newBreakerState();
     this.recentActions = [];
     this.lastRead = null;
+    this.observedText = '';
+    this.verifyAttempts = 0;
     this.lastObserveTool = null;
     this.observeGateStep = null;
     clearSearchResults(); // don't let a prior task's results ground/block this one
@@ -135,7 +142,27 @@ export class Orchestrator {
       hot = await this.refreshHot(hot);
 
       if (execOut.result.finish) {
-        return this.finishOk(hot, execOut.result.finish.verdict, execOut.result.finish.summary);
+        const fin = execOut.result.finish;
+        // Honest failures aren't fabrication risks — accept them as-is.
+        if (fin.verdict !== 'success') {
+          return this.finishOk(hot, fin.verdict, fin.summary);
+        }
+        const v = await this.verifyFinish(hot, fin.summary);
+        if (v.ok) {
+          return this.finishOk(hot, 'success', fin.summary);
+        }
+        this.verifyAttempts += 1;
+        this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `finish rejected (attempt ${this.verifyAttempts}): ${v.reason}` });
+        if (this.verifyAttempts >= 2) {
+          return this.finishOk(hot, 'partial', `${fin.summary}\n\n[unverified against page: ${v.reason}]`);
+        }
+        // Corrective turn: nudge the executor to re-read or report honestly, then retry.
+        const sp = await getScratchpad(this.taskId);
+        await setScratchpad(
+          this.taskId,
+          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Re-read the page (aria.extract / vision.read) and correct the answer, or report those value(s) as not available on the page. Do NOT repeat the unsupported claim.`.slice(-12_000),
+        );
+        continue;
       }
       if (execOut.result.advanceStep) {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
@@ -342,6 +369,7 @@ export class Orchestrator {
         const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
         this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, 12_000) };
         this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
+        this.recordObserved(obs.content);
         this.emit({
           kind: 'log',
           ts: Date.now(),
@@ -373,6 +401,7 @@ export class Orchestrator {
       const data = out.result.data;
       const url = data && typeof data.url === 'string' ? data.url : undefined;
       this.lastRead = { tool: out.tool, url, content: (out.result.content ?? '').slice(0, 12_000) };
+      this.recordObserved(out.result.content ?? '');
     }
 
     const turnNote = `[${new Date().toISOString()}] ${out.tool}(${JSON.stringify(out.args).slice(0, 200)}) -> ${(out.result.content ?? '').slice(0, 800)}`;
@@ -431,6 +460,11 @@ export class Orchestrator {
     return out;
   }
 
+  private recordObserved(content: string): void {
+    if (!content) return;
+    this.observedText = `${this.observedText}\n${content}`.slice(-60_000);
+  }
+
   private commonCtx(hot: AgentStateHot, scratchpad?: string) {
     return {
       goal: hot.goal,
@@ -476,6 +510,40 @@ export class Orchestrator {
       return await loadHot();
     } catch {
       return null;
+    }
+  }
+
+  /** Verify a success answer is grounded in what was actually read.
+   *  Fast deterministic number check first; then a page-aware LLM verify. */
+  private async verifyFinish(hot: AgentStateHot, summary: string): Promise<{ ok: boolean; reason: string }> {
+    const ungrounded = ungroundedNumbers(summary, this.observedText);
+    if (ungrounded.length) {
+      return { ok: false, reason: `value(s) not found on any page read: ${ungrounded.join(', ')}` };
+    }
+    // No page was read this task → nothing for the LLM to verify against; the
+    // deterministic number check above is the only guard that applies.
+    if (!this.observedText.trim()) return { ok: true, reason: '' };
+    try {
+      const verifyStep: Step = {
+        id: 'verify',
+        description: 'Verify the final answer is fully supported by the page content',
+        successCriteria: 'every specific fact, number, and rating in the answer appears in CURRENT PAGE CONTENT',
+        status: 'active',
+      };
+      const ev = await runEvaluator({
+        ctx: this.commonCtx(hot),
+        model: this.opts.settings.evaluatorModel,
+        ollama: this.opts.ollama,
+        lastExecutorResult: summary,
+        step: verifyStep,
+        signal: this.signal,
+      });
+      if (ev.verdict === 'FAIL') return { ok: false, reason: ev.reason };
+      return { ok: true, reason: '' };
+    } catch (err) {
+      // A flaky verifier must not trap a finished task — accept, but surface it.
+      this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `finish verifier errored, accepting: ${(err as Error).message}` });
+      return { ok: true, reason: '' };
     }
   }
 

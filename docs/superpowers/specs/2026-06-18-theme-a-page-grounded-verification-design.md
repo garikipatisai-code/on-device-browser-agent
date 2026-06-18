@@ -70,7 +70,7 @@ executor → finish(success, summary)
 ## Error handling
 
 - LLM verify call errors/times out → treat as **inconclusive, accept** (don't trap a finished task behind a flaky verifier); log a warn timeline event so it's visible. The deterministic check still gates numbers regardless.
-- Empty corpus (no page ever read, e.g. a pure-search answer) → deterministic check grounds against search output already captured in `observedText`; if truly empty, skip the deterministic step and rely on the LLM verify.
+- Empty corpus (no page ever read) → nothing for the LLM to verify against, so skip the LLM verify and accept. The deterministic number check still runs first — with an empty corpus every asserted number is ungrounded, so a *numeric* answer produced without reading anything is still rejected. (`search` is a reading tool, so search-based answers have a non-empty corpus.)
 - Corrective note must not blow the scratchpad — cap it like other turn notes.
 
 ## Testing / verification
