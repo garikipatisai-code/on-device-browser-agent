@@ -55,7 +55,13 @@ Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → 
 npm run typecheck      # tsc --noEmit
 npm test               # vitest (unit + integration + property)
 npm run build          # production build into dist/
+npm run bench          # task-success benchmark (needs `ollama serve`; runs the real model)
 ```
+
+`npm run bench` runs the real planner→executor→evaluator loop over scripted
+multi-page fixtures and reports **completed / correct / grounded** rates. `grounded`
+flags answers containing numbers that never appeared on the page — i.e. hallucinations.
+Override the model or trial count with `OLLAMA_BENCH_MODEL` / `OLLAMA_BENCH_TRIALS`.
 
 ## Caveats
 
