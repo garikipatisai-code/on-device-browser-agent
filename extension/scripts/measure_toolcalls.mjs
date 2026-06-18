@@ -18,6 +18,11 @@ import http from 'node:http';
 
 const MODEL = process.argv[2] || 'gemma4:e4b';
 const TRIALS = Number.parseInt(process.argv[3] || '5', 10);
+// Default 6000 keeps the historical e4b baseline comparable. Set
+// OLLAMA_NUM_CTX=32000 to measure latency/VRAM at the app's real window
+// (NUM_CTX in src/agent/budget.ts) — for a 26B MoE this is where VRAM spill,
+// not tool-call reliability, decides whether it's "fast enough for our app".
+const NUM_CTX = Number.parseInt(process.env.OLLAMA_NUM_CTX || '6000', 10);
 const BASE = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const BASE_URL = new URL(BASE);
 
@@ -282,7 +287,7 @@ async function chatOnce(messages, toolChoice) {
     tool_choice: toolChoice,
     think: false,
     // Gemma 4's official sampling (model card): temp 1.0, top_p 0.95, top_k 64.
-    options: { temperature: 1.0, top_p: 0.95, top_k: 64, num_ctx: 6000, cache_prompt: true },
+    options: { temperature: 1.0, top_p: 0.95, top_k: 64, num_ctx: NUM_CTX, cache_prompt: true },
   };
   const t0 = Date.now();
   const json = await httpJson('POST', '/api/chat', body);
@@ -323,7 +328,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\nTool-call reliability — model=${MODEL}, trials/scenario=${TRIALS}, base=${BASE}\n`);
+  console.log(`\nTool-call reliability — model=${MODEL}, trials/scenario=${TRIALS}, num_ctx=${NUM_CTX}, base=${BASE}\n`);
 
   let totalFirstTry = 0;
   let totalCorrect = 0;
