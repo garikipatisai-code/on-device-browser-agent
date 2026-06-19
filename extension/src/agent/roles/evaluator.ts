@@ -39,7 +39,14 @@ export async function runEvaluator(input: EvaluatorInput): Promise<Verdict> {
   const parsed = parseJSONPermissive<Partial<Verdict>>(raw);
   // Small models emit odd casing/whitespace even under format:json — normalize so a
   // clearly-passing verdict isn't silently defaulted to FAIL.
-  const v = String(parsed?.verdict ?? '').trim().toUpperCase();
+  let v = String(parsed?.verdict ?? '').trim().toUpperCase();
+  if (v !== 'PASS' && v !== 'FAIL') {
+    // Structured parse failed (e.g. a response cut off mid-JSON by the timeout). Salvage just
+    // the PASS/FAIL token from the raw text so a passing step isn't wrongly failed. We do NOT
+    // salvage finishVerdict — terminating the task on a truncated body would be unsafe.
+    const m = raw.match(/"?verdict"?\s*[:=]\s*"?\s*(PASS|FAIL)/i);
+    if (m) v = m[1].toUpperCase();
+  }
   const verdict: 'PASS' | 'FAIL' = v === 'PASS' ? 'PASS' : 'FAIL';
   // 'partial' is intentionally NOT terminal: the evaluator must not end the task
   // mid-goal. Only success/blocked/failed finish it.
