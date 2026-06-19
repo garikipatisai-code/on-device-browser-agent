@@ -639,3 +639,25 @@ describe('orchestrator — consent/modal dismissal', () => {
     expect(events.some((e) => e.kind === 'log' && /dismissed consent/i.test(e.message))).toBe(false);
   });
 });
+
+describe('orchestrator — RunResult.turns reflects the real turn count', () => {
+  it('reports more than the 5-entry recent-actions window on a long run', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'loop a bit', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: '1' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: '2' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: '3' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: '4' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: '5' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: '6' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('long task'));
+    expect(result.phase).toBe('DONE');
+    expect(result.turns).toBeGreaterThanOrEqual(6);
+  });
+});

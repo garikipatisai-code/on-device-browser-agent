@@ -93,6 +93,8 @@ export class Orchestrator {
   private observedText = '';
   // How many times a success finish failed verification this task (bounds self-correction).
   private verifyAttempts = 0;
+  // Real executor-turn count this task (for RunResult.turns; recentActions is capped at 5).
+  private turns = 0;
   // Observe-then-act gate: the observation tool used on the previous turn (blocked
   // on the next turn) and the step it applies to (reset when the step changes).
   private lastObserveTool: string | null = null;
@@ -115,6 +117,7 @@ export class Orchestrator {
     this.lastRead = null;
     this.observedText = '';
     this.verifyAttempts = 0;
+    this.turns = 0;
     this.lastObserveTool = null;
     this.observeGateStep = null;
     clearSearchResults(); // don't let a prior task's results ground/block this one
@@ -145,6 +148,7 @@ export class Orchestrator {
 
       const execOut = await this.executeOne(hot, step.id);
       turn += 1;
+      this.turns = turn;
       hot = await this.refreshHot(hot);
 
       if (execOut.result.finish) {
@@ -379,7 +383,16 @@ export class Orchestrator {
         : out.result.data && typeof out.result.data.tabId === 'number'
           ? (out.result.data.tabId as number)
           : undefined;
-    if (!navigated || navTabId === undefined) return;
+    if (!navigated) return;
+    if (navTabId === undefined) {
+      this.emit({
+        kind: 'log',
+        ts: Date.now(),
+        level: 'warn',
+        message: 'navigated but could not resolve a tabId to re-read — the next turn keeps the previous page content',
+      });
+      return;
+    }
 
     await waitForTabSettled(navTabId); // condition-based wait, not a fixed delay
     const obs = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
@@ -578,14 +591,14 @@ export class Orchestrator {
       }
     }
     this.emit({ kind: 'finish', ts: Date.now(), verdict, summary });
-    return { phase: 'DONE', summary, verdict, turns: this.recentActions.length, replans: hot.replanCount };
+    return { phase: 'DONE', summary, verdict, turns: this.turns, replans: hot.replanCount };
   }
 
   private async abortNow(hot: AgentStateHot, reason: string): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'ABORTED' });
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
-    return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.recentActions.length, replans: hot.replanCount };
+    return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };
   }
 
   private async cleanupTabs(hot: AgentStateHot): Promise<void> {
