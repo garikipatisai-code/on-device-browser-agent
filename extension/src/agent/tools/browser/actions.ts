@@ -63,6 +63,28 @@ async function isElementConnected(
   }
 }
 
+// Input.insertText goes to whatever is focused; if the resolved element isn't a text field the
+// keystrokes vanish but the action still looks like success. Verify the target is editable so a
+// mis-indexed button/link/heading is reported, not silently typed into. Kept permissive (any
+// input/textarea/contenteditable + textbox/searchbox/combobox/spinbutton roles) to avoid
+// rejecting a legitimate field.
+async function isEditable(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  objectId: string,
+): Promise<boolean> {
+  try {
+    const { result } = await send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration:
+        "function(){ try { var r=(this.getAttribute&&this.getAttribute('role'))||''; return !!(this && (this.isContentEditable || this.tagName==='INPUT' || this.tagName==='TEXTAREA' || r==='textbox' || r==='searchbox' || r==='combobox' || r==='spinbutton')); } catch(e){ return false; } }",
+      returnByValue: true,
+    });
+    return result?.value === true;
+  } catch {
+    return true; // can't tell → don't block a possibly-valid field
+  }
+}
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -116,12 +138,17 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
+    let notEditable = false;
     const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       await scrollIntoView(send, backendNodeId);
       await focusNode(send, backendNodeId);
       const objectId = await resolveObjectId(send, backendNodeId);
       if (objectId && !(await isElementConnected(send, objectId))) return true; // detached → stale
+      if (objectId && !(await isEditable(send, objectId))) {
+        notEditable = true;
+        return false;
+      }
       if (clear && objectId) {
         await send('Runtime.callFunctionOn', {
           objectId,
@@ -142,6 +169,12 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
       return false;
     });
     if (stale) return { ok: false, content: staleMsg(elementIndex) };
+    if (notEditable) {
+      return {
+        ok: false,
+        content: `Element [${elementIndex}] is not a text field — keystrokes would go nowhere. Use tab.click for buttons/links, or call aria.extract to find the actual input.`,
+      };
+    }
     clearExtractionCache(tabId);
     return { ok: true, content: `Typed ${text.length} chars into element [${elementIndex}]${submit ? ' and submitted' : ''}` };
   },
@@ -159,21 +192,33 @@ export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: num
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
-    const stale = await withCdp(tabId, async (send) => {
+    const outcome = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       const objectId = await resolveObjectId(send, backendNodeId);
-      if (!objectId) throw new Error('Could not resolve element to a JS object');
-      if (!(await isElementConnected(send, objectId))) return true; // detached → stale
-      await send('Runtime.callFunctionOn', {
+      // An unresolvable node usually means the page changed under us — give the same
+      // actionable refresh guidance the other action tools give, not a bare throw.
+      if (!objectId) return { stale: true } as const;
+      if (!(await isElementConnected(send, objectId))) return { stale: true } as const;
+      // A <select> ignores assignment of a value that isn't one of its options, so read the
+      // value back: if it didn't take, the model passed a label/guess instead of the real value.
+      const { result } = await send<{ result?: { value?: { ok?: boolean; options?: string[] } } }>('Runtime.callFunctionOn', {
         objectId,
-        functionDeclaration: `function(v) { try { this.value = v; this.dispatchEvent(new Event('change', {bubbles:true})); } catch(e) {} }`,
+        functionDeclaration:
+          "function(v){ try { if(this.tagName!=='SELECT') return {ok:false, options:[]}; var opts=Array.from(this.options).map(function(o){return o.value;}); this.value=v; var ok=this.value===v; if(ok) this.dispatchEvent(new Event('change',{bubbles:true})); return {ok:ok, options:opts}; } catch(e){ return {ok:false, options:[]}; } }",
         arguments: [{ value }],
         returnByValue: true,
       });
-      return false;
+      return { stale: false, applied: result?.value?.ok === true, options: result?.value?.options ?? [] } as const;
     });
-    if (stale) return { ok: false, content: staleMsg(elementIndex) };
+    if (outcome.stale) return { ok: false, content: staleMsg(elementIndex) };
     clearExtractionCache(tabId);
+    if (!outcome.applied) {
+      const opts = outcome.options.length ? ` Available values: ${outcome.options.join(', ')}.` : ' (target is not a <select>.)';
+      return {
+        ok: false,
+        content: `Could not select "${value}" in element [${elementIndex}] — not a valid option value.${opts}`,
+      };
+    }
     return { ok: true, content: `Selected ${value} in element [${elementIndex}]` };
   },
 };
@@ -190,11 +235,23 @@ export const tabScrollTool: ToolDefDescriptor<{ tabId: number; direction: 'up' |
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers);
     const dy = (pixels ?? 600) * (direction === 'down' ? 1 : -1);
-    await withCdp(tabId, async (send) => {
-      // window.scrollBy via JS — a synthetic mouseWheel event hangs on a background tab.
-      await send('Runtime.evaluate', { expression: `window.scrollBy(0, ${dy})`, returnByValue: true });
+    const moved = await withCdp(tabId, async (send) => {
+      // window.scrollBy via JS — a synthetic mouseWheel event hangs on a background tab. Read
+      // scrollY before and after so a clamped scroll (page end / non-scrolling page) is reported
+      // honestly instead of as a phantom "Scrolled Npx" the model would trust and loop on.
+      const { result } = await send<{ result?: { value?: { before?: number; after?: number } } }>('Runtime.evaluate', {
+        expression: `(function(){ var b=window.scrollY||window.pageYOffset||0; window.scrollBy(0, ${dy}); var a=window.scrollY||window.pageYOffset||0; return {before:b, after:a}; })()`,
+        returnByValue: true,
+      });
+      return Math.abs((result?.value?.after ?? 0) - (result?.value?.before ?? 0));
     });
     clearExtractionCache(tabId);
-    return { ok: true, content: `Scrolled ${direction} ${Math.abs(dy)}px` };
+    if (moved === 0) {
+      return {
+        ok: true,
+        content: `Scroll had no effect — already at the ${direction === 'down' ? 'bottom' : 'top'} of the page (or it does not scroll). There is no more content this way.`,
+      };
+    }
+    return { ok: true, content: `Scrolled ${direction} ${moved}px` };
   },
 };
