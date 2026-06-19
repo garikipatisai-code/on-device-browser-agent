@@ -81,7 +81,9 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
   const plan = newPlan(
     steps.map((s) => ({
       description: s.description,
-      successCriteria: s.successCriteria ?? `Step ${s.description} achieved`,
+      // `||` not `??`: a model-emitted empty-string criterion would otherwise reach the evaluator
+      // prompt as "SUCCESS CRITERIA: " and yield a vacuous judgment.
+      successCriteria: s.successCriteria || `Step ${s.description} achieved`,
       toolHint: s.toolHint,
     })),
   );

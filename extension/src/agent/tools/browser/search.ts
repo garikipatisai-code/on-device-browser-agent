@@ -141,6 +141,7 @@ export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
   }),
   async dispatch({ query, max }, ctx) {
     let blocked = false;
+    let reachable = false; // got an HTTP body from at least one endpoint (vs. all-unreachable)
     for (const ep of ENDPOINTS) {
       let html: string | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -153,13 +154,15 @@ export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
           }
           html = await res.text();
           break;
-        } catch {
+        } catch (err) {
+          if (ctx.signal?.aborted) throw err; // user aborted — propagate, don't swallow + retry
           continue; // network blip → retry once
         } finally {
           cleanup();
         }
       }
       if (html === null) continue; // unreachable after a retry → try the next endpoint
+      reachable = true;
       if (looksBlocked(html)) {
         blocked = true;
         continue; // anti-bot page → try the next endpoint
@@ -181,6 +184,15 @@ export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
         ok: false,
         content:
           'Web search is blocked right now: DuckDuckGo served a bot challenge/redirect on every endpoint. Try again later, or from a different network.',
+      };
+    }
+    if (!reachable) {
+      // Distinguish an infrastructure failure from a genuine zero-hit query — otherwise the model
+      // "honestly" tells the user there are no results when really the search engine was unreachable.
+      return {
+        ok: false,
+        content:
+          'Web search could not reach DuckDuckGo on any endpoint (network error or timeout). This does NOT mean the query has no results — check the connection and try again.',
       };
     }
     return { ok: false, content: 'No results found for that query.' };

@@ -74,3 +74,41 @@ describe('searchTool dispatch — fallback + honest block error', () => {
     expect(res.content).not.toMatch(/no results/i);
   });
 });
+
+describe('searchTool dispatch — network failure vs genuine empty vs abort', () => {
+  let origFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+  const ctx = (signal?: AbortSignal) => ({ signal }) as unknown as ToolContext;
+
+  it('reports a network/unreachable error (not "no results") when every endpoint fails', async () => {
+    globalThis.fetch = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as typeof globalThis.fetch;
+    const res = await searchTool.dispatch({ query: 'wireless mouse' }, ctx());
+    expect(res.ok).toBe(false);
+    expect(res.content).toMatch(/reach|network|timeout|unreachable/i);
+    expect(res.content).not.toMatch(/no results found/i);
+  });
+
+  it('still reports "no results" when an endpoint responds but parses empty (genuine zero hits)', async () => {
+    const emptyPage = `<html><body>${'x'.repeat(1100)}</body></html>`;
+    globalThis.fetch = (async () => ({ ok: true, status: 200, text: async () => emptyPage }) as Response) as typeof globalThis.fetch;
+    const res = await searchTool.dispatch({ query: 'zxqwerty no such thing' }, ctx());
+    expect(res.ok).toBe(false);
+    expect(res.content).toMatch(/no results/i);
+  });
+
+  it('propagates a user abort instead of swallowing it and trying the next endpoint', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    globalThis.fetch = (async () => {
+      throw new DOMException('Aborted', 'AbortError');
+    }) as typeof globalThis.fetch;
+    await expect(searchTool.dispatch({ query: 'x' }, ctx(ac.signal))).rejects.toThrow();
+  });
+});
