@@ -183,7 +183,8 @@ export class Orchestrator {
         hot = await this.applyPlan(hot, next.plan);
         this.breaker = resetForNewStep(this.breaker);
         if (ev.finishVerdict && ev.finishSummary) {
-          return this.finishOk(hot, ev.finishVerdict, ev.finishSummary);
+          const g = this.gateEvaluatorFinish(ev.finishVerdict, ev.finishSummary);
+          return this.finishOk(hot, g.verdict, g.summary);
         }
         if (next.terminal) {
           const ok = ev.verdict === 'PASS';
@@ -226,7 +227,8 @@ export class Orchestrator {
       if (turn % 3 === 0) {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
         if (ev.finishVerdict && ev.finishSummary) {
-          return this.finishOk(hot, ev.finishVerdict, ev.finishSummary);
+          const g = this.gateEvaluatorFinish(ev.finishVerdict, ev.finishSummary);
+          return this.finishOk(hot, g.verdict, g.summary);
         }
         if (ev.verdict === 'FAIL' && ev.shouldReplan) {
           if (hot.replanCount >= (this.opts.maxReplans ?? 3) - 1) {
@@ -590,6 +592,18 @@ export class Orchestrator {
       return { ok: false, reason: `value(s) not found on any page read: ${ungrounded.join(', ')}` };
     }
     return { ok: true, reason: '' };
+  }
+
+  /** Gate an evaluator-issued finish through the same deterministic grounding check as the
+   *  executor's finish tool. The evaluator is the same small-model class and can assert a
+   *  number that's on no page read; a 'success' carrying an ungrounded value is downgraded to
+   *  'partial' (honest) rather than ending the task — and auto-recording a recipe — on a
+   *  fabricated figure. Non-success verdicts are honest outcomes and pass through unchanged. */
+  private gateEvaluatorFinish(verdict: string, summary: string): { verdict: string; summary: string } {
+    if (verdict !== 'success') return { verdict, summary };
+    const v = this.verifyFinish(summary);
+    if (v.ok) return { verdict, summary };
+    return { verdict: 'partial', summary: `${summary}\n\n[unverified against page: ${v.reason}]` };
   }
 
   private async finishOk(
