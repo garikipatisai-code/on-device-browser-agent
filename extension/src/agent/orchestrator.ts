@@ -59,6 +59,9 @@ const OBSERVATION_TOOLS = new Set(['aria.extract', 'vision.read']);
 // indices, or produces no tool call when forced). tab.type counts only when it submits.
 const NAVIGATING_TOOLS = new Set(['tab.click', 'open_result', 'tab.open']);
 
+/** The exact shape the executor role returns (tool, args, result, eval counts). */
+type ExecutorOut = Awaited<ReturnType<typeof runExecutor>>;
+
 export interface OrchestratorOpts {
   ollama: OllamaClient;
   registry: ToolRegistry;
@@ -288,23 +291,7 @@ export class Orchestrator {
       ctx = this.commonCtx(hot, scratch);
     }
 
-    const toolCtx: ToolContext = {
-      taskId: this.taskId,
-      signal: this.signal,
-      hot,
-      settings: this.opts.settings,
-      ollama: this.opts.ollama,
-      emit: this.emit.bind(this),
-      addFinding: async (kind, data, sid) => {
-        await addFinding({
-          taskId: this.taskId,
-          stepId: sid ?? stepId,
-          ts: Date.now(),
-          kind,
-          data: redactDeep(data),
-        });
-      },
-    };
+    const toolCtx = this.buildToolCtx(hot, stepId);
 
     // Observe-then-act gate: within a step, block re-running the SAME observation
     // tool back-to-back (it looped aria.extract instead of acting); the other
@@ -345,14 +332,43 @@ export class Orchestrator {
       content: redact(out.result.content ?? ''),
     });
 
-    // Auto-observe after navigation: a small model often fails to re-read the new
-    // page — it re-uses a stale element index or produces no tool call. After a
-    // navigating action the harness re-extracts FOR it, refreshing CURRENT PAGE
-    // CONTENT, then marks it observed so the next turn ACTS on the fresh page.
-    // Emit a timeline log for this read so grounding is never invisible: if the
-    // executor answers right after navigating, you can see whether it had a fresh
-    // page (info + char count) or was flying blind (warn) — the difference between
-    // a grounded answer and a fabricated one.
+    await this.autoObserveAfterNavigation(out, toolCtx);
+    await this.recordTurn(out, scratch);
+
+    this.emit({ kind: 'role.end', ts: Date.now(), role: 'executor', ms: performance.now() - t0 });
+
+    if (out.result.fatal) {
+      await sleep(10);
+    }
+
+    return { result: out.result, tool: out.tool };
+  }
+
+  /** Build the per-turn tool context (identity + finding sink) for the executor. */
+  private buildToolCtx(hot: AgentStateHot, stepId: string): ToolContext {
+    return {
+      taskId: this.taskId,
+      signal: this.signal,
+      hot,
+      settings: this.opts.settings,
+      ollama: this.opts.ollama,
+      emit: this.emit.bind(this),
+      addFinding: async (kind, data, sid) => {
+        await addFinding({
+          taskId: this.taskId,
+          stepId: sid ?? stepId,
+          ts: Date.now(),
+          kind,
+          data: redactDeep(data),
+        });
+      },
+    };
+  }
+
+  /** After a navigating action, re-read the new page FOR the model (small models
+   *  fail to re-read), dismiss a consent wall if present (tier-gated), and refresh
+   *  CURRENT PAGE CONTENT — emitting a log so the grounding is never invisible. */
+  private async autoObserveAfterNavigation(out: ExecutorOut, toolCtx: ToolContext): Promise<void> {
     const navigated =
       out.result.ok &&
       (NAVIGATING_TOOLS.has(out.tool) ||
@@ -363,66 +379,62 @@ export class Orchestrator {
         : out.result.data && typeof out.result.data.tabId === 'number'
           ? (out.result.data.tabId as number)
           : undefined;
-    if (navigated && navTabId !== undefined) {
-      await waitForTabSettled(navTabId); // wait for load (condition-based), not a fixed delay
-      const obs = await this.opts.registry
-        .dispatch('aria.extract', { tabId: navTabId }, toolCtx)
-        .catch(() => null);
-      if (obs && obs.ok && obs.content) {
-        const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
-        this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, 12_000) };
-        this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
-        this.recordObserved(obs.content);
-        this.emit({
-          kind: 'log',
-          ts: Date.now(),
-          level: 'info',
-          message: `auto-read page after navigation${obsUrl ? ` (${obsUrl})` : ''} — ${obs.content.length} chars`,
-        });
-        // Consent/cookie wall? Dismiss it (privacy-preferring) so the model reads
-        // the real page — but only where the user upgraded this domain to act.
-        const consent = findConsentDismiss(obs.content);
-        if (consent && this.canActUrl(obsUrl)) {
-          await this.opts.registry
-            .dispatch('tab.click', { tabId: navTabId, elementIndex: consent.index }, toolCtx)
-            .catch(() => null);
-          this.emit({
-            kind: 'log',
-            ts: Date.now(),
-            level: 'info',
-            message: `dismissed consent overlay (${consent.kind}): "${consent.label}"`,
-          });
-          await waitForTabSettled(navTabId); // wait for the post-dismiss page to load
-          const after = await this.opts.registry
-            .dispatch('aria.extract', { tabId: navTabId }, toolCtx)
-            .catch(() => null);
-          if (after && after.ok && after.content) {
-            const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
-            this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, 12_000) };
-            this.recordObserved(after.content);
-          }
-        }
-      } else {
-        this.emit({
-          kind: 'log',
-          ts: Date.now(),
-          level: 'warn',
-          message:
-            'auto-read after navigation returned no page content (page may still be loading) — the next turn has no fresh read',
-        });
-      }
-    }
+    if (!navigated || navTabId === undefined) return;
 
+    await waitForTabSettled(navTabId); // condition-based wait, not a fixed delay
+    const obs = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
+    if (!(obs && obs.ok && obs.content)) {
+      this.emit({
+        kind: 'log',
+        ts: Date.now(),
+        level: 'warn',
+        message:
+          'auto-read after navigation returned no page content (page may still be loading) — the next turn has no fresh read',
+      });
+      return;
+    }
+    const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
+    this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, 12_000) };
+    this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
+    this.recordObserved(obs.content);
+    this.emit({
+      kind: 'log',
+      ts: Date.now(),
+      level: 'info',
+      message: `auto-read page after navigation${obsUrl ? ` (${obsUrl})` : ''} — ${obs.content.length} chars`,
+    });
+
+    // Consent/cookie wall? Dismiss it (privacy-preferring) so the model reads the
+    // real page — but only where the user upgraded this domain to act.
+    const consent = findConsentDismiss(obs.content);
+    if (!(consent && this.canActUrl(obsUrl))) return;
+    await this.opts.registry.dispatch('tab.click', { tabId: navTabId, elementIndex: consent.index }, toolCtx).catch(() => null);
+    this.emit({
+      kind: 'log',
+      ts: Date.now(),
+      level: 'info',
+      message: `dismissed consent overlay (${consent.kind}): "${consent.label}"`,
+    });
+    await waitForTabSettled(navTabId);
+    const after = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
+    if (after && after.ok && after.content) {
+      const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
+      this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, 12_000) };
+      this.recordObserved(after.content);
+    }
+  }
+
+  /** Per-turn bookkeeping: circuit breaker, carry-forward of a page read, the
+   *  scratchpad tail, recent-actions window, and the workflow trace. */
+  private async recordTurn(out: ExecutorOut, scratch: string): Promise<void> {
     const hash = actionHash(out.tool, out.args);
     const foundFinding =
       out.result.ok &&
       ((out.result.data && Object.keys(out.result.data).length > 0) || (out.result.content?.length ?? 0) > 80);
     this.breaker = recordAction(this.breaker, hash, !!out.result.unknownTool, !!foundFinding);
 
-    // Carry the full page read forward. The scratchpad below keeps only an
-    // 800-char tail (fine as a running log), which is nowhere near enough to
-    // synthesize a product/price list from on a later turn — so the executor
-    // gets the full read back via CURRENT PAGE CONTENT (see commonCtx).
+    // Carry the full page read forward — the scratchpad keeps only an 800-char tail,
+    // far too little to synthesize a product/price list from on a later turn.
     if (READING_TOOLS.has(out.tool) && out.result.ok && (out.result.content?.length ?? 0) > 0) {
       const data = out.result.data;
       const url = data && typeof data.url === 'string' ? data.url : undefined;
@@ -431,20 +443,11 @@ export class Orchestrator {
     }
 
     const turnNote = `[${new Date().toISOString()}] ${out.tool}(${JSON.stringify(out.args).slice(0, 200)}) -> ${(out.result.content ?? '').slice(0, 800)}`;
-    scratch = `${scratch}\n${turnNote}`.slice(-12_000);
-    await setScratchpad(this.taskId, scratch);
+    await setScratchpad(this.taskId, `${scratch}\n${turnNote}`.slice(-12_000));
 
     this.recentActions.push({ tool: out.tool, args: out.args, ok: out.result.ok, content: out.result.content ?? '', ts: Date.now() });
     if (this.recentActions.length > 5) this.recentActions.shift();
     this.trace.push({ tool: out.tool, args: out.args });
-
-    this.emit({ kind: 'role.end', ts: Date.now(), role: 'executor', ms: performance.now() - t0 });
-
-    if (out.result.fatal) {
-      await sleep(10);
-    }
-
-    return { result: out.result, tool: out.tool };
   }
 
   private async evaluate(hot: AgentStateHot, stepId: string, lastResult: string) {
