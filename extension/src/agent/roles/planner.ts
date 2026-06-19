@@ -31,9 +31,16 @@ interface RawPlan {
   }>;
 }
 
+function extractSteps(raw: string): Array<{ description: string; successCriteria?: string; toolHint?: string }> {
+  const parsed = parseJSONPermissive<RawPlan>(raw);
+  return (parsed?.steps ?? [])
+    .filter((s) => typeof s?.description === 'string')
+    .map((s) => ({ description: s.description!, successCriteria: s.successCriteria, toolHint: s.toolHint }));
+}
+
 export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
   const messages = buildPlannerMessages(input.ctx, input.replanContext, input.workflowRecipe);
-  const resp = await input.ollama.chatOnce({
+  let resp = await input.ollama.chatOnce({
     model: input.model,
     messages,
     format: 'json',
@@ -42,15 +49,38 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
     signal: input.signal,
     numCtx: NUM_CTX,
   });
-  const raw = resp.message.content ?? '';
-  const parsed = parseJSONPermissive<RawPlan>(raw);
-  const steps = (parsed?.steps ?? []).filter((s) => typeof s?.description === 'string');
+  let raw = resp.message.content ?? '';
+  let steps = extractSteps(raw);
+  if (steps.length === 0) {
+    // A small model occasionally emits a wrong-shaped or empty plan even under format:json
+    // (e.g. {"plan":[...]} or {}). Retry once with an explicit shape reminder before aborting the
+    // whole task — the executor already gets a retry; the planner shouldn't be the brittle link.
+    const retryMessages = [
+      ...messages,
+      {
+        role: 'user' as const,
+        content:
+          'That was not a usable plan. Respond with ONLY {"steps":[{"description":"...","successCriteria":"..."}]} containing at least one concrete step.',
+      },
+    ];
+    resp = await input.ollama.chatOnce({
+      model: input.model,
+      messages: retryMessages,
+      format: 'json',
+      thinking: true,
+      timeoutMs: input.timeoutMs ?? 300_000,
+      signal: input.signal,
+      numCtx: NUM_CTX,
+    });
+    raw = resp.message.content ?? '';
+    steps = extractSteps(raw);
+  }
   if (steps.length === 0) {
     throw new Error(`Planner returned no usable steps. Raw: ${raw.slice(0, 200)}`);
   }
   const plan = newPlan(
     steps.map((s) => ({
-      description: s.description!,
+      description: s.description,
       successCriteria: s.successCriteria ?? `Step ${s.description} achieved`,
       toolHint: s.toolHint,
     })),
