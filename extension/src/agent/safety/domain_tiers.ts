@@ -15,7 +15,19 @@ export class DomainTierError extends Error {
   }
 }
 
-const BLOCKED_PROTOCOLS = new Set(['file:', 'chrome:', 'chrome-extension:', 'devtools:', 'view-source:']);
+const BLOCKED_PROTOCOLS = new Set([
+  'file:',
+  'chrome:',
+  'chrome-extension:',
+  'devtools:',
+  'view-source:',
+  'javascript:',
+  'data:',
+  'blob:',
+  'about:',
+  'ws:',
+  'wss:',
+]);
 
 export function isBlockedUrl(url: string): boolean {
   try {

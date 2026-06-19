@@ -3,6 +3,10 @@ import { z } from 'zod';
 import type { ToolDefDescriptor } from './registry';
 import { memoryGet, memoryList, memorySet } from '@/background/state_store';
 
+// Internal namespace used by workflow memory (awm:workflows). Off-limits to the
+// model so a task — or a prompt-injected page — can't read or clobber saved recipes.
+const RESERVED_PREFIX = 'awm:';
+
 export const echoTool: ToolDefDescriptor<{ message: string }> = {
   name: 'echo',
   description: 'Echo a message. Sanity check.',
@@ -46,6 +50,7 @@ export const memoryReadTool: ToolDefDescriptor<{ key: string }> = {
   description: 'Read a key from long-term memory (cross-task).',
   argsSchema: z.object({ key: z.string() }),
   async dispatch({ key }) {
+    if (key.startsWith(RESERVED_PREFIX)) return { ok: false, content: `Key "${key}" is reserved and cannot be read.` };
     const v = await memoryGet(key);
     if (v === undefined) return { ok: false, content: `No memory for key: ${key}` };
     return { ok: true, content: typeof v === 'string' ? v : JSON.stringify(v), data: { value: v } };
@@ -57,6 +62,7 @@ export const memoryWriteTool: ToolDefDescriptor<{ key: string; value: string }> 
   description: 'Write a key to long-term memory (cross-task). Use sparingly — for durable knowledge only.',
   argsSchema: z.object({ key: z.string(), value: z.string() }),
   async dispatch({ key, value }) {
+    if (key.startsWith(RESERVED_PREFIX)) return { ok: false, content: `Key "${key}" is reserved and cannot be written.` };
     await memorySet(key, value);
     return { ok: true, content: `Stored ${key}` };
   },
@@ -67,7 +73,7 @@ export const memoryListTool: ToolDefDescriptor<Record<string, never>> = {
   description: 'List all keys in long-term memory.',
   argsSchema: z.object({}),
   async dispatch() {
-    const keys = await memoryList();
+    const keys = (await memoryList()).filter((k) => !k.startsWith(RESERVED_PREFIX));
     return { ok: true, content: keys.join('\n') || '(empty)', data: { keys } };
   },
 };
