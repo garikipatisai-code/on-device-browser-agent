@@ -93,5 +93,8 @@ export function checkBreaker(state: BreakerState, cfg: BreakerConfig = DEFAULT_B
 }
 
 export function resetForNewStep(state: BreakerState): BreakerState {
-  return { ...state, consecutiveRepeats: 0, turnsSinceLastFinding: 0, lastActionHash: null };
+  // A new step is a clean slate: clear the windowed detectors too, so a fresh
+  // step can't trip on stale flags/hashes accumulated during the previous one.
+  void state;
+  return newBreakerState();
 }

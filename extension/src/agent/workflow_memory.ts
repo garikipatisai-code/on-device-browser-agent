@@ -9,6 +9,7 @@
 // Phase 1 is seed-only (recipes below). Phase 2 auto-records successful runs.
 
 import { memoryGet, memorySet } from '@/background/state_store';
+import { redact } from './safety/redact';
 
 export interface WorkflowStep {
   instruction: string;
@@ -56,7 +57,7 @@ export function scoreWorkflow(goalTokens: string[], goalHost: string | null, wf:
   for (const kw of wf.goalKeywords) if (tokens.has(kw)) overlap += 1;
   const denom = Math.max(1, Math.min(tokens.size, wf.goalKeywords.length));
   let score = overlap / denom;
-  if (goalHost && wf.domain !== '*' && (goalHost === wf.domain || goalHost.includes(wf.domain))) {
+  if (goalHost && wf.domain !== '*' && (goalHost === wf.domain || goalHost.endsWith('.' + wf.domain))) {
     score += 0.25;
   }
   return score;
@@ -201,7 +202,10 @@ export function traceToWorkflow(
     steps.push(step);
   }
   if (steps.length < 2) return null;
-  return { id, domain, goalKeywords: tokenize(goal), goalSample: goal, steps };
+  // Redact PII from the goal before it's persisted to durable memory and re-injected
+  // into future planner prompts (job-apply goals routinely carry email/phone/name).
+  const safeGoal = redact(goal);
+  return { id, domain, goalKeywords: tokenize(safeGoal), goalSample: safeGoal, steps };
 }
 
 /** Best-effort site host for a trace (first opened URL → host), else from the goal. */
