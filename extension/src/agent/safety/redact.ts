@@ -16,15 +16,19 @@ const SSN_RE = /\b(?!000|666|9\d{2})\d{3}[- ](?!00)\d{2}[- ](?!0000)\d{4}\b/g;
 // Phone: digit-boundary guards on both ends so a 10-digit window inside a
 // longer numeric run (e.g. a tracking-URL token) isn't matched as a phone.
 const PHONE_RE = /(?<!\d)(?:(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})(?!\d)/g;
+// International numbers start with + and a country code; require enough digits so
+// version strings like "+2.0.1" don't match.
+const INTL_PHONE_RE = /(?<!\d)\+\d{1,3}[\s.-]?\d[\d\s.-]{5,14}\d(?!\d)/g;
 const CC_CANDIDATE_RE = /\b(?:\d[ -]?){12,18}\d\b/g;
 const ADDRESS_RE =
-  /\b\d{1,6}\s+([A-Z][a-z]+\s)?(?:[A-Z][a-z]+\s){1,4}(St(?:reet)?|Ave(?:nue)?|Blvd|Boulevard|Rd|Road|Ln|Lane|Dr(?:ive)?|Ct|Court|Way|Pkwy|Parkway|Cir(?:cle)?|Pl(?:ace)?)\b\.?/g;
+  /\b\d{1,6}\s+(?:[A-Za-z0-9'.]+\s){1,4}(?:St|Street|Ave|Avenue|Blvd|Boulevard|Rd|Road|Ln|Lane|Dr|Drive|Ct|Court|Way|Pkwy|Parkway|Cir|Circle|Pl|Place|Ter|Terrace|Loop|Sq|Square|Trl|Trail|Hwy|Highway)\b\.?/gi;
 
 const PATTERNS: Pattern[] = [
   { type: 'CC', re: CC_CANDIDATE_RE, validate: (s) => luhnValid(s.replace(/[ -]/g, '')) },
   { type: 'SSN', re: SSN_RE },
   { type: 'EMAIL', re: EMAIL_RE },
   { type: 'PHONE', re: PHONE_RE },
+  { type: 'PHONE', re: INTL_PHONE_RE },
   { type: 'ADDRESS', re: ADDRESS_RE },
 ];
 
@@ -46,7 +50,7 @@ export function redactDeep<T>(v: T): T {
   if (v && typeof v === 'object') {
     const o = v as Record<string, unknown>;
     const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(o)) out[k] = redactDeep(val);
+    for (const [k, val] of Object.entries(o)) out[redact(k)] = redactDeep(val);
     return out as unknown as T;
   }
   return v;
