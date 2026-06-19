@@ -38,6 +38,7 @@ import { ungroundedNumbers } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
 import { sleep } from '@/background/signal';
+import { waitForTabSettled } from './tools/browser/tab';
 import { clearSearchResults } from './tools/browser/search';
 import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, deriveDomain, type Workflow } from './workflow_memory';
 import { renderProfileBlock } from './profile';
@@ -363,7 +364,7 @@ export class Orchestrator {
           ? (out.result.data.tabId as number)
           : undefined;
     if (navigated && navTabId !== undefined) {
-      await sleep(1200); // let the new page begin to load before re-reading
+      await waitForTabSettled(navTabId); // wait for load (condition-based), not a fixed delay
       const obs = await this.opts.registry
         .dispatch('aria.extract', { tabId: navTabId }, toolCtx)
         .catch(() => null);
@@ -391,7 +392,7 @@ export class Orchestrator {
             level: 'info',
             message: `dismissed consent overlay (${consent.kind}): "${consent.label}"`,
           });
-          await sleep(1200);
+          await waitForTabSettled(navTabId); // wait for the post-dismiss page to load
           const after = await this.opts.registry
             .dispatch('aria.extract', { tabId: navTabId }, toolCtx)
             .catch(() => null);
