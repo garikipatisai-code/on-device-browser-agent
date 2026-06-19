@@ -46,6 +46,17 @@ describe('parseDuckDuckGoResults', () => {
     expect(b).toEqual(a);
     expect(b[0].title).toBe('First result');
   });
+
+  it('pairs snippets by link position, so a dropped (empty-title) link does not shift them', () => {
+    const html = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fa.com"></a>
+<a class="result__snippet" href="x">SNIPPET-FOR-DROPPED</a>
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fb.com">Real Two</a>
+<a class="result__snippet" href="x">SNIPPET-FOR-REAL-TWO</a>`;
+    const r = parseDuckDuckGoResults(html, 10);
+    const two = r.find((x) => x.title === 'Real Two');
+    expect(two?.snippet).toBe('SNIPPET-FOR-REAL-TWO');
+  });
 });
 
 describe('isAdUrl', () => {

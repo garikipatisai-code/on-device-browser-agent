@@ -15,6 +15,10 @@ describe('looksBlocked (real captured fixtures)', () => {
   it('does NOT flag a normal results page', () => {
     expect(looksBlocked('<html><body><a class="result__a" href="x">A result</a></body></html>')).toBe(false);
   });
+  it('does NOT flag a large content page whose <title> merely starts with 30x', () => {
+    const big = `<html><head><title>302 Found Mice</title></head><body>${'<a class="result__a" href="x">r</a>'.repeat(60)}</body></html>`;
+    expect(looksBlocked(big)).toBe(false);
+  });
 });
 
 // Synthetic /lite/ results in the documented table layout. The captured /lite/ was a

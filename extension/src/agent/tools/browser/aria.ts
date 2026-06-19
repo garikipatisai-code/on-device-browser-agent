@@ -40,6 +40,8 @@ const INTERACTIVE_ROLES = new Set([
   'listbox',
   'option',
   'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
   'menu',
   'checkbox',
   'radio',
@@ -84,7 +86,10 @@ function isWrapperRole(role: string): boolean {
 function buildNode(n: AxNode, byId: Map<string, AxNode>): SimplifiedNode {
   const childIds = n.childIds ?? [];
   const built: SimplifiedNode[] = [];
+  const seen = new Set<string>();
   for (const cid of childIds) {
+    if (seen.has(cid)) continue; // CDP can list the same child twice → don't duplicate it
+    seen.add(cid);
     const c = byId.get(cid);
     if (!c) continue;
     const role = c.role?.value ?? 'generic';
