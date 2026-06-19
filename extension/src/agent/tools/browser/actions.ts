@@ -40,6 +40,29 @@ async function resolveObjectId(send: <T>(m: string, p?: Record<string, unknown>)
   }
 }
 
+// Dynamic-page freshness: a cached element index can resolve to a node that has
+// since been detached from the DOM (same-URL mutation). Acting on it silently
+// does nothing yet looks like success — so verify the node is still connected and,
+// if not, tell the model to re-read instead of reporting a phantom action.
+const staleMsg = (i: number) =>
+  `Element [${i}] is stale — the page changed since your last read. Call aria.extract to refresh, then act on the new indices.`;
+
+async function isElementConnected(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  objectId: string,
+): Promise<boolean> {
+  try {
+    const { result } = await send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: 'function() { return !!(this && this.isConnected); }',
+      returnByValue: true,
+    });
+    return result?.value === true;
+  } catch {
+    return false;
+  }
+}
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -51,11 +74,12 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
-    await withCdp(tabId, async (send) => {
+    const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       await scrollIntoView(send, backendNodeId);
       const objectId = await resolveObjectId(send, backendNodeId);
       if (objectId) {
+        if (!(await isElementConnected(send, objectId))) return true; // detached → stale
         // Native element.click() reliably follows links, fires handlers, and
         // submits forms even on a background tab. Synthetic mouse coordinates
         // often did NOT navigate (a product-link click left the URL unchanged).
@@ -69,7 +93,9 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
         await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
         await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
       }
+      return false;
     });
+    if (stale) return { ok: false, content: staleMsg(elementIndex) };
     clearExtractionCache(tabId);
     return { ok: true, content: `Clicked element [${elementIndex}] on tab ${tabId}` };
   },
@@ -90,11 +116,12 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
-    await withCdp(tabId, async (send) => {
+    const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       await scrollIntoView(send, backendNodeId);
       await focusNode(send, backendNodeId);
       const objectId = await resolveObjectId(send, backendNodeId);
+      if (objectId && !(await isElementConnected(send, objectId))) return true; // detached → stale
       if (clear && objectId) {
         await send('Runtime.callFunctionOn', {
           objectId,
@@ -112,7 +139,9 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
           returnByValue: true,
         });
       }
+      return false;
     });
+    if (stale) return { ok: false, content: staleMsg(elementIndex) };
     clearExtractionCache(tabId);
     return { ok: true, content: `Typed ${text.length} chars into element [${elementIndex}]${submit ? ' and submitted' : ''}` };
   },
@@ -130,17 +159,20 @@ export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: num
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
-    await withCdp(tabId, async (send) => {
+    const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       const objectId = await resolveObjectId(send, backendNodeId);
       if (!objectId) throw new Error('Could not resolve element to a JS object');
+      if (!(await isElementConnected(send, objectId))) return true; // detached → stale
       await send('Runtime.callFunctionOn', {
         objectId,
         functionDeclaration: `function(v) { try { this.value = v; this.dispatchEvent(new Event('change', {bubbles:true})); } catch(e) {} }`,
         arguments: [{ value }],
         returnByValue: true,
       });
+      return false;
     });
+    if (stale) return { ok: false, content: staleMsg(elementIndex) };
     clearExtractionCache(tabId);
     return { ok: true, content: `Selected ${value} in element [${elementIndex}]` };
   },
