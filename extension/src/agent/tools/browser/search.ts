@@ -23,16 +23,15 @@ export function parseDuckDuckGoResults(html: string, max = 10): SearchResult[] {
   SNIPPET_RE.lastIndex = 0;
   while ((m = SNIPPET_RE.exec(html)) !== null) {
     snippets.push(stripHtml(m[1]).trim());
-    if (snippets.length >= max) break;
   }
-  let i = 0;
+  let pos = 0; // index of the current result LINK — snippets are positional, not per-kept
   while ((m = RESULT_RE.exec(html)) !== null) {
-    const rawHref = m[1];
+    const snippet = snippets[pos] ?? '';
+    pos += 1;
     const title = stripHtml(m[2]).trim();
-    const url = decodeDdgUrl(rawHref);
+    const url = decodeDdgUrl(m[1]);
     if (!url || !title) continue;
-    out.push({ title, url, snippet: snippets[i] ?? '' });
-    i++;
+    out.push({ title, url, snippet });
     if (out.length >= max) break;
   }
   return out;
@@ -66,7 +65,9 @@ export function isAdUrl(url: string): boolean {
 // honest "blocked" instead of the misleading "no results / page layout changed".
 export function looksBlocked(html: string): boolean {
   if (!html.trim()) return true;
-  if (/<title>\s*30\d\b/i.test(html)) return true; // 301/302 redirect stub
+  // A 30x redirect stub is a tiny body; a real page that merely starts its <title>
+  // with "302..." is large — only treat the title prefix as a block on a tiny body.
+  if (html.length < 1024 && /<title>\s*30\d\b/i.test(html)) return true;
   return /anomaly-modal|challenge-form|bots use duckduckgo|error-lite@duckduckgo\.com|anomaly\.js/i.test(html);
 }
 
