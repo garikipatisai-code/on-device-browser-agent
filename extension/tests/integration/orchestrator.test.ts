@@ -785,3 +785,152 @@ describe('orchestrator — evaluator-issued finish is grounding-gated too', () =
     expect(result.verdict).toBe('blocked');
   });
 });
+
+describe('orchestrator — finish robustness (terminal answer, partial grounding, counters)', () => {
+  function pageReg(content: string) {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content, data: { url: 'https://x/' } };
+      },
+    });
+    return reg;
+  }
+
+  // EX-1: a prose answer on the FINAL step is the deliverable — it must not be discarded
+  // for a generic "Plan complete." (the small model often writes prose instead of finish()).
+  it('uses the executor prose answer as the summary on the terminal step, not "Plan complete."', async () => {
+    const prose = 'Based on the page I read, the Quiet Keyboard is currently priced at £42.00 and it is in stock right now.';
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report the price', successCriteria: 'reported' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ content: prose }), // first call: no tool → triggers the retry
+        rawResponse({ content: prose }), // retry: still no tool → prose-answer path (advanceStep)
+      ],
+      evaluator: [
+        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'reported', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
+      ],
+    });
+    const orch = new Orchestrator({ ollama, registry: pageReg('Quiet Keyboard price £42.00 in stock'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
+    expect(result.summary).toContain('42.00');
+    expect(result.summary).not.toBe('Plan complete.');
+    expect(result.verdict).toBe('success');
+  });
+
+  // EX-2: a 'partial' answer carries data too — an ungrounded number in it must be flagged,
+  // not passed through verbatim (only 'blocked'/'failed' are fabrication-free honest outcomes).
+  it('flags an ungrounded number in a partial finish', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'partial', summary: 'Found the item; the price appears to be £99.99' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: pageReg('Widget — in stock, no price shown'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
+    expect(result.verdict).toBe('partial');
+    expect(result.summary).toContain('unverified against page');
+  });
+
+  // EX-3: an empty/whitespace success summary is not a real answer — it must not finish 'success'.
+  it('does not accept a success finish with an empty summary', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: '   ' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: '' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: pageReg('Widget price £42.00'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
+    expect(result.verdict).toBe('partial');
+    expect(result.summary).toContain('no answer text');
+  });
+
+  // ST-M2: the finish-retry budget (verifyAttempts) must reset when the plan advances, or a
+  // later step's first ungrounded finish is wrongly treated as its last attempt → forced partial.
+  it('resets the finish-retry budget when the plan advances to a new step', async () => {
+    const reg = buildRegistry();
+    let reads = 0;
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        reads += 1;
+        return { ok: true, content: reads <= 1 ? 'Item A price £10.00' : 'Item B price £20.00', data: { url: 'https://x/' } };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [
+        { description: 'find A', successCriteria: 'a' },
+        { description: 'find B and report', successCriteria: 'b' },
+      ] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),                            // step1 read (A £10)
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'A is £99.99' } }] }), // step1 ungrounded → rejected (attempt 1)
+        rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'found A' } }] }),                       // advance → reset budget
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),                            // step2 read (B £20)
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'B is £88.88' } }] }), // step2 ungrounded → with reset: attempt 1 (corrective); without: attempt 2 (forced partial)
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'B is £20.00' } }] }), // step2 grounded → success
+      ],
+      evaluator: [
+        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'found A', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
+      ],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('compare A and B'));
+    expect(result.verdict).toBe('success');
+    expect(result.summary).toContain('20.00');
+  });
+
+  // ST-M3: consecutiveFatal must reset when the plan advances — a successful step between two
+  // fatals means they are NOT consecutive and must not trip the "blocked" termination.
+  it('resets the consecutive-fatal counter when the plan advances (non-consecutive fatals do not block)', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'Item price £15.00', data: { url: 'https://x/' } };
+      },
+    });
+    reg.register({
+      name: 'fail',
+      description: 'fatal',
+      argsSchema: z.object({ n: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: false, fatal: true, content: 'Cannot act: read-only domain' };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [
+        { description: 'step one', successCriteria: 'a' },
+        { description: 'step two and report', successCriteria: 'b' },
+      ] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'fail', args: { n: 1 } }] }),                                         // step1 fatal (count=1)
+        rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'moving on' } }] }),                     // advance → reset count
+        rawResponse({ toolCalls: [{ name: 'fail', args: { n: 2 } }] }),                                         // step2 fatal (count=1 w/ reset; =2 without → blocked)
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),                            // step2 read
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The price is £15.00' } }] }),
+      ],
+      evaluator: [
+        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'moving on', shouldReplan: false, finishVerdict: null, finishSummary: null }) }),
+      ],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('do two steps'));
+    expect(result.verdict).toBe('success');
+  });
+});

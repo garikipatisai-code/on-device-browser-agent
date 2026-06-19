@@ -156,9 +156,11 @@ export class Orchestrator {
 
       if (execOut.result.finish) {
         const fin = execOut.result.finish;
-        // Honest failures aren't fabrication risks — accept them as-is.
+        // Honest failures (blocked/failed) aren't fabrication risks. A 'partial' carries data,
+        // so route it through the grounding gate too (flags an ungrounded number, no retry).
         if (fin.verdict !== 'success') {
-          return this.finishOk(hot, fin.verdict, fin.summary);
+          const g = this.gateFinishSummary(fin.verdict, fin.summary);
+          return this.finishOk(hot, g.verdict, g.summary);
         }
         const v = this.verifyFinish(fin.summary);
         if (v.ok) {
@@ -182,12 +184,25 @@ export class Orchestrator {
         const next = walkPlan(hot.plan!, step.id, ev.verdict === 'PASS' ? 'done' : 'fail');
         hot = await this.applyPlan(hot, next.plan);
         this.breaker = resetForNewStep(this.breaker);
+        // A new step gets a fresh self-correction budget and a clean fatal counter — these are
+        // per-step concerns, like the breaker's windowed detectors (else a late step inherits an
+        // earlier step's spent retries / a non-consecutive fatal and is wrongly cut short).
+        this.verifyAttempts = 0;
+        this.consecutiveFatal = 0;
         if (ev.finishVerdict && ev.finishSummary) {
-          const g = this.gateEvaluatorFinish(ev.finishVerdict, ev.finishSummary);
+          const g = this.gateFinishSummary(ev.finishVerdict, ev.finishSummary);
           return this.finishOk(hot, g.verdict, g.summary);
         }
         if (next.terminal) {
           const ok = ev.verdict === 'PASS';
+          // If the executor wrote the answer as prose on the final step (no finish() call), that
+          // text IS the deliverable — gate it like any success rather than discarding it for a
+          // generic "Plan complete.".
+          const answer = execOut.tool === 'answer' ? (execOut.result.content ?? '').trim() : '';
+          if (ok && answer) {
+            const g = this.gateFinishSummary('success', answer);
+            return this.finishOk(hot, g.verdict, g.summary);
+          }
           return this.finishOk(
             hot,
             ok ? 'success' : 'partial',
@@ -227,7 +242,7 @@ export class Orchestrator {
       if (turn % 3 === 0) {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
         if (ev.finishVerdict && ev.finishSummary) {
-          const g = this.gateEvaluatorFinish(ev.finishVerdict, ev.finishSummary);
+          const g = this.gateFinishSummary(ev.finishVerdict, ev.finishSummary);
           return this.finishOk(hot, g.verdict, g.summary);
         }
         if (ev.verdict === 'FAIL' && ev.shouldReplan) {
@@ -587,6 +602,9 @@ export class Orchestrator {
    *  correct/honest answers in the benchmark (correct 80%→67%), so it was dropped —
    *  see docs/superpowers/specs/2026-06-18-theme-a-page-grounded-verification-design.md. */
   private verifyFinish(summary: string): { ok: boolean; reason: string } {
+    if (!summary || !summary.trim()) {
+      return { ok: false, reason: 'no answer text provided' };
+    }
     const ungrounded = ungroundedNumbers(summary, this.observedText);
     if (ungrounded.length) {
       return { ok: false, reason: `value(s) not found on any page read: ${ungrounded.join(', ')}` };
@@ -594,13 +612,13 @@ export class Orchestrator {
     return { ok: true, reason: '' };
   }
 
-  /** Gate an evaluator-issued finish through the same deterministic grounding check as the
-   *  executor's finish tool. The evaluator is the same small-model class and can assert a
-   *  number that's on no page read; a 'success' carrying an ungrounded value is downgraded to
-   *  'partial' (honest) rather than ending the task — and auto-recording a recipe — on a
-   *  fabricated figure. Non-success verdicts are honest outcomes and pass through unchanged. */
-  private gateEvaluatorFinish(verdict: string, summary: string): { verdict: string; summary: string } {
-    if (verdict !== 'success') return { verdict, summary };
+  /** Gate any data-bearing finish (executor OR evaluator) through the deterministic grounding
+   *  check. Both roles are the same small-model class and can assert a number that's on no page
+   *  read. A 'success' carrying an ungrounded (or empty) answer is downgraded to 'partial'; a
+   *  'partial' keeps its verdict but gets the unverified note appended (it's already a concession).
+   *  'blocked'/'failed' are honest non-answers with no fabrication risk and pass through unchanged. */
+  private gateFinishSummary(verdict: string, summary: string): { verdict: string; summary: string } {
+    if (verdict !== 'success' && verdict !== 'partial') return { verdict, summary };
     const v = this.verifyFinish(summary);
     if (v.ok) return { verdict, summary };
     return { verdict: 'partial', summary: `${summary}\n\n[unverified against page: ${v.reason}]` };
