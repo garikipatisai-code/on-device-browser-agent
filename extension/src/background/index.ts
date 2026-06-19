@@ -24,6 +24,9 @@ import { NUM_CTX } from '@/agent/budget';
 import { metricsSnapshot } from '@/agent/metrics';
 
 let _orch: Orchestrator | null = null;
+// Synchronous start-guard: handleStart awaits ping/listModels before _orch is set, so two
+// fast clicks could both pass the `if (_orch)` check and spawn a second, orphaned run.
+let _starting = false;
 let _abortController: AbortController | null = null;
 let _keepAlive: ReturnType<typeof setInterval> | null = null;
 let _events: TimelineEvent[] = [];
@@ -105,7 +108,9 @@ if (typeof chrome !== 'undefined' && chrome.alarms) {
     if (alarm.name !== 'agent.watchdog') return;
     const hot = await loadHot();
     if (!hot) return;
-    const stale = Date.now() - hot.lastTouch > 5 * 60_000;
+    // 8 min, not 5: the planner alone can take up to 300s (5 min); a 5-min stale
+    // threshold could abort a healthy long turn. 8 leaves a margin past that ceiling.
+    const stale = Date.now() - hot.lastTouch > 8 * 60_000;
     if (stale && hot.phase !== 'IDLE' && hot.phase !== 'DONE' && hot.phase !== 'ABORTED') {
       console.warn('[browser-agent] watchdog: stale task — aborting');
       _abortController?.abort(new DOMException('Watchdog stale', 'TimeoutError'));
@@ -124,11 +129,12 @@ if (typeof chrome !== 'undefined' && chrome.alarms) {
 
 async function handleStart(goal: string) {
   log('handleStart goal=', JSON.stringify(goal));
-  if (_orch) {
+  if (_orch || _starting) {
     log('handleStart: a task is already running — rejecting');
     broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
     return;
   }
+  _starting = true; // held only across the preflight await window, until _orch is set
   const settings = await loadSettings();
   const ollama = new OllamaClient(settings.ollamaBaseUrl);
 
@@ -136,6 +142,7 @@ async function handleStart(goal: string) {
   const ok = await ollama.ping();
   log('ping result =', ok);
   if (!ok) {
+    _starting = false;
     broadcast({
       type: 'preflight',
       ok: false,
@@ -153,6 +160,7 @@ async function handleStart(goal: string) {
   ];
   const missing = required.filter((m) => !models.some((x) => sameModel(x, m)));
   if (missing.length) {
+    _starting = false;
     log('missing models =', missing);
     broadcast({
       type: 'preflight',
@@ -176,6 +184,7 @@ async function handleStart(goal: string) {
     emit: appendEventLocal,
     signal: _abortController.signal,
   });
+  _starting = false; // _orch is now set; the `if (_orch)` guard takes over from here
 
   startKeepAlive(); // keep the SW alive across long (>30s) Ollama generations
   try {

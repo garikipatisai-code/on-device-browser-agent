@@ -89,7 +89,6 @@ export type TimelineEvent =
 export type PanelCommand =
   | { type: 'agent.start'; goal: string }
   | { type: 'agent.abort' }
-  | { type: 'agent.resume' }
   | { type: 'agent.status' }
   | { type: 'settings.get' }
   | { type: 'settings.set'; settings: Partial<Settings> }
