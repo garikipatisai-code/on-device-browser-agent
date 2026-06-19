@@ -49,7 +49,9 @@ export function App() {
           setEvents(msg.events);
           break;
         case 'append':
-          setEvents((prev) => [...prev, msg.event]);
+          // Mirror the SW's own 1000-event cap so a long task can't grow the panel
+          // array unbounded between full 'timeline' resyncs.
+          setEvents((prev) => [...prev, msg.event].slice(-1000));
           break;
         case 'settings':
           setSettings(msg.settings);

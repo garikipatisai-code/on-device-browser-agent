@@ -24,8 +24,17 @@ function stripHtml(html: string): string {
   return new DOMParser().parseFromString(html, 'text/html').body?.textContent ?? '';
 }
 
+// A résumé is normally well under 1MB; cap generously so a mis-picked huge file
+// (e.g. a video) can't be slurped into an ArrayBuffer and shipped to the SW.
+const MAX_RESUME_BYTES = 20 * 1024 * 1024;
+
 /** Convert a user-picked résumé file to plain text. Throws on unsupported types. */
 export async function extractResumeText(file: File): Promise<string> {
+  if (file.size > MAX_RESUME_BYTES) {
+    throw new Error(
+      `File "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max 20MB.`,
+    );
+  }
   const name = file.name.toLowerCase();
   const buf = await file.arrayBuffer();
   if (name.endsWith('.docx')) {
