@@ -95,6 +95,8 @@ export class Orchestrator {
   private verifyAttempts = 0;
   // Real executor-turn count this task (for RunResult.turns; recentActions is capped at 5).
   private turns = 0;
+  // Consecutive fatal tool results — a hard block (e.g. tier denial) ends the run promptly.
+  private consecutiveFatal = 0;
   // Observe-then-act gate: the observation tool used on the previous turn (blocked
   // on the next turn) and the step it applies to (reset when the step changes).
   private lastObserveTool: string | null = null;
@@ -118,6 +120,7 @@ export class Orchestrator {
     this.observedText = '';
     this.verifyAttempts = 0;
     this.turns = 0;
+    this.consecutiveFatal = 0;
     this.lastObserveTool = null;
     this.observeGateStep = null;
     clearSearchResults(); // don't let a prior task's results ground/block this one
@@ -193,6 +196,21 @@ export class Orchestrator {
           );
         }
         continue;
+      }
+
+      // A fatal tool result (blocked URL/scheme, tier denial) is unrecoverable; if the
+      // executor keeps hitting one, stop promptly rather than burning turns to no-progress.
+      if (execOut.result.fatal) {
+        this.consecutiveFatal += 1;
+        if (this.consecutiveFatal >= 2) {
+          return this.finishOk(
+            hot,
+            'blocked',
+            `Blocked: ${(execOut.result.content ?? 'repeated unrecoverable tool error').slice(0, 500)}`,
+          );
+        }
+      } else {
+        this.consecutiveFatal = 0;
       }
 
       const verdict = checkBreaker(this.breaker);
@@ -333,7 +351,7 @@ export class Orchestrator {
       ts: Date.now(),
       tool: out.tool,
       ok: out.result.ok,
-      content: redact(out.result.content ?? ''),
+      content: redact((out.result.content ?? '').slice(0, 2_000)),
     });
 
     await this.autoObserveAfterNavigation(out, toolCtx);

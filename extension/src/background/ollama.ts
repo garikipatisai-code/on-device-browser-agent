@@ -92,6 +92,8 @@ export class OllamaClient {
       if (!res.ok) return [];
       const body = (await res.json()) as { models?: Array<{ name: string }> };
       return (body.models ?? []).map((m) => m.name);
+    } catch {
+      return []; // network error / bad body → treat as "no models reachable", not a throw
     } finally {
       cleanup();
     }
