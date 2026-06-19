@@ -717,3 +717,71 @@ describe('orchestrator — timeline tool.result content is capped', () => {
     expect(res!.content.length).toBeLessThanOrEqual(2_100);
   });
 });
+
+describe('orchestrator — evaluator-issued finish is grounding-gated too', () => {
+  // The executor's own finish tool is grounding-gated, but the EVALUATOR (same small-model
+  // class) can also end the task via finishVerdict:'success' + finishSummary. Those numbers
+  // must pass the same deterministic grounding check, or the evaluator becomes a hole that
+  // finishes 'success' on a fabricated figure (and auto-records a poisoned recipe).
+  function pageReg(content: string) {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content, data: { url: 'https://x/' } };
+      },
+    });
+    return reg;
+  }
+
+  it('downgrades an evaluator success to partial when its summary asserts an ungrounded number', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'page read' } }] }),
+      ],
+      evaluator: [
+        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'done', shouldReplan: false, finishVerdict: 'success', finishSummary: 'The price is £99.99' }) }),
+      ],
+    });
+    const orch = new Orchestrator({ ollama, registry: pageReg('Widget — in stock, no price shown'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
+    expect(result.verdict).toBe('partial');
+    expect(result.summary).toContain('unverified against page');
+  });
+
+  it('accepts an evaluator success whose numbers are all grounded', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'page read' } }] }),
+      ],
+      evaluator: [
+        rawResponse({ content: JSON.stringify({ verdict: 'PASS', reason: 'done', shouldReplan: false, finishVerdict: 'success', finishSummary: 'The price is £99.99' }) }),
+      ],
+    });
+    const orch = new Orchestrator({ ollama, registry: pageReg('Widget price £99.99 in stock'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
+    expect(result.verdict).toBe('success');
+  });
+
+  it('passes an evaluator "blocked" finish through unchanged (honest failure, no grounding needed)', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'page read' } }] }),
+      ],
+      evaluator: [
+        rawResponse({ content: JSON.stringify({ verdict: 'FAIL', reason: 'blocked', shouldReplan: false, finishVerdict: 'blocked', finishSummary: 'The page was behind a paywall.' }) }),
+      ],
+    });
+    const orch = new Orchestrator({ ollama, registry: pageReg('Subscribe to read'), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('report the price'));
+    expect(result.verdict).toBe('blocked');
+  });
+});
