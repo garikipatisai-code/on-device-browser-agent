@@ -934,3 +934,36 @@ describe('orchestrator — finish robustness (terminal answer, partial grounding
     expect(result.verdict).toBe('success');
   });
 });
+
+describe('orchestrator — PII in tool args is redacted (job-apply privacy)', () => {
+  it('does not leak a typed email into the scratchpad / later prompts', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.type',
+      description: 'type into a field',
+      argsSchema: z.object({ tabId: z.number().int(), elementIndex: z.number().int(), text: z.string() }),
+      async dispatch() {
+        return { ok: true, content: 'Typed' };
+      },
+    });
+    const execPrompts: string[] = [];
+    const ollama = makeFakeOllama(
+      {
+        planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'fill the form', successCriteria: 'done' }] }) })],
+        executor: [
+          rawResponse({ toolCalls: [{ name: 'tab.type', args: { tabId: 1, elementIndex: 2, text: 'john.doe@example.com' } }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Filled the email field.' } }] }),
+        ],
+        evaluator: [],
+      },
+      { onChat: (_m, role, messages) => { if (role === 'executor') execPrompts.push(JSON.stringify(messages)); } },
+    );
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('fill in my email on the form'));
+    expect(result.phase).toBe('DONE');
+    // Turn 2's prompt carries turn 1's action via BOTH the scratchpad turn-note and the
+    // recentActions block — neither may carry the raw email (args were previously un-redacted).
+    expect(execPrompts.length).toBeGreaterThanOrEqual(2);
+    expect(execPrompts.slice(1).join('\n')).not.toContain('john.doe@example.com');
+  });
+});
