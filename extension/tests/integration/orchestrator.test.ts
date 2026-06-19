@@ -661,3 +661,59 @@ describe('orchestrator — RunResult.turns reflects the real turn count', () => 
     expect(result.turns).toBeGreaterThanOrEqual(6);
   });
 });
+
+describe('orchestrator — fatal tool results terminate promptly', () => {
+  it('ends "blocked" after repeated fatal tool errors instead of burning turns', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'fail',
+      description: 'always fatally fails',
+      argsSchema: z.object({ n: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: false, fatal: true, content: 'Cannot act: read-only domain' };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'try', successCriteria: 'x' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'fail', args: { n: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'fail', args: { n: 2 } }] }),
+        rawResponse({ toolCalls: [{ name: 'fail', args: { n: 3 } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('do the blocked thing'));
+    expect(result.verdict).toBe('blocked');
+  });
+});
+
+describe('orchestrator — timeline tool.result content is capped', () => {
+  it('does not emit a huge page read verbatim into the timeline', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'X'.repeat(5000), data: { url: 'https://x/' } };
+      },
+    });
+    const events: TimelineEvent[] = [];
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: (e) => events.push(e) });
+    await orch.runUntilTerminal(await orch.start('read the page'));
+    const res = events.find((e) => e.kind === 'tool.result' && e.tool === 'aria.extract') as
+      | Extract<TimelineEvent, { kind: 'tool.result' }>
+      | undefined;
+    expect(res).toBeTruthy();
+    expect(res!.content.length).toBeLessThanOrEqual(2_100);
+  });
+});

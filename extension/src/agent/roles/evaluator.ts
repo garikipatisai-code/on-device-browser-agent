@@ -37,20 +37,18 @@ export async function runEvaluator(input: EvaluatorInput): Promise<Verdict> {
   });
   const raw = resp.message.content ?? '';
   const parsed = parseJSONPermissive<Partial<Verdict>>(raw);
-  const verdict: 'PASS' | 'FAIL' =
-    parsed?.verdict === 'PASS' || parsed?.verdict === 'FAIL' ? parsed.verdict : 'FAIL';
+  // Small models emit odd casing/whitespace even under format:json — normalize so a
+  // clearly-passing verdict isn't silently defaulted to FAIL.
+  const v = String(parsed?.verdict ?? '').trim().toUpperCase();
+  const verdict: 'PASS' | 'FAIL' = v === 'PASS' ? 'PASS' : 'FAIL';
+  // 'partial' is intentionally NOT terminal: the evaluator must not end the task
+  // mid-goal. Only success/blocked/failed finish it.
+  const fv = String(parsed?.finishVerdict ?? '').trim().toLowerCase();
   return {
     verdict,
     reason: typeof parsed?.reason === 'string' ? parsed.reason : 'No evaluator reason provided.',
     shouldReplan: !!parsed?.shouldReplan,
-    // 'partial' is intentionally NOT terminal: the evaluator must not end the
-    // task mid-goal. Only success/blocked/failed finish it.
-    finishVerdict:
-      parsed?.finishVerdict === 'success' ||
-      parsed?.finishVerdict === 'blocked' ||
-      parsed?.finishVerdict === 'failed'
-        ? parsed.finishVerdict
-        : null,
+    finishVerdict: fv === 'success' ? 'success' : fv === 'blocked' ? 'blocked' : fv === 'failed' ? 'failed' : null,
     finishSummary: typeof parsed?.finishSummary === 'string' ? parsed.finishSummary : null,
     raw,
   };
