@@ -39,6 +39,13 @@ describe('parseDuckDuckGoResults', () => {
     expect(r[0].title).not.toContain('<b>');
     expect(r[0].snippet).not.toContain('<b>');
   });
+
+  it('does not leak regex lastIndex across calls (each search starts fresh)', () => {
+    const a = parseDuckDuckGoResults(SAMPLE_HTML, 1);
+    const b = parseDuckDuckGoResults(SAMPLE_HTML, 1);
+    expect(b).toEqual(a);
+    expect(b[0].title).toBe('First result');
+  });
 });
 
 describe('isAdUrl', () => {

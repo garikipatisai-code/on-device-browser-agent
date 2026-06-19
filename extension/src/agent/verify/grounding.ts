@@ -15,8 +15,10 @@ export function dataNumbers(s: string): string[] {
   return [...new Set(m.map(normNum))];
 }
 
-/** Numbers in `text` that do NOT appear anywhere in `observed`. */
+/** Numbers in `text` that do NOT appear anywhere in `observed`. Matches whole
+ *  normalized numbers (set membership), NOT raw substrings — so a claimed "4.6"
+ *  is NOT considered grounded just because the page said "14.62". */
 export function ungroundedNumbers(text: string, observed: string): string[] {
-  const obs = observed.replace(/[$\s,]/g, '');
-  return dataNumbers(text).filter((n) => !obs.includes(n));
+  const obs = new Set(dataNumbers(observed));
+  return dataNumbers(text).filter((n) => !obs.has(n));
 }

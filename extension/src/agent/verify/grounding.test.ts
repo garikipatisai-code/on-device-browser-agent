@@ -16,4 +16,9 @@ describe('ungroundedNumbers', () => {
     expect(ungroundedNumbers('It costs $13.42', PAGES)).toEqual([]);
     expect(ungroundedNumbers('It costs $99.99', PAGES)).toEqual(['99.99']);
   });
+
+  it('does not count a number that is only a digit-substring of an observed number', () => {
+    expect(ungroundedNumbers('rating 4.6', 'price 14.62')).toEqual(['4.6']);
+    expect(ungroundedNumbers('total 1234', 'order id 12345')).toEqual(['1234']);
+  });
 });

@@ -8,6 +8,20 @@ import {
   TIER_ORDER,
 } from '@/agent/safety/domain_tiers';
 
+describe('domain_tiers — blocked protocols', () => {
+  it('blocks dangerous URL schemes (javascript/data/blob/about/ws)', () => {
+    expect(isBlockedUrl('javascript:alert(1)')).toBe(true);
+    expect(isBlockedUrl('data:text/html,<script>x</script>')).toBe(true);
+    expect(isBlockedUrl('blob:https://x/abc')).toBe(true);
+    expect(isBlockedUrl('about:blank')).toBe(true);
+    expect(isBlockedUrl('ws://evil')).toBe(true);
+  });
+  it('still allows normal http(s) URLs', () => {
+    expect(isBlockedUrl('https://example.com')).toBe(false);
+    expect(isBlockedUrl('http://example.com/page')).toBe(false);
+  });
+});
+
 describe('domain_tiers — defaults', () => {
   it('unknown host → read-only', () => {
     expect(getDomainTier('example.com', {})).toBe('read-only');

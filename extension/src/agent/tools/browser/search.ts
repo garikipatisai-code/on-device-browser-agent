@@ -17,6 +17,10 @@ export function parseDuckDuckGoResults(html: string, max = 10): SearchResult[] {
   const out: SearchResult[] = [];
   const snippets: string[] = [];
   let m: RegExpExecArray | null;
+  // Reset module-level /g regexes — exec() leaves lastIndex non-zero when the loop
+  // breaks early at `max`, which would corrupt the NEXT search in the same worker.
+  RESULT_RE.lastIndex = 0;
+  SNIPPET_RE.lastIndex = 0;
   while ((m = SNIPPET_RE.exec(html)) !== null) {
     snippets.push(stripHtml(m[1]).trim());
     if (snippets.length >= max) break;
