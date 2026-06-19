@@ -490,7 +490,11 @@ export class Orchestrator {
       this.recordObserved(out.result.content ?? '');
     }
 
-    const turnNote = `[${new Date().toISOString()}] ${out.tool}(${JSON.stringify(out.args).slice(0, 200)}) -> ${(out.result.content ?? '').slice(0, 800)}`;
+    // redact() before persisting: tool args (e.g. tab.type for a job application) can carry the
+    // user's email/phone/SSN, and the scratchpad is written to IndexedDB and re-fed into prompts.
+    const turnNote = redact(
+      `[${new Date().toISOString()}] ${out.tool}(${JSON.stringify(out.args).slice(0, 200)}) -> ${(out.result.content ?? '').slice(0, 800)}`,
+    );
     await setScratchpad(this.taskId, `${scratch}\n${turnNote}`.slice(-12_000));
 
     this.recentActions.push({ tool: out.tool, args: out.args, ok: out.result.ok, content: out.result.content ?? '', ts: Date.now() });
@@ -567,7 +571,7 @@ export class Orchestrator {
       recentActions: this.recentActions
         .map(
           (a) =>
-            `- ${a.ok ? '✓' : '✗'} ${a.tool}(${JSON.stringify(a.args).slice(0, 80)}) → ${redact(a.content.slice(0, 200))}`,
+            `- ${a.ok ? '✓' : '✗'} ${a.tool}(${redact(JSON.stringify(a.args).slice(0, 80))}) → ${redact(a.content.slice(0, 200))}`,
         )
         .join('\n'),
     };
