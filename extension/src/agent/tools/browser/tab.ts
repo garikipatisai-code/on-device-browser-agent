@@ -24,6 +24,28 @@ async function waitForLoaded(tabId: number, timeoutMs: number): Promise<chrome.t
   throw new Error(`Timed out waiting for tab ${tabId} to load`);
 }
 
+/**
+ * Condition-based settle: resolve as soon as the tab is loaded ('complete'), is
+ * gone/not queryable (nothing to wait for), or the cap elapses. Never throws —
+ * callers (e.g. the orchestrator's post-navigation auto-read) proceed regardless.
+ * Replaces a fixed sleep: fast pages don't pay a flat delay, slow ones get more time.
+ */
+export async function waitForTabSettled(tabId: number, capMs = 5_000, pollMs = 150): Promise<void> {
+  const start = Date.now();
+  for (;;) {
+    const status = await new Promise<string | null>((resolve) => {
+      try {
+        chrome.tabs.get(tabId, (t) => resolve(chrome.runtime?.lastError ? null : (t?.status ?? null)));
+      } catch {
+        resolve(null);
+      }
+    });
+    if (status === 'complete' || status === null) return;
+    if (Date.now() - start >= capMs) return;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
 function normalizeUrl(u: string): string {
   return u.trim().replace(/[/]+$/, '');
 }
