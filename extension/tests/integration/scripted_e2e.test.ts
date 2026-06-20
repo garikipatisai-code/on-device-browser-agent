@@ -78,4 +78,31 @@ describe('scripted-browser E2E (real orchestrator + real tools + fake model)', (
     const score = scoreRun(t.expect, run);
     expect(score, score.reasons.join('; ')).toMatchObject({ correct: true, grounded: true });
   });
+
+  it('search-list: web search → grounded top-3 ordered report (the highest-blast-radius path)', async () => {
+    const t = task('search-list');
+    const state = new ScriptedBrowser(t);
+    const registry = buildScriptedRegistry(state);
+    // No navigation here: search records its results into observedText (search is a READING_TOOL),
+    // then the executor reports the top 3 titles in order. Exercises the search-tool wiring + the
+    // ordered-list scorer with no page reads.
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'search the web and list the top 3 results by title', successCriteria: 'top 3 listed' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'search', args: { query: 'best mechanical keyboards 2025' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Top 3: 1. The 8 Best Mechanical Keyboards (2025) | WIRED. 2. Best Mechanical Keyboards 2025 - RTINGS.com. 3. Top Mechanical Keyboards - Toms Hardware.' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start(t.goal));
+
+    expect(result.phase).toBe('DONE');
+    const run: BenchRun = {
+      phase: result.phase, verdict: result.verdict, summary: result.summary,
+      observedText: `${t.goal}\n${state.observedText()}`, turns: result.turns, replans: result.replans,
+    };
+    const score = scoreRun(t.expect, run);
+    expect(score, score.reasons.join('; ')).toMatchObject({ completed: true, correct: true, grounded: true });
+  });
 });
