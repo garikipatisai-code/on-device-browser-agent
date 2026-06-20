@@ -123,7 +123,9 @@ export function App() {
     if (!trimmed) return;
     setEvents([]);
     setNotice(null);
-    send({ type: 'preflight' });
+    // agent.start runs its own preflight (ping + model check) and broadcasts the result, and the
+    // model dropdown is populated by models.list on mount — so a separate preflight send here is a
+    // redundant second ping+listModels round-trip with no UI benefit.
     send({ type: 'agent.start', goal: trimmed });
   };
 
