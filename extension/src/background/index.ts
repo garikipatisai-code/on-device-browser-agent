@@ -137,10 +137,15 @@ if (typeof chrome !== 'undefined' && chrome.alarms) {
 }
 
 (async () => {
-  const hot = await loadHot();
-  if (hot && hot.phase !== 'IDLE' && hot.phase !== 'DONE' && hot.phase !== 'ABORTED') {
-    console.warn('[browser-agent] crash-resume: found in-flight task, marking ABORTED');
-    await clearHot();
+  try {
+    const hot = await loadHot();
+    if (hot && hot.phase !== 'IDLE' && hot.phase !== 'DONE' && hot.phase !== 'ABORTED') {
+      console.warn('[browser-agent] crash-resume: found in-flight task, marking ABORTED');
+      await clearHot();
+    }
+  } catch (err) {
+    // Never let SW-startup state recovery become an unhandled rejection.
+    console.warn('[browser-agent] crash-resume failed:', (err as Error)?.message);
   }
 })();
 
