@@ -17,7 +17,7 @@ import {
   type SwUpdate,
   type TimelineEvent,
 } from '@/shared/messages';
-import { Orchestrator } from '@/agent/orchestrator';
+import { Orchestrator, type OrchestratorOpts } from '@/agent/orchestrator';
 import { buildRegistry } from '@/agent/tools';
 import { buildProfileExtractionMessages, normalizeExtractedProfile } from '@/agent/profile';
 import { NUM_CTX } from '@/agent/budget';
@@ -27,10 +27,22 @@ let _orch: Orchestrator | null = null;
 // Synchronous start-guard: handleStart awaits ping/listModels before _orch is set, so two
 // fast clicks could both pass the `if (_orch)` check and spawn a second, orphaned run.
 let _starting = false;
+// Monotonic run id. A run is detached (not awaited) and only aborts at the next checkpoint, so
+// after abort/watchdog nulls _orch a NEW run can start while the old one is still unwinding. Each
+// run captures its id; the old run's abort/finally/emit must check it still OWNS the current run
+// before mutating shared state (_orch, keepalive, _events) — else it tears down the new run.
+let _runId = 0;
 let _abortController: AbortController | null = null;
 let _keepAlive: ReturnType<typeof setInterval> | null = null;
 let _events: TimelineEvent[] = [];
 const _panels = new Set<chrome.runtime.Port>();
+
+// Orchestrator factory — overridable in tests to drive the run lifecycle (start/abort/finish
+// overlap) without a real model. Production always builds a real Orchestrator.
+let _makeOrchestrator: (opts: OrchestratorOpts) => Orchestrator = (opts) => new Orchestrator(opts);
+function makeOrchestrator(opts: OrchestratorOpts): Orchestrator {
+  return _makeOrchestrator(opts);
+}
 
 // Boundary logging — visible in the service-worker console. Prefix [BA].
 const log = (...a: unknown[]) => console.log('[BA]', ...a);
@@ -113,8 +125,13 @@ if (typeof chrome !== 'undefined' && chrome.alarms) {
     const stale = Date.now() - hot.lastTouch > 8 * 60_000;
     if (stale && hot.phase !== 'IDLE' && hot.phase !== 'DONE' && hot.phase !== 'ABORTED') {
       console.warn('[browser-agent] watchdog: stale task — aborting');
+      _runId += 1; // supersede: the stale run's detached finally must not tear down a successor
       _abortController?.abort(new DOMException('Watchdog stale', 'TimeoutError'));
-      if (_orch) await _orch.abort('Watchdog: lastTouch stale');
+      const dying = _orch;
+      _orch = null;
+      _abortController = null;
+      stopKeepAlive();
+      if (dying) await dying.abort('Watchdog: lastTouch stale');
     }
   });
 }
@@ -172,16 +189,19 @@ async function handleStart(goal: string) {
   log('preflight OK — starting orchestrator');
   broadcast({ type: 'preflight', ok: true, details: { models } });
 
+  const myRun = ++_runId; // claim this run; teardown below only acts if it still owns _runId
   _events = [];
   broadcast({ type: 'timeline', events: _events });
 
   const registry = buildRegistry();
   _abortController = new AbortController();
-  _orch = new Orchestrator({
+  _orch = makeOrchestrator({
     ollama,
     registry,
     settings,
-    emit: appendEventLocal,
+    emit: (ev) => {
+      if (myRun === _runId) appendEventLocal(ev); // a superseded run must not pollute the live timeline
+    },
     signal: _abortController.signal,
   });
   _starting = false; // _orch is now set; the `if (_orch)` guard takes over from here
@@ -193,28 +213,37 @@ async function handleStart(goal: string) {
     const result = await _orch.runUntilTerminal(initial);
     console.log('[browser-agent] task complete:', result);
   } catch (err) {
-    appendEventLocal({
-      kind: 'log',
-      ts: Date.now(),
-      level: 'error',
-      message: `Orchestrator error: ${(err as Error).message}`,
-    });
-    if (_orch) await _orch.abort((err as Error).message);
+    if (myRun === _runId) {
+      appendEventLocal({
+        kind: 'log',
+        ts: Date.now(),
+        level: 'error',
+        message: `Orchestrator error: ${(err as Error).message}`,
+      });
+      if (_orch) await _orch.abort((err as Error).message);
+    }
   } finally {
-    stopKeepAlive();
-    _orch = null;
-    _abortController = null;
-    await pushStatus();
-    await pushMetrics();
+    // Only tear down if WE are still the current run. After an abort/watchdog started a newer run,
+    // this (now-stale) finally must not stop the new run's keepalive or null its _orch.
+    if (myRun === _runId) {
+      stopKeepAlive();
+      _orch = null;
+      _abortController = null;
+      await pushStatus();
+      await pushMetrics();
+    }
   }
 }
 
 async function handleAbort() {
   if (!_orch) return;
+  _runId += 1; // supersede the in-flight run so its detached finally/emit become no-ops
   _abortController?.abort(new DOMException('User aborted', 'AbortError'));
-  await _orch.abort('User aborted');
+  const dying = _orch;
   _orch = null;
   _abortController = null;
+  stopKeepAlive();
+  await dying.abort('User aborted');
   await pushStatus();
 }
 
@@ -356,5 +385,24 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
     port.onDisconnect.addListener(() => _panels.delete(port));
   });
 }
+
+// Test-only: drive the run lifecycle with a fake Orchestrator and inspect/await shared state.
+// Production never touches this; the real path always uses `new Orchestrator`.
+export const _testing = {
+  handleStart,
+  handleAbort,
+  setOrchestratorFactory(fn: ((opts: OrchestratorOpts) => Orchestrator) | null) {
+    _makeOrchestrator = fn ?? ((opts) => new Orchestrator(opts));
+  },
+  state: () => ({ orchSet: _orch !== null, runId: _runId, starting: _starting, keepAlive: _keepAlive !== null, events: _events.length }),
+  reset() {
+    _orch = null;
+    _abortController = null;
+    _starting = false;
+    _runId = 0;
+    _events = [];
+    stopKeepAlive();
+  },
+};
 
 export {};

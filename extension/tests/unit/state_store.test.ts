@@ -88,6 +88,20 @@ describe('settings', () => {
     const next = await setDomainTier('amazon.com', 'click-only');
     expect(next.domainTiers['amazon.com']).toBe('click-only');
   });
+
+  it('serializes concurrent settings writes without losing updates', async () => {
+    // Each write is a read-modify-write of chrome.storage; run concurrently they all read the
+    // same base before any writes back → last-writer-wins drops the others unless serialized.
+    await Promise.all([
+      setDomainTier('a.com', 'click-only'),
+      setDomainTier('b.com', 'full-action'),
+      saveSettings({ executorModel: 'concurrent:9b' }),
+    ]);
+    const s = await loadSettings();
+    expect(s.domainTiers['a.com']).toBe('click-only');
+    expect(s.domainTiers['b.com']).toBe('full-action');
+    expect(s.executorModel).toBe('concurrent:9b');
+  });
 });
 
 describe('scratchpad + memory + events', () => {
