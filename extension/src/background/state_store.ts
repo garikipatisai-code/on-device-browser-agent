@@ -66,6 +66,10 @@ class Mutex {
 }
 
 const _hotMutex = new Mutex();
+// Settings are a separate read-modify-write surface from hot state; without their own mutex,
+// two concurrent setDomainTier/saveSettings calls both read the same base and the last write
+// silently drops the others (e.g. toggling a tier while saving the model).
+const _settingsMutex = new Mutex();
 
 // ---------- chrome.storage shim (test-friendly) ----------
 
@@ -180,21 +184,30 @@ export async function loadSettings(): Promise<Settings> {
   return { ...DEFAULT_SETTINGS, ...v, domainTiers: { ...DEFAULT_SETTINGS.domainTiers, ...(v.domainTiers ?? {}) } };
 }
 
+/** Serialized read-modify-write of the settings record. The mutate fn must be pure (it may run
+ *  after others in the queue have already written). setDomainTier/saveSettings both route here so
+ *  they never re-enter the mutex (a non-reentrant lock would deadlock). */
+async function writeSettings(mutate: (cur: Settings) => Settings): Promise<Settings> {
+  return _settingsMutex.run(async () => {
+    const next = mutate(await loadSettings());
+    await _storage.set(SETTINGS_KEY, next);
+    return next;
+  });
+}
+
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
-  const current = await loadSettings();
-  const next: Settings = {
+  return writeSettings((current) => ({
     ...current,
     ...patch,
     domainTiers: { ...current.domainTiers, ...(patch.domainTiers ?? {}) },
-  };
-  await _storage.set(SETTINGS_KEY, next);
-  return next;
+  }));
 }
 
 export async function setDomainTier(host: string, tier: DomainTier): Promise<Settings> {
-  const cur = await loadSettings();
-  cur.domainTiers[host] = tier;
-  return saveSettings(cur);
+  return writeSettings((cur) => ({
+    ...cur,
+    domainTiers: { ...cur.domainTiers, [host]: tier },
+  }));
 }
 
 // ---------- IndexedDB (warm) ----------
