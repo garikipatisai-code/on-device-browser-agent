@@ -6,6 +6,7 @@ import {
   clearHot,
   loadHot,
   loadSettings,
+  saveResumeFile,
   saveSettings,
   setDomainTier,
   toStatus,
@@ -313,6 +314,15 @@ async function handleProfileExtract(resumeText: string) {
   }
 }
 
+async function handleResumeStore(name: string, mime: string, base64: string) {
+  try {
+    await saveResumeFile({ name, mime, base64 });
+    broadcast({ type: 'resumeStored', ok: true, name });
+  } catch (err) {
+    broadcast({ type: 'resumeStored', ok: false, error: `Could not store résumé: ${(err as Error).message}` });
+  }
+}
+
 async function handleListModels() {  const settings = await loadSettings();
   const ollama = new OllamaClient(settings.ollamaBaseUrl);
   const ok = await ollama.ping();
@@ -373,6 +383,9 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
             break;
           case 'profile.extract':
             void handleProfileExtract(cmd.resumeText);
+            break;
+          case 'resume.store':
+            void handleResumeStore(cmd.name, cmd.mime, cmd.base64);
             break;
           case 'models.list':
             await handleListModels();

@@ -12,12 +12,14 @@ import { createPortClient, type PortClient } from './port';
 import { Timeline } from './components/Timeline';
 import { SettingsPanel } from './components/SettingsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
+import { buildApplyGoal } from './apply';
 
 type Tab = 'agent' | 'settings' | 'metrics';
 
 export function App() {
   const [tab, setTab] = useState<Tab>('agent');
   const [goal, setGoal] = useState('');
+  const [applyUrl, setApplyUrl] = useState('');
   const [status, setStatus] = useState<AgentStatus>({
     phase: 'IDLE',
     goal: null,
@@ -82,6 +84,13 @@ export function App() {
             setNotice({ msg: msg.error ?? 'Profile extraction failed.', kind: 'error' });
           }
           break;
+        case 'resumeStored':
+          if (msg.ok) {
+            setNotice({ msg: `Résumé "${msg.name}" stored — the agent can attach it to applications.`, kind: 'warn' });
+          } else {
+            setNotice({ msg: msg.error ?? 'Could not store the résumé file.', kind: 'error' });
+          }
+          break;
         case 'preflight':
           if (!msg.ok) {
             setNotice({
@@ -129,6 +138,17 @@ export function App() {
     send({ type: 'agent.start', goal: trimmed });
   };
 
+  const handleApply = () => {
+    const u = applyUrl.trim();
+    if (!u) return;
+    const g = buildApplyGoal(u);
+    setGoal(g);
+    setEvents([]);
+    setNotice(null);
+    send({ type: 'preflight' });
+    send({ type: 'agent.start', goal: g });
+  };
+
   const handleAbort = () => send({ type: 'agent.abort' });
 
   return (
@@ -147,6 +167,21 @@ export function App() {
 
       {tab === 'agent' && (
         <>
+          <div className="apply-row" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            <input
+              className="goal-input"
+              placeholder="Apply to a job: paste a Greenhouse/Lever job URL"
+              value={applyUrl}
+              onChange={(e) => setApplyUrl(e.target.value)}
+              disabled={running}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !running) handleApply();
+              }}
+            />
+            <button className="btn" onClick={handleApply} disabled={running || !applyUrl.trim()}>
+              Apply
+            </button>
+          </div>
           <div className="goal-row">
             <input
               className="goal-input"
@@ -200,6 +235,7 @@ export function App() {
             setNotice(null);
             send({ type: 'profile.extract', resumeText });
           }}
+          onStoreResume={(payload) => send({ type: 'resume.store', ...payload })}
         />
       )}
 

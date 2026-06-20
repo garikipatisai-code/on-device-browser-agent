@@ -25,6 +25,7 @@ import {
   tabTypeTool,
 } from './browser/actions';
 import { searchTool } from './browser/search';
+import { tabUploadFileTool } from './browser/upload';
 
 export function buildRegistry(): ToolRegistry {
   const r = new ToolRegistry();
@@ -50,5 +51,6 @@ export function buildRegistry(): ToolRegistry {
   r.register(tabTypeTool);
   r.register(tabSelectTool);
   r.register(tabScrollTool);
+  r.register(tabUploadFileTool);
   return r;
 }

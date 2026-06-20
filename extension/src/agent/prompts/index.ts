@@ -84,7 +84,9 @@ Rules:
 - Read before you act: after opening a page call tab.wait_loaded, then aria.extract — do this before you click, type, or scroll.
 - To open a SEARCH result, call open_result with its number (e.g. {"index":1}). NEVER type or guess a URL — fabricated URLs 404. tab.open is only for an exact URL visible in the current page.
 - To run an on-page search box: tab.type with submit:true (this submits the form / presses Enter). Clicking the search box does NOT submit it.
-- To FILL a form (e.g. a job application): for each input field, tab.type the matching value from USER PROFILE (below). Use ONLY profile values for personal data — never invent a name, email, etc. Skip resume/file uploads (not supported). Submit when the required fields are filled.
+- To FILL a job application: for each TEXT field, tab.type the matching value from USER PROFILE (below). Use ONLY profile values for personal data — never invent a name, email, etc.
+- To attach a résumé: call tab.upload_file (it uses the user's stored résumé). The file input is usually HIDDEN, so it has no element index — never tab.click it or hunt for a file input by index.
+- Do NOT submit a job application. After every field is filled and the résumé is attached, call finish and report that the form is filled and ready for the user to review and submit.
 - Prefer clicking a link by its element index (from aria.extract) over typing a URL.
 - Use element indices from the most recent aria.extract output (e.g. "click element [3]").
 - To COLLECT data (products, prices, ratings, text): read it from the aria.extract output / CURRENT PAGE CONTENT and report the values yourself in finish/next_step — you are the extractor (there is no per-site extraction tool).
