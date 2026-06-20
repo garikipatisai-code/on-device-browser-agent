@@ -2,8 +2,8 @@
 //
 // Stored as a JSON object in Settings (`settings.profileJson`) and injected into the
 // Executor context so the model fills form fields from the user's REAL data instead
-// of inventing values. Phase-1 of the job-apply path; resume file upload is a
-// separate (extension-constrained) capability, deferred.
+// of inventing values. The résumé *file* itself is attached separately by the
+// tab.upload_file tool (see tools/browser/upload.ts).
 
 import type { ChatMessage } from '@/background/ollama';
 import { parseJSONPermissive } from './util';

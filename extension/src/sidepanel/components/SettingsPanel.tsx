@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DomainTier, Settings } from '@/shared/messages';
 import { sameModel } from '@/shared/messages';
 import { extractResumeText } from '../resume';
+import { fileToBase64 } from '../file_bytes';
 
 interface Props {
   settings: Settings;
@@ -11,6 +12,7 @@ interface Props {
   onRefreshModels: () => void;
   extractingProfile: boolean;
   onExtractProfile: (resumeText: string) => void;
+  onStoreResume: (payload: { name: string; mime: string; base64: string }) => void;
 }
 
 type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
@@ -23,6 +25,7 @@ export function SettingsPanel({
   onRefreshModels,
   extractingProfile,
   onExtractProfile,
+  onStoreResume,
 }: Props) {
   const [local, setLocal] = useState<Settings>(settings);
   const [newHost, setNewHost] = useState('');
@@ -98,7 +101,7 @@ export function SettingsPanel({
 
       <div className="section-head" style={{ marginTop: 16 }}>Profile (for filling forms)</div>
       <div style={{ fontSize: 11, color: 'var(--fg-mute)', marginBottom: 8 }}>
-        Upload a résumé (.pdf / .docx / .txt) and the model fills this in — or edit the JSON directly. Used to auto-fill application forms. Resume file upload into a page isn&apos;t supported yet.
+        Upload a résumé (.pdf / .docx / .txt) and the model fills this in — or edit the JSON directly. The file is also stored so the agent can attach it to an application form.
       </div>
       <div className="field">
         <input
@@ -111,9 +114,11 @@ export function SettingsPanel({
             if (!file) return;
             setResumeMsg('Reading file…');
             try {
+              const base64 = await fileToBase64(file);
+              onStoreResume({ name: file.name, mime: file.type || 'application/octet-stream', base64 });
               const text = await extractResumeText(file);
               if (!text.trim()) {
-                setResumeMsg('No text found (a scanned PDF needs OCR — not supported).');
+                setResumeMsg('Stored the file. No text found to auto-fill the profile (a scanned PDF needs OCR).');
                 return;
               }
               setResumeMsg('Extracting profile with the model…');
