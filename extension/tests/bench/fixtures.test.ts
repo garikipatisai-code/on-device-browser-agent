@@ -62,3 +62,35 @@ describe('field-absent fixture (a11y-invisible field → honest gap, never fabri
     ).toMatchObject({ correct: true, grounded: true });
   });
 });
+
+describe('adversarial distractor fixtures (semantic selection, not just grounding)', () => {
+  const obs = (id: string) =>
+    BENCH_TASKS.find((t) => t.id === id)!.pages.product.aria;
+  const score = (id: string, summary: string) =>
+    scoreRun(BENCH_TASKS.find((t) => t.id === id)!.expect, {
+      phase: 'DONE',
+      verdict: 'success',
+      turns: 2,
+      replans: 0,
+      summary,
+      observedText: obs(id),
+    });
+
+  it('sale-price + spec-pick are registered', () => {
+    expect(BENCH_TASKS.find((t) => t.id === 'sale-price')).toBeTruthy();
+    expect(BENCH_TASKS.find((t) => t.id === 'spec-pick')).toBeTruthy();
+  });
+
+  it('sale-price: the current price passes, the struck-through "was" price alone fails', () => {
+    expect(score('sale-price', 'The current price is £59.99.').correct).toBe(true);
+    // Reporting only the "was" price is wrong — and £79.99 is on the page so grounding alone misses it.
+    const wrong = score('sale-price', 'The price is £79.99.');
+    expect(wrong.correct).toBe(false);
+    expect(wrong.grounded).toBe(true); // exactly why mustContain (not grounding) is the guard here
+  });
+
+  it('spec-pick: the weight passes, a different (grounded) spec fails', () => {
+    expect(score('spec-pick', 'It weighs 1100 g.').correct).toBe(true);
+    expect(score('spec-pick', 'The capacity is 30 litres.').correct).toBe(false);
+  });
+});

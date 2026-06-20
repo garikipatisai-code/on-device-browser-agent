@@ -238,4 +238,64 @@ export const BENCH_TASKS: BenchTask[] = [
       ],
     },
   },
+
+  {
+    id: 'sale-price',
+    goal: 'open the "Studio Wireless Headphones" product on shop.example and report its CURRENT price',
+    start: 'home',
+    pages: {
+      home: {
+        url: 'https://shop.example/',
+        aria: `[1] link "Studio Wireless Headphones"`,
+      },
+      product: {
+        url: 'https://shop.example/dp/swh',
+        // Adversarial: several plausible prices on one page. The CURRENT price is £59.99; the
+        // struck-through "was" price, the shipping fee, and the rating are distractors. Number-
+        // grounding can't catch a wrong-but-on-page value — this fixture measures whether the
+        // model SELECTS the right number (the semantic axis grounding cannot enforce).
+        aria:
+          `   heading "Studio Wireless Headphones"\n` +
+          `   text "Was £79.99"\n` +
+          `   text "Now £59.99"\n` +
+          `   text "Shipping: £4.99"\n` +
+          `   text "Rating: 4.5 out of 5"\n` +
+          `[1] button "Add to Cart"`,
+      },
+    },
+    transitions: [{ from: 'home', when: { tool: 'tab.click', index: 1 }, to: 'product' }],
+    expect: {
+      verdict: ['success'],
+      mustContain: [/59\.99/], // the current price; reporting only £79.99 (the "was") fails
+    },
+  },
+
+  {
+    id: 'spec-pick',
+    goal: 'open the "TrailMate Backpack" product on shop.example and report its weight',
+    start: 'home',
+    pages: {
+      home: {
+        url: 'https://shop.example/',
+        aria: `[1] link "TrailMate Backpack"`,
+      },
+      product: {
+        url: 'https://shop.example/dp/tmb',
+        // Adversarial spec selection: several numeric specs, only WEIGHT (1100 g) is asked for.
+        // Price, capacity, and warranty are grounded distractors that tempt the wrong field.
+        aria:
+          `   heading "TrailMate Backpack"\n` +
+          `   text "Price: £45.00"\n` +
+          `   text "Capacity: 30 litres"\n` +
+          `   text "Weight: 1100 g"\n` +
+          `   text "Warranty: 5 years"\n` +
+          `[1] button "Add to Cart"`,
+      },
+    },
+    transitions: [{ from: 'home', when: { tool: 'tab.click', index: 1 }, to: 'product' }],
+    expect: {
+      verdict: ['success'],
+      mustContain: [/1100|1,100/], // the weight; reporting capacity (30) or price (45) fails
+    },
+  },
 ];
