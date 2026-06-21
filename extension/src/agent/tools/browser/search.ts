@@ -1,8 +1,13 @@
-// DuckDuckGo HTML scraper. No API key required.
+// Web search. Tries a fast server-side fetch of DuckDuckGo HTML; when that's anti-bot-blocked
+// (it looks like a bot — no browser fingerprint/JS/cookies), falls back to opening the search in
+// a REAL browser tab (full Chrome) and reading the rendered results via CDP. No API key.
 
 import { z } from 'zod';
 import type { ToolDefDescriptor } from '../registry';
 import { composeSignal } from '@/background/signal';
+import { withCdp } from './lifecycle';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface SearchResult {
   title: string;
@@ -132,9 +137,120 @@ export function clearSearchResults(): void {
   _lastResults = [];
 }
 
+function formatResults(results: SearchResult[]): string {
+  const lines = results.map(
+    (r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`,
+  );
+  return `${lines.join('\n\n')}\n\n(To open one, call open_result with its number — e.g. {"index": 1}. Do NOT retype the URL.)`;
+}
+
+// A search engine's own host (nav/footer/logo links on the results page) — not a real result.
+const ENGINE_HOST_RE = /(^|\.)(duckduckgo\.com|bing\.com|google\.[a-z.]+|googleusercontent\.com|microsoft\.com)$/i;
+function isEngineInternal(url: string): boolean {
+  try {
+    return ENGINE_HOST_RE.test(new URL(url).hostname);
+  } catch {
+    return true;
+  }
+}
+
+/** Clean the raw {title,url} anchors scraped from a rendered results page into real results:
+ *  decode DDG redirects, drop ads + the engine's own nav links + dupes, cap. Pure + testable —
+ *  the (live-only) DOM scraping feeds this; this is where the logic lives. */
+export function parseTabResults(json: string, max = 10): SearchResult[] {
+  let arr: unknown;
+  try {
+    arr = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  const out: SearchResult[] = [];
+  const seen = new Set<string>();
+  for (const r of arr) {
+    if (!r || typeof r !== 'object') continue;
+    const title = String((r as { title?: unknown }).title ?? '').trim();
+    let url = String((r as { url?: unknown }).url ?? '').trim();
+    if (!title || !url) continue;
+    url = decodeDdgUrl(url) || url; // a uddg redirect that slipped through → real destination
+    if (isAdUrl(url) || isEngineInternal(url) || seen.has(url)) continue;
+    seen.add(url);
+    out.push({ title: title.slice(0, 200), url, snippet: '' });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// Runs IN the results page (via CDP Runtime.evaluate). Collects candidate result anchors —
+// known per-engine selectors first, then a generic "external link with real text" fallback —
+// and hands them to parseTabResults for cleaning. Defensive: never throws into the page.
+const EXTRACT_JS = `(function(){
+  try{
+    var sels=['a[data-testid="result-title-a"]','a.result__a','#links a.result__a','li.b_algo h2 a','div.yuRUbf>a','#search div.g a'];
+    var list=[];
+    for(var i=0;i<sels.length;i++){var g=document.querySelectorAll(sels[i]);if(g&&g.length){list=Array.prototype.slice.call(g);break;}}
+    if(!list.length){
+      list=Array.prototype.slice.call(document.querySelectorAll('a[href^="http"]')).filter(function(a){return (a.textContent||'').trim().length>15;});
+    }
+    var out=[];
+    for(var j=0;j<list.length&&out.length<40;j++){
+      var el=list[j];var a=el.tagName==='A'?el:(el.closest?el.closest('a'):null);
+      if(!a||!a.href)continue;
+      out.push({title:(a.textContent||'').replace(/\\s+/g,' ').trim(),url:a.href});
+    }
+    return JSON.stringify(out);
+  }catch(e){return '[]';}
+})()`;
+
+async function waitForComplete(tabId: number, signal?: AbortSignal, capMs = 8000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < capMs) {
+    if (signal?.aborted) return;
+    const status = await new Promise<string>((resolve) =>
+      chrome.tabs.get(tabId, (t) => {
+        void chrome.runtime?.lastError;
+        resolve(t?.status ?? 'complete');
+      }),
+    );
+    if (status === 'complete') break;
+    await sleep(200);
+  }
+  await sleep(700); // SPA results paint shortly after 'complete'
+}
+
+/** The "use a real browser" path: open the search in a background tab (full Chrome — no bot
+ *  block), read the rendered results via CDP, then close the tab. The page never leaves the
+ *  device beyond the query itself (inherent to any web search). */
+async function searchViaTab(query: string, max: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const url = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&ia=web`;
+  const tab = await new Promise<chrome.tabs.Tab | null>((resolve) =>
+    chrome.tabs.create({ url, active: false }, (t) => {
+      void chrome.runtime?.lastError;
+      resolve(t ?? null);
+    }),
+  );
+  const tabId = tab?.id;
+  if (typeof tabId !== 'number') return [];
+  try {
+    await waitForComplete(tabId, signal);
+    if (signal?.aborted) return [];
+    const json = await withCdp(tabId, async (send) => {
+      const r = await send<{ result?: { value?: string } }>('Runtime.evaluate', {
+        expression: EXTRACT_JS,
+        returnByValue: true,
+      });
+      return typeof r?.result?.value === 'string' ? r.result.value : '[]';
+    });
+    return parseTabResults(json, max);
+  } finally {
+    chrome.tabs.remove(tabId, () => void chrome.runtime?.lastError);
+  }
+}
+
 export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
   name: 'search',
-  description: 'Web search via DuckDuckGo. Returns title, url, and snippet for each result.',
+  description:
+    'Web search. Returns a numbered list of results (title + url). No API key — it reads a real search-results page. Open a result by number with open_result.',
   argsSchema: z.object({
     query: z.string().min(1),
     max: z.number().int().min(1).max(20).optional(),
@@ -170,29 +286,44 @@ export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
       const results = ep.parse(html, max ?? 10).filter((r) => !isAdUrl(r.url));
       if (results.length) {
         _lastResults = results;
-        const lines = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`);
         return {
           ok: true,
-          content: `${lines.join('\n\n')}\n\n(To open one, call open_result with its number — e.g. {"index": 1}. Do NOT retype the URL.)`,
+          content: formatResults(results),
           data: { results: results as unknown as Record<string, unknown> },
         };
       }
       // reachable, not blocked, but 0 results → genuine empty here; try the next endpoint
     }
+
+    // The quick fetch was blocked / unreachable / empty. Fall back to what a human does: open the
+    // search in a REAL browser tab (full Chrome fingerprint + JS, so engines don't bot-block it)
+    // and read the rendered results via CDP. Keyless; reuses our tab + accessibility machinery.
+    try {
+      const viaTab = await searchViaTab(query, max ?? 10, ctx.signal);
+      if (viaTab.length) {
+        _lastResults = viaTab;
+        return {
+          ok: true,
+          content: formatResults(viaTab),
+          data: { results: viaTab as unknown as Record<string, unknown> },
+        };
+      }
+    } catch (err) {
+      if (ctx.signal?.aborted) throw err; // propagate a user abort
+    }
+
     if (blocked) {
       return {
         ok: false,
         content:
-          'Web search is blocked right now: DuckDuckGo served a bot challenge/redirect on every endpoint. Try again later, or from a different network.',
+          'Web search is blocked right now — DuckDuckGo bot-challenged the quick fetch, and reading the results in a real tab returned nothing usable. Try again, or search manually in a tab.',
       };
     }
     if (!reachable) {
-      // Distinguish an infrastructure failure from a genuine zero-hit query — otherwise the model
-      // "honestly" tells the user there are no results when really the search engine was unreachable.
       return {
         ok: false,
         content:
-          'Web search could not reach DuckDuckGo on any endpoint (network error or timeout). This does NOT mean the query has no results — check the connection and try again.',
+          'Could not reach a search engine (network error/timeout) — even opening the results in a tab returned nothing. This does NOT mean the query has no results; check the connection.',
       };
     }
     return { ok: false, content: 'No results found for that query.' };
