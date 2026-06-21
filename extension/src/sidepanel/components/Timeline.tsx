@@ -1,65 +1,74 @@
+import { useEffect, useRef, useState } from 'react';
 import type { TimelineEvent } from '@/shared/messages';
-import { useEffect, useRef } from 'react';
+import { Icon, type IconName } from './Icon';
 
-function fmtTs(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleTimeString();
+function toolIcon(tool: string): IconName {
+  if (tool.includes('search')) return 'search';
+  if (tool.includes('aria') || tool.includes('vision')) return 'eye';
+  if (tool.includes('open')) return 'globe';
+  if (tool.includes('click') || tool.includes('type') || tool.includes('select') || tool.includes('scroll') || tool.includes('upload')) return 'cursor';
+  return 'dot';
 }
 
-function eventClass(e: TimelineEvent): string {
-  switch (e.kind) {
-    case 'role.start':
-    case 'role.end':
-    case 'planner.plan':
-      return 'role';
-    case 'tool.call':
-      return 'tool';
-    case 'tool.result':
-      return e.ok ? 'ok' : 'bad';
-    case 'evaluator.verdict':
-      return e.verdict === 'PASS' ? 'ok' : 'bad';
-    case 'breaker.trip':
-      return 'bad';
-    case 'finish':
-      return 'finish';
-    case 'log':
-      return e.level === 'error' ? 'bad' : '';
-    default:
-      return '';
-  }
-}
-
-function eventTitle(e: TimelineEvent): string {
+function classify(e: TimelineEvent): { cls: string; icon: IconName } {
   switch (e.kind) {
     case 'planner.plan':
-      return `Planner produced ${e.plan.steps.length} step plan`;
+      return { cls: 'role', icon: 'plan' };
     case 'role.start':
-      return `▶ ${e.role}${e.stepId ? ` (step ${e.stepId.slice(0, 6)})` : ''}`;
     case 'role.end':
-      return `■ ${e.role} done (${(e.ms / 1000).toFixed(1)}s)`;
+      return { cls: 'role', icon: 'dot' };
     case 'tool.call':
-      return `🔧 ${e.tool}`;
+      return { cls: 'tool', icon: toolIcon(e.tool) };
     case 'tool.result':
-      return `${e.ok ? '✅' : '❌'} ${e.tool}`;
+      return e.ok ? { cls: 'ok', icon: 'check' } : { cls: 'bad', icon: 'x' };
     case 'evaluator.verdict':
-      return `${e.verdict === 'PASS' ? '✅' : '❌'} ${e.verdict}`;
+      return e.verdict === 'PASS' ? { cls: 'ok', icon: 'check' } : { cls: 'bad', icon: 'x' };
     case 'breaker.trip':
-      return `⛔ breaker trip: ${e.reason}`;
+      return { cls: 'bad', icon: 'alert' };
     case 'compaction':
-      return `📦 compaction (${e.before} → ${e.after} chars)`;
+      return { cls: '', icon: 'plan' };
     case 'finish':
-      return `🏁 ${e.verdict}`;
+      return { cls: 'finish', icon: 'flag' };
     case 'log':
-      return `${e.level.toUpperCase()}`;
+      return { cls: e.level === 'error' ? 'bad' : '', icon: e.level === 'error' ? 'alert' : 'dot' };
+    default:
+      return { cls: '', icon: 'dot' };
   }
 }
 
-function eventBody(e: TimelineEvent): string | null {
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function title(e: TimelineEvent): string {
+  switch (e.kind) {
+    case 'planner.plan':
+      return `Planned ${e.plan.steps.length} steps`;
+    case 'role.start':
+      return `${cap(e.role)} started`;
+    case 'role.end':
+      return `${cap(e.role)} · ${(e.ms / 1000).toFixed(1)}s`;
+    case 'tool.call':
+      return e.tool;
+    case 'tool.result':
+      return e.tool;
+    case 'evaluator.verdict':
+      return `Evaluated · ${e.verdict}`;
+    case 'breaker.trip':
+      return `Circuit breaker · ${e.reason}`;
+    case 'compaction':
+      return `Compacted (${e.before}→${e.after})`;
+    case 'finish':
+      return `Finished · ${e.verdict}`;
+    case 'log':
+      return cap(e.level);
+  }
+}
+
+function body(e: TimelineEvent): string | null {
   switch (e.kind) {
     case 'planner.plan':
       return e.plan.steps.map((s, i) => `${i + 1}. ${s.description}`).join('\n');
     case 'tool.call':
-      return JSON.stringify(e.args, null, 2);
+      return JSON.stringify(e.args);
     case 'tool.result':
       return e.content;
     case 'evaluator.verdict':
@@ -73,41 +82,73 @@ function eventBody(e: TimelineEvent): string | null {
   }
 }
 
-export function Timeline({ events }: { events: TimelineEvent[] }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [events.length]);
+function fmtTs(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 
-  if (events.length === 0) {
-    return (
-      <div className="timeline">
-        <div style={{ color: 'var(--fg-mute)', padding: 20, textAlign: 'center' }}>
-          No activity yet. State a goal and press Run.
+function Event({ e }: { e: TimelineEvent }) {
+  const { cls, icon } = classify(e);
+  const text = body(e);
+  const long = !!text && text.length > 160;
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`event ${cls}`}>
+      <span className="event-icon">
+        <Icon name={icon} size={14} />
+      </span>
+      <div className="event-main">
+        <div className="event-title">
+          <span className="event-name">{title(e)}</span>
+          <span className="event-time">{fmtTs(e.ts)}</span>
         </div>
+        {text &&
+          (long ? (
+            <>
+              <button className="detail-toggle" onClick={() => setOpen((o) => !o)}>
+                {open ? 'Hide details' : 'Show details'}
+              </button>
+              {open && <pre>{text}</pre>}
+            </>
+          ) : (
+            <div className="event-body">{text}</div>
+          ))}
       </div>
-    );
-  }
+    </div>
+  );
+}
+
+export function Timeline({
+  events,
+  open,
+  onToggle,
+}: {
+  events: TimelineEvent[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el && open) el.scrollTop = el.scrollHeight;
+  }, [events.length, open]);
+
+  if (events.length === 0) return null;
 
   return (
-    <div className="timeline" ref={ref}>
-      {events.map((e, idx) => {
-        const body = eventBody(e);
-        return (
-          <div key={idx} className={`event ${eventClass(e)}`}>
-            <div className="event-head">
-              <span>{eventTitle(e)}</span>
-              <span>{fmtTs(e.ts)}</span>
-            </div>
-            {body !== null && body !== '' && (
-              <div className="event-body">
-                {body.length > 200 ? <pre>{body}</pre> : body}
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div className="activity">
+      <button className={`activity-head ${open ? 'open' : ''}`} onClick={onToggle} aria-expanded={open}>
+        <Icon name="plan" size={14} />
+        <span>Activity</span>
+        <span className="activity-count">{events.length}</span>
+        <Icon name="chevron" size={14} className="chev" />
+      </button>
+      {open && (
+        <div className="activity-body" ref={bodyRef}>
+          {events.map((e, i) => (
+            <Event key={i} e={e} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
