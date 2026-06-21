@@ -238,7 +238,7 @@ export function App() {
                 </div>
               </div>
             ) : (
-              <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} live={running} />
+              <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
             )}
           </>
         )}

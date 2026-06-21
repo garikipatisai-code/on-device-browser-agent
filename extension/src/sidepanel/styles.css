@@ -235,10 +235,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .activity-head.open .chev { transform: rotate(90deg); }
 .activity-count { font-variant-numeric: tabular-nums; color: var(--fg-faint); font-size: 11.5px; }
 .activity-body { padding: 0 var(--sp-3) var(--sp-3); display: flex; flex-direction: column; gap: 2px; }
-/* While the task runs, the feed is a capped, auto-following scroll box. */
-.activity-body.live { max-height: 320px; overflow-y: auto; }
-/* When done, it grows to full size and the whole panel scrolls (no nested mini-window). */
-.activity-body.done { max-height: none; overflow: visible; }
 .event { display: flex; gap: var(--sp-2); padding: 6px 8px; border-radius: var(--r-ctl); animation: rise 200ms ease-out; }
 .event-icon { flex: none; margin-top: 1px; color: var(--fg-faint); }
 .event.role .event-icon { color: var(--accent); }
@@ -252,9 +248,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .event-time { margin-left: auto; font-size: 10.5px; color: var(--fg-faint); font-variant-numeric: tabular-nums; flex: none; }
 .event-body { font-size: 12px; color: var(--fg-mute); white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
 .detail-toggle { background: none; border: none; padding: 2px 0; color: var(--accent); font-size: 11.5px; cursor: pointer; }
-.event pre { margin: 4px 0 0; font-size: 11px; max-height: 12em; overflow: auto; background: var(--surface-2); padding: 6px 8px; border-radius: 6px; color: var(--fg-mute); }
-/* When the run is done, expanded details grow in place (panel scrolls) instead of a tiny inner box. */
-.activity-body.done .event pre { max-height: none; overflow: visible; }
+.event pre { margin: 4px 0 0; font-size: 11px; overflow: visible; background: var(--surface-2); padding: 6px 8px; border-radius: 6px; color: var(--fg-mute); white-space: pre-wrap; word-break: break-word; }
 
 /* ---------- alerts ---------- */
 .alert { display: flex; gap: var(--sp-2); padding: 10px 12px; border-radius: var(--r-ctl); font-size: 12.5px; border: 1px solid; }
