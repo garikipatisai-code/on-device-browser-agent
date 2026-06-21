@@ -6,6 +6,11 @@ import path from 'node:path';
 
 export default defineConfig({
   plugins: [react(), crx({ manifest })],
+  // A build stamp shown in the panel header so it's obvious whether a fresh build is loaded
+  // (reloading the unpacked extension is easy to forget). Build-time only.
+  define: {
+    __BUILD__: JSON.stringify(new Date().toISOString().slice(5, 16).replace('T', ' ')),
+  },
   resolve: {
     alias: { '@': path.resolve(__dirname, 'src') },
   },
