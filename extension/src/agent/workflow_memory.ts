@@ -178,46 +178,20 @@ const TOOL_STEP: Record<string, WorkflowStep | undefined> = {
   answer: { instruction: 'Report the requested answer.', toolHint: 'finish' },
 };
 
-/** Collapse immediately-repeated action cycles into a single occurrence. A per-entity
- *  loop (search→open, search→open, search→open) is a 2-step cycle repeated N times; it
- *  should be stored ONCE — recipes are generalized planner HINTS, and the planner re-expands
- *  the loop for the actual goal's items. Subsumes consecutive-duplicate collapse (a 1-step
- *  cycle), so non-repeating sequences are left exactly as-is. */
-function collapseRepeatedCycles(steps: WorkflowStep[]): WorkflowStep[] {
-  const key = (s: WorkflowStep) => s.toolHint ?? s.instruction;
-  const out = steps.slice();
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (let size = 1; size * 2 <= out.length && !changed; size++) {
-      for (let i = 0; i + 2 * size <= out.length; i++) {
-        let equal = true;
-        for (let k = 0; k < size; k++) {
-          if (key(out[i + k]) !== key(out[i + size + k])) {
-            equal = false;
-            break;
-          }
-        }
-        if (equal) {
-          out.splice(i + size, size); // drop the immediate repetition
-          changed = true;
-          break;
-        }
-      }
-    }
-  }
-  return out;
-}
-
 /** Generalize a successful run's tool trace into a reusable recipe (no indices,
- *  query → generic). Returns null if the trace is too trivial to be worth keeping. */
+ *  query → generic). Returns null if the trace is too trivial to be worth keeping.
+ *  Only CONSECUTIVE duplicate hints are collapsed: a per-entity loop (search→open,
+ *  search→open, …) is deliberately PRESERVED — that repetition is the structure the
+ *  planner expands into one step per item. Collapsing it caused the planner to under-
+ *  plan a multi-item goal into a single step; the runtime redundancy (opening a page
+ *  when the snippet already answers) is handled by the executor's sufficiency rule. */
 export function traceToWorkflow(
   id: string,
   goal: string,
   domain: string,
   trace: Array<{ tool: string; args: Record<string, unknown> }>,
 ): Workflow | null {
-  const raw: WorkflowStep[] = [];
+  const steps: WorkflowStep[] = [];
   for (const t of trace) {
     let step: WorkflowStep | undefined;
     if (t.tool === 'tab.type') {
@@ -228,11 +202,10 @@ export function traceToWorkflow(
       step = TOOL_STEP[t.tool];
     }
     if (!step) continue; // skip vision.read / next_step / (none) / echo / scroll noise
-    raw.push(step);
+    const prev = steps[steps.length - 1];
+    if (prev && prev.toolHint === step.toolHint) continue; // collapse consecutive duplicates only
+    steps.push(step);
   }
-  // Collapse repeated action cycles (per-entity loops + consecutive dups) so the recipe stores
-  // the PATTERN once instead of replaying it — the redundancy fix for auto-distilled recipes.
-  const steps = collapseRepeatedCycles(raw);
   if (steps.length < 2) return null;
   // Redact PII from the goal before it's persisted to durable memory and re-injected
   // into future planner prompts (job-apply goals routinely carry email/phone/name).
