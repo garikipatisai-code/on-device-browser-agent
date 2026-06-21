@@ -23,6 +23,7 @@ import { buildRegistry } from '@/agent/tools';
 import { buildProfileExtractionMessages, normalizeExtractedProfile } from '@/agent/profile';
 import { NUM_CTX } from '@/agent/budget';
 import { metricsSnapshot } from '@/agent/metrics';
+import { persistTimeline, loadTimeline, clearPersistedTimeline } from './timeline_store';
 
 let _orch: Orchestrator | null = null;
 // Synchronous start-guard: handleStart awaits ping/listModels before _orch is set, so two
@@ -89,6 +90,7 @@ function broadcast(msg: SwUpdate) {
 function appendEventLocal(ev: TimelineEvent) {
   _events.push(ev);
   if (_events.length > 1_000) _events = _events.slice(-1_000);
+  persistTimeline(_events); // mirror to storage.session so the trace survives an SW kill
   broadcast({ type: 'append', event: ev });
 }
 
@@ -197,6 +199,7 @@ async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']
 
   const myRun = ++_runId; // claim this run; teardown below only acts if it still owns _runId
   _events = [];
+  clearPersistedTimeline(); // a fresh run must not let an SW kill resurrect the previous trace
   broadcast({ type: 'timeline', events: _events });
 
   const registry = buildRegistry();
@@ -348,6 +351,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
     void (async () => {
       const settings = await loadSettings();
       const hot = await loadHot();
+      // The SW may have been killed since the last run, emptying the in-memory timeline. Restore
+      // it from storage.session so the finished run's Activity log + Copy button reappear.
+      if (_events.length === 0) {
+        const saved = await loadTimeline();
+        if (saved.length) _events = saved;
+      }
       port.postMessage({ type: 'settings', settings } satisfies SwUpdate);
       port.postMessage({ type: 'status', status: toStatus(hot) } satisfies SwUpdate);
       port.postMessage({ type: 'timeline', events: _events } satisfies SwUpdate);

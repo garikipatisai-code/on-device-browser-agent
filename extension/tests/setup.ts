@@ -5,6 +5,7 @@ import { vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 const memStorage = new Map<string, unknown>();
+const memSession = new Map<string, unknown>();
 const memTabs = new Map<number, chrome.tabs.Tab>();
 let _tabIdSeq = 100;
 
@@ -28,6 +29,18 @@ let _tabIdSeq = 100;
       remove: (key: string, cb: () => void) => {
         memStorage.delete(key);
         cb();
+      },
+    },
+    // chrome.storage.session — promise-style (modern MV3). In-memory, survives SW recycling.
+    session: {
+      get: (key: string) => Promise.resolve({ [key]: memSession.get(key) }),
+      set: (items: Record<string, unknown>) => {
+        for (const [k, v] of Object.entries(items)) memSession.set(k, v);
+        return Promise.resolve();
+      },
+      remove: (key: string) => {
+        memSession.delete(key);
+        return Promise.resolve();
       },
     },
   },
@@ -79,6 +92,7 @@ let _tabIdSeq = 100;
 
 (globalThis as { __resetTestStorage?: () => void }).__resetTestStorage = () => {
   memStorage.clear();
+  memSession.clear();
   memTabs.clear();
   _tabIdSeq = 100;
   // IndexedDB teardown is handled by state_store._resetDb (awaited in resetStorage),
