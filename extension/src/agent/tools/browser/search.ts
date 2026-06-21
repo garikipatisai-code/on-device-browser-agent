@@ -1,6 +1,7 @@
 // Web search. Tries a fast server-side fetch of DuckDuckGo HTML; when that's anti-bot-blocked
 // (it looks like a bot — no browser fingerprint/JS/cookies), falls back to opening the search in
-// a REAL browser tab (full Chrome) and reading the rendered results via CDP. No API key.
+// a REAL Google tab (full Chrome session — served without a CAPTCHA) and reading the rendered
+// results via CDP. No API key.
 
 import { z } from 'zod';
 import type { ToolDefDescriptor } from '../registry';
@@ -173,6 +174,15 @@ export function parseTabResults(json: string, max = 10): SearchResult[] {
     let url = String((r as { url?: unknown }).url ?? '').trim();
     if (!title || !url) continue;
     url = decodeDdgUrl(url) || url; // a uddg redirect that slipped through → real destination
+    // Google sometimes wraps organic results in /url?q=<dest> — unwrap to the real destination.
+    try {
+      const u = new URL(url);
+      if (/(^|\.)google\./i.test(u.hostname) && u.pathname === '/url' && u.searchParams.get('q')) {
+        url = u.searchParams.get('q') as string;
+      }
+    } catch {
+      continue;
+    }
     if (isAdUrl(url) || isEngineInternal(url) || seen.has(url)) continue;
     seen.add(url);
     out.push({ title: title.slice(0, 200), url, snippet: '' });
@@ -182,13 +192,13 @@ export function parseTabResults(json: string, max = 10): SearchResult[] {
 }
 
 // Runs IN the results page (via CDP Runtime.evaluate). Collects candidate result anchors —
-// known per-engine selectors first, then a generic "external link with real text" fallback —
-// and hands them to parseTabResults for cleaning. Defensive: never throws into the page.
+// known per-engine selectors first (Google's title is an <h3> inside the result <a>), then a
+// generic "external link with real text" fallback — and hands them to parseTabResults. Defensive.
 const EXTRACT_JS = `(function(){
   try{
-    var sels=['a[data-testid="result-title-a"]','a.result__a','#links a.result__a','li.b_algo h2 a','div.yuRUbf>a','#search div.g a'];
+    var sels=['#search a:has(h3)','#rso a:has(h3)','div.yuRUbf>a','a[data-testid="result-title-a"]','a.result__a','#links a.result__a','li.b_algo h2 a'];
     var list=[];
-    for(var i=0;i<sels.length;i++){var g=document.querySelectorAll(sels[i]);if(g&&g.length){list=Array.prototype.slice.call(g);break;}}
+    for(var i=0;i<sels.length;i++){var g;try{g=document.querySelectorAll(sels[i]);}catch(e){g=[];}if(g&&g.length){list=Array.prototype.slice.call(g);break;}}
     if(!list.length){
       list=Array.prototype.slice.call(document.querySelectorAll('a[href^="http"]')).filter(function(a){return (a.textContent||'').trim().length>15;});
     }
@@ -196,7 +206,9 @@ const EXTRACT_JS = `(function(){
     for(var j=0;j<list.length&&out.length<40;j++){
       var el=list[j];var a=el.tagName==='A'?el:(el.closest?el.closest('a'):null);
       if(!a||!a.href)continue;
-      out.push({title:(a.textContent||'').replace(/\\s+/g,' ').trim(),url:a.href});
+      var h3=a.querySelector?a.querySelector('h3'):null;
+      var title=((h3&&h3.textContent)||a.textContent||'').replace(/\\s+/g,' ').trim();
+      out.push({title:title,url:a.href});
     }
     return JSON.stringify(out);
   }catch(e){return '[]';}
@@ -218,11 +230,11 @@ async function waitForComplete(tabId: number, signal?: AbortSignal, capMs = 8000
   await sleep(700); // SPA results paint shortly after 'complete'
 }
 
-/** The "use a real browser" path: open the search in a background tab (full Chrome — no bot
- *  block), read the rendered results via CDP, then close the tab. The page never leaves the
- *  device beyond the query itself (inherent to any web search). */
+/** The "use a real browser" path: open the search in a background tab (full Chrome — a real
+ *  session, so Google serves results without a bot CAPTCHA), read the rendered results via CDP,
+ *  then close the tab. Only the query leaves the device (inherent to any web search). */
 async function searchViaTab(query: string, max: number, signal?: AbortSignal): Promise<SearchResult[]> {
-  const url = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&ia=web`;
+  const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en`;
   const tab = await new Promise<chrome.tabs.Tab | null>((resolve) =>
     chrome.tabs.create({ url, active: false }, (t) => {
       void chrome.runtime?.lastError;
@@ -296,8 +308,8 @@ export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
     }
 
     // The quick fetch was blocked / unreachable / empty. Fall back to what a human does: open the
-    // search in a REAL browser tab (full Chrome fingerprint + JS, so engines don't bot-block it)
-    // and read the rendered results via CDP. Keyless; reuses our tab + accessibility machinery.
+    // search in a REAL Google tab (full Chrome session, so it's served without a bot CAPTCHA) and
+    // read the rendered results via CDP. Keyless; reuses our tab + accessibility machinery.
     try {
       const viaTab = await searchViaTab(query, max ?? 10, ctx.signal);
       if (viaTab.length) {
@@ -316,7 +328,7 @@ export const searchTool: ToolDefDescriptor<{ query: string; max?: number }> = {
       return {
         ok: false,
         content:
-          'Web search is blocked right now — DuckDuckGo bot-challenged the quick fetch, and reading the results in a real tab returned nothing usable. Try again, or search manually in a tab.',
+          'Web search is blocked right now — the quick fetch was bot-challenged, and reading Google in a real tab returned nothing usable (it may be a consent wall). Try again, or search manually in a tab.',
       };
     }
     if (!reachable) {
