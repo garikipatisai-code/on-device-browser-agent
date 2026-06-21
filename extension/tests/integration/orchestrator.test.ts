@@ -1053,3 +1053,78 @@ describe('orchestrator — salvages an answer from what it read instead of givin
     expect(result.summary).toContain('975000');
   });
 });
+
+describe('orchestrator — salvages a grounded answer when it gives up AFTER an action denial', () => {
+  // Live failure: the agent read each city's population from search snippets (→ observedText),
+  // then hit read-only click denials, then conceded with "I was unable to extract … read-only
+  // constraints." The facts were ALREADY gathered — that defeatist exit must be salvaged.
+  function regWithDataAndDenial() {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return {
+          ok: true,
+          content: 'Austin population 961855. Seattle population 784777. Denver population 715522.',
+          data: { url: 'https://en.wikipedia.org/wiki/Austin,_Texas' },
+        };
+      },
+    });
+    reg.register({
+      name: 'act',
+      description: 'a tier-gated action denied on a read-only page',
+      argsSchema: z.object({ n: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: false, fatal: true, content: 'Cannot click on en.wikipedia.org (current tier: read-only). Upgrade this domain in Settings.' };
+      },
+    });
+    return reg;
+  }
+
+  it('overrides a voluntary blocked finish with a grounded partial salvaged from observedText', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'gather and compare', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }), // 3 populations → observedText
+        rawResponse({ toolCalls: [{ name: 'act', args: { n: 1 } }] }), // tier denial → sawActionDenial
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'blocked', summary: 'I was unable to extract the populations due to read-only constraints.' } }] }),
+      ],
+      evaluator: [],
+      unknown: [rawResponse({ content: 'Austin has the largest population at 961855, ahead of Seattle (784777) and Denver (715522).' })],
+    });
+    const orch = new Orchestrator({ ollama, registry: regWithDataAndDenial(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('compare Austin, Seattle, Denver populations using Wikipedia'));
+    expect(result.verdict).toBe('partial'); // salvaged, not the defeatist 'blocked'
+    expect(result.summary).toContain('961855');
+    expect(result.summary).toContain('Austin');
+    expect(result.summary).not.toMatch(/read-only constraints/i);
+  });
+
+  it('does NOT salvage an honest blocked finish when there was NO denial (genuine not-found stays blocked)', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'No results. We could not find any matches for your search.', data: { url: 'https://shop.example/s' } };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'find it', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'blocked', summary: 'No matching product was found.' } }] }),
+      ],
+      evaluator: [],
+      unknown: [rawResponse({ content: 'SHOULD NOT BE USED' })],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('find the blender'));
+    expect(result.verdict).toBe('blocked'); // no denial → honest blocked preserved
+    expect(result.summary).toContain('No matching product');
+    expect(result.summary).not.toContain('SHOULD NOT BE USED');
+  });
+});
