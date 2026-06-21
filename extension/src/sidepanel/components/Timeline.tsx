@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { TimelineEvent } from '@/shared/messages';
 import { Icon, type IconName } from './Icon';
 
@@ -121,21 +121,12 @@ export function Timeline({
   events,
   open,
   onToggle,
-  live = false,
 }: {
   events: TimelineEvent[];
   open: boolean;
   onToggle: () => void;
-  live?: boolean;
 }) {
-  const bodyRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    // Auto-follow the latest event ONLY while live (the body is a capped scroll box then). When the
-    // task is done the body grows to full height and the whole panel scrolls — nothing to follow.
-    const el = bodyRef.current;
-    if (el && open && live) el.scrollTop = el.scrollHeight;
-  }, [events.length, open, live]);
 
   if (events.length === 0) return null;
 
@@ -170,7 +161,7 @@ export function Timeline({
         </button>
       </div>
       {open && (
-        <div className={`activity-body ${live ? 'live' : 'done'}`} ref={bodyRef}>
+        <div className="activity-body">
           {events.map((e, i) => (
             <Event key={i} e={e} />
           ))}
