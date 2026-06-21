@@ -38,7 +38,7 @@ describe('tab.read_active — read the user’s current page', () => {
     chrome.tabs.get = origGet;
   });
 
-  const ctx = () => ({ settings: {}, signal: undefined }) as unknown as ToolContext;
+  const ctx = () => ({ settings: {}, signal: undefined, hot: { ownedTabs: [] } }) as unknown as ToolContext;
 
   it('reads the active http(s) tab and returns its content + url + tabId', async () => {
     const res = await tabReadActiveTool.dispatch({}, ctx());
@@ -47,6 +47,18 @@ describe('tab.read_active — read the user’s current page', () => {
     expect(res.content).toContain('£42.00');
     expect(res.data?.url).toBe('https://shop.example/product');
     expect(res.data?.tabId).toBe(7);
+  });
+
+  it("reads the AGENT's opened tab by id (not the user's active tab) when the agent owns tabs", async () => {
+    // The live bug: the agent opened a tab (knew its id) but tab.read_active ignored it and read
+    // the USER's active tab — which was chrome://extensions — and failed. With an owned tab it must
+    // read THAT page, by id, and never touch the (restricted) active tab.
+    activeTab = { id: 7, url: 'chrome://extensions/' };
+    const owning = { settings: {}, signal: undefined, hot: { ownedTabs: [99] } } as unknown as ToolContext;
+    const res = await tabReadActiveTool.dispatch({}, owning);
+    expect(res.ok).toBe(true); // did NOT fail on the restricted active tab
+    expect(res.content).toContain('Quiet Keyboard');
+    expect(res.data?.tabId).toBe(99); // the tab the agent opened, not the active tab (7)
   });
 
   it('fails honestly on a restricted page (chrome://) without touching CDP', async () => {

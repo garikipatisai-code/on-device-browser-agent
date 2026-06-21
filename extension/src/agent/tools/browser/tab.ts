@@ -6,15 +6,27 @@ import { isBlockedUrl } from '@/agent/safety/domain_tiers';
 import { getLastSearchResults } from './search';
 import { extractAria } from './aria_tool';
 
-/** Read the page the USER is currently on (their active tab) — for "summarize this page",
- *  "what does this page say about X", etc. Read-only; never opens or closes a tab, and the
- *  page never leaves the device. Restricted URLs (chrome://, store, file) fail honestly. */
+/** Read the page in focus for the task: the most recent tab the AGENT opened (it knows the id),
+ *  or — only when the agent hasn't opened anything — the page the USER is on (their active tab,
+ *  the "ask this page" case). Read-only; never opens or closes a tab; the page stays on-device.
+ *  Restricted active-tab URLs (chrome://, store, file) fail honestly. */
 export const tabReadActiveTool: ToolDefDescriptor<{ reason?: string }> = {
   name: 'tab.read_active',
   description:
-    "Read the page the USER is currently looking at (their active browser tab). Use this for any goal about the current/this page — summarize it, answer a question about it, check a claim. Read-only; does not open a new tab.",
+    "Read the page currently in focus: the most recent tab YOU opened, or — if you haven't opened any — the page the USER is looking at. Use it for any goal about the current/this page (summarize it, answer a question, check a claim). Read-only; does not open a new tab.",
   argsSchema: z.object({ reason: z.string().optional() }),
-  async dispatch() {
+  async dispatch(_args, ctx) {
+    // Mid-task the agent has already opened its own tab(s) and knows their ids — "this page" means
+    // the page IT navigated to, NOT the user's active tab (which may be chrome://extensions or any
+    // unrelated page). Prefer the most-recently-opened owned tab; fall back to the user's active
+    // tab only when the agent owns nothing (the ask-this-page fast path).
+    const owned = ctx.hot?.ownedTabs ?? [];
+    if (owned.length > 0) {
+      const tabId = owned[owned.length - 1];
+      const res = await extractAria(tabId);
+      const url = res.data && typeof res.data.url === 'string' ? res.data.url : undefined;
+      return { ...res, data: { ...(res.data ?? {}), tabId, url } };
+    }
     const tab = await new Promise<chrome.tabs.Tab | undefined>((resolve) =>
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0])),
     );
