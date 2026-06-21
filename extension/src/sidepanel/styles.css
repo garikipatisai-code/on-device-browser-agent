@@ -140,6 +140,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 /* ---------- composer ---------- */
 .composer { display: flex; flex-direction: column; gap: var(--sp-2); }
 .composer-field { display: flex; gap: var(--sp-2); align-items: flex-end; }
+/* Live "steer" input shown while a task runs — a subtle accent marks it as redirect-in-flight. */
+.steer-row { padding-left: var(--sp-2); border-left: 2px solid var(--accent); }
+.steer-row .composer-input { font-size: 12.5px; }
 .composer-input {
   flex: 1; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-ctl);
   background: var(--bg); color: var(--fg); resize: none; line-height: 1.45; max-height: 120px; overflow-y: auto;

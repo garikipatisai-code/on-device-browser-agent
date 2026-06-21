@@ -1054,6 +1054,45 @@ describe('orchestrator — salvages an answer from what it read instead of givin
   });
 });
 
+describe('orchestrator — steer: a mid-run user correction reaches later turns as guidance', () => {
+  it('a steer issued during the run surfaces as USER GUIDANCE on a subsequent executor turn', async () => {
+    const execPrompts: string[] = [];
+    let orchRef: Orchestrator | null = null;
+    let steered = false;
+    const ollama = makeFakeOllama(
+      {
+        planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'loop then finish', successCriteria: 'done' }] }) })],
+        executor: [
+          rawResponse({ toolCalls: [{ name: 'noop', args: { note: '1' } }] }),
+          rawResponse({ toolCalls: [{ name: 'noop', args: { note: '2' } }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+        ],
+        evaluator: [],
+      },
+      {
+        onChat: (_m, role, messages) => {
+          if (role !== 'executor') return;
+          execPrompts.push(JSON.stringify(messages));
+          if (!steered) {
+            steered = true;
+            orchRef?.steer('search each city separately'); // inject mid-run, after turn 1's call
+          }
+        },
+      },
+    );
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    orchRef = orch;
+    const result = await orch.runUntilTerminal(await orch.start('do the thing'));
+
+    expect(result.phase).toBe('DONE');
+    expect(execPrompts.length).toBeGreaterThanOrEqual(2);
+    expect(execPrompts[0]).not.toContain('search each city separately'); // not yet applied on turn 1
+    const later = execPrompts.slice(1).join('\n');
+    expect(later).toContain('search each city separately'); // injected guidance reached a later turn
+    expect(later).toMatch(/USER GUIDANCE/);
+  });
+});
+
 describe('orchestrator — salvages a grounded answer when it gives up AFTER an action denial', () => {
   // Live failure: the agent read each city's population from search snippets (→ observedText),
   // then hit read-only click denials, then conceded with "I was unable to extract … read-only

@@ -180,6 +180,7 @@ export function App() {
   };
 
   const handleAbort = () => send({ type: 'agent.abort' });
+  const handleSteer = (text: string) => send({ type: 'agent.steer', text });
 
   const finish = latestFinish(events);
   const elapsedMs = runStartedAt ? Math.max(0, now - runStartedAt) : 0;
@@ -205,6 +206,7 @@ export function App() {
               onApplyUrlChange={setApplyUrl}
               onApply={handleApply}
               onAskPage={handleAskPage}
+              onSteer={handleSteer}
               onStop={handleAbort}
               showExamples={events.length === 0 && status.phase === 'IDLE'}
             />

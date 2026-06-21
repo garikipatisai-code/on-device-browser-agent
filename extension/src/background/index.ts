@@ -391,6 +391,10 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
           case 'agent.abort':
             await handleAbort();
             break;
+          case 'agent.steer':
+            // Mid-run correction: hand it to the live orchestrator (no-op if nothing is running).
+            _orch?.steer(cmd.text);
+            break;
           case 'agent.status':
             await pushStatus();
             break;

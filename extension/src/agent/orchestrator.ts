@@ -114,6 +114,9 @@ export class Orchestrator {
   private trace: Array<{ tool: string; args: Record<string, unknown> }> = [];
   // Distinct page URLs read this run — surfaced as citations on the finish.
   private sourceUrls = new Set<string>();
+  // Mid-run user corrections ("steer"): surfaced as high-priority guidance to the planner/executor
+  // on the next turn, so the user can redirect a live task without aborting it.
+  private steerNotes: string[] = [];
 
   constructor(private opts: OrchestratorOpts) {
     this.signal = opts.signal ?? new AbortController().signal;
@@ -136,6 +139,7 @@ export class Orchestrator {
     clearSearchResults(); // don't let a prior task's results ground/block this one
     this.trace = [];
     this.sourceUrls = new Set();
+    this.steerNotes = [];
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
     this.taskId = ulid();
     const hot = await _setHot(trimmed);
@@ -143,6 +147,17 @@ export class Orchestrator {
     this.log('info', `Task started: ${trimmed}`);
     if (this.matchedWorkflow) this.log('info', `Workflow recipe matched: ${this.matchedWorkflow.id}`);
     return hot;
+  }
+
+  /** Inject a mid-run user correction ("steer"). Surfaced as high-priority guidance on the next
+   *  planner/executor turn — the user redirecting a live task without aborting it. Best-effort:
+   *  blank input is ignored; bounded to the last few so guidance can't grow unbounded. */
+  steer(text: string): void {
+    const t = text.trim();
+    if (!t) return;
+    this.steerNotes.push(t);
+    if (this.steerNotes.length > 5) this.steerNotes.shift();
+    this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Steering (takes effect next turn): ${t}` });
   }
 
   async runUntilTerminal(initial: AgentStateHot): Promise<RunResult> {
@@ -599,6 +614,7 @@ export class Orchestrator {
       ownedTabs: hot.ownedTabs,
       scratchpad,
       profileBlock: renderProfileBlock(this.opts.settings.profileJson),
+      steerNotes: this.steerNotes.length ? [...this.steerNotes] : undefined,
       pageContentBlock: this.lastRead
         ? wrapPageContent(
             `${this.lastRead.tool}${this.lastRead.url ? ` url=${this.lastRead.url}` : ''}`,

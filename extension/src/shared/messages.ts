@@ -89,6 +89,7 @@ export type TimelineEvent =
 export type PanelCommand =
   | { type: 'agent.start'; goal: string }
   | { type: 'agent.askPage'; question: string }
+  | { type: 'agent.steer'; text: string }
   | { type: 'agent.abort' }
   | { type: 'agent.status' }
   | { type: 'settings.get' }
