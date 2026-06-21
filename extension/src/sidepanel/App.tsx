@@ -150,6 +150,14 @@ export function App() {
     send({ type: 'agent.start', goal: g });
   };
 
+  const handleAskPage = (question: string) => {
+    if (!question.trim()) return;
+    setEvents([]);
+    setNotice(null);
+    setRunStartedAt(Date.now());
+    send({ type: 'agent.askPage', question: question.trim() });
+  };
+
   const handleAbort = () => send({ type: 'agent.abort' });
 
   const finish = latestFinish(events);
@@ -173,6 +181,7 @@ export function App() {
               applyUrl={applyUrl}
               onApplyUrlChange={setApplyUrl}
               onApply={handleApply}
+              onAskPage={handleAskPage}
               onStop={handleAbort}
               showExamples={events.length === 0 && status.phase === 'IDLE'}
             />
@@ -188,6 +197,7 @@ export function App() {
                 steps={stepCount}
                 elapsedMs={elapsedMs}
                 replans={status.replanCount}
+                sources={finish.sources}
               />
             )}
 

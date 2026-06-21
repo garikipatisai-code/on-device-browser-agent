@@ -967,3 +967,44 @@ describe('orchestrator — PII in tool args is redacted (job-apply privacy)', ()
     expect(execPrompts.slice(1).join('\n')).not.toContain('john.doe@example.com');
   });
 });
+
+describe('orchestrator — ask-page fast path (seeded plan skips the planner + cites the source)', () => {
+  it('answers from the current page without ever calling the planner, and surfaces the source URL', async () => {
+    let plannerCalls = 0;
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.read_active',
+      description: 'read the active tab',
+      argsSchema: z.object({ reason: z.string().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'Quiet Keyboard — Price £42.00, in stock.', data: { url: 'https://shop.example/p', tabId: 9 } };
+      },
+    });
+    const events: TimelineEvent[] = [];
+    const ollama = makeFakeOllama(
+      {
+        planner: [], // intentionally empty — if the planner runs, plannerCalls catches it
+        executor: [
+          rawResponse({ toolCalls: [{ name: 'tab.read_active', args: {} }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The price on this page is £42.00.' } }] }),
+        ],
+        evaluator: [],
+      },
+      { onChat: (_m, role) => { if (role === 'planner') plannerCalls++; } },
+    );
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: (e) => events.push(e),
+      seedPlan: [{ description: 'Read the current page and answer the question', successCriteria: 'answered', toolHint: 'tab.read_active' }],
+    });
+    const result = await orch.runUntilTerminal(await orch.start('what is the price on this page?'));
+
+    expect(result.verdict).toBe('success');
+    expect(result.summary).toContain('42.00');
+    expect(plannerCalls).toBe(0); // the planner — our slowest call — was skipped
+    const fin = events.find((e) => e.kind === 'finish') as Extract<TimelineEvent, { kind: 'finish' }>;
+    expect(fin.sources).toContain('https://shop.example/p'); // citation surfaced
+  });
+});

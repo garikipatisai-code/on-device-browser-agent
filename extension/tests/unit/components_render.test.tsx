@@ -33,13 +33,14 @@ describe('redesigned components render across states', () => {
     expect(tabs).toContain('Metrics');
   });
 
-  it('Composer renders the goal field, an example chip, and the apply toggle', () => {
+  it('Composer renders the goal field, an example chip, and the mode toggles', () => {
     const html = renderToStaticMarkup(
-      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onStop={noop} showExamples />,
+      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onStop={noop} showExamples />,
     );
     expect(html).toContain('State a goal');
     expect(html).toContain('Run');
     expect(html).toMatch(/Apply to a job/i);
+    expect(html).toMatch(/Ask about this page/i);
   });
 
   it('RunState renders the human phase label + every plan step', () => {
@@ -51,14 +52,15 @@ describe('redesigned components render across states', () => {
     expect(html).toContain('1m 35s');
   });
 
-  it('ResultCard heroes the verdict + summary', () => {
+  it('ResultCard heroes the verdict + summary + cites sources', () => {
     const html = renderToStaticMarkup(
-      <ResultCard verdict="success" summary="The cheapest mouse is the Logitech M185 at $13.42." steps={3} elapsedMs={42_000} replans={0} />,
+      <ResultCard verdict="success" summary="The cheapest mouse is the Logitech M185 at $13.42." steps={3} elapsedMs={42_000} replans={0} sources={['https://shop.example/product']} />,
     );
     expect(html).toContain('Success');
     expect(html).toContain('Logitech M185');
     expect(html).toContain('3 steps');
     expect(html).toContain('Copy');
+    expect(html).toContain('shop.example');
   });
 
   it('ResultCard tones partial/blocked/failed correctly', () => {

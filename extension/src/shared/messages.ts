@@ -82,12 +82,13 @@ export type TimelineEvent =
   | { kind: 'breaker.trip'; ts: number; reason: string }
   | { kind: 'compaction'; ts: number; before: number; after: number }
   | { kind: 'log'; ts: number; level: 'info' | 'warn' | 'error'; message: string }
-  | { kind: 'finish'; ts: number; verdict: string; summary: string };
+  | { kind: 'finish'; ts: number; verdict: string; summary: string; sources?: string[] };
 
 // ---- panel → SW commands ----
 
 export type PanelCommand =
   | { type: 'agent.start'; goal: string }
+  | { type: 'agent.askPage'; question: string }
   | { type: 'agent.abort' }
   | { type: 'agent.status' }
   | { type: 'settings.get' }

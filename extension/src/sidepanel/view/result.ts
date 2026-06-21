@@ -4,13 +4,14 @@ import type { Plan, TimelineEvent } from '@/shared/messages';
 export interface FinishView {
   verdict: string;
   summary: string;
+  sources: string[];
 }
 
-/** The most recent finish event (the answer to hero), or null if none yet. */
+/** The most recent finish event (the answer to hero + its source citations), or null. */
 export function latestFinish(events: TimelineEvent[]): FinishView | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
-    if (e.kind === 'finish') return { verdict: e.verdict, summary: e.summary };
+    if (e.kind === 'finish') return { verdict: e.verdict, summary: e.summary, sources: e.sources ?? [] };
   }
   return null;
 }

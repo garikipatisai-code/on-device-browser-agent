@@ -1,7 +1,7 @@
 // aria.extract — primary page reading channel. Stamps URL on every extraction.
 
 import { z } from 'zod';
-import type { ToolDefDescriptor } from '../registry';
+import type { ToolDefDescriptor, ToolResult } from '../registry';
 import { withCdp, type SendCmd } from './lifecycle';
 import { assignIndices, capTree, simplifyAxTree, type AxNode, type SimplifiedNode } from './aria';
 
@@ -49,6 +49,34 @@ export async function getAxNodes(send: SendCmd): Promise<AxNode[]> {
   return nodes;
 }
 
+/** Read + simplify a tab's accessibility tree into the model-facing text (caches the index map
+ *  for later clicks). Shared by aria.extract and tab.read_active so both behave identically. */
+export async function extractAria(tabId: number): Promise<ToolResult> {
+  // Fixed 12K-char window (NOT model-controlled — e4b kept starving itself by
+  // passing tiny maxChars). capTree keeps the top of the page, where products
+  // live, so the first ~10-15 land in the window without drowning the model.
+  const cap = 12_000;
+  const url = await new Promise<string>((resolve) =>
+    chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')),
+  );
+  const ax = await withCdp(tabId, (send) => getAxNodes(send));
+  const tree = simplifyAxTree(ax);
+  const { byIndex } = assignIndices(tree);
+  const { text, truncated } = capTree(tree, cap);
+  _cache.set(tabId, { url, ts: Date.now(), byIndex, tree });
+  // When the a11y tree is empty/near-root (canvas/JS-heavy or blocked pages),
+  // steer the model to the visual fallback instead of re-extracting forever.
+  const sparse = ax.length <= 1 || byIndex.size === 0;
+  const hint = sparse
+    ? '\n\n[NOTE: this page exposes almost no accessibility tree. Do NOT re-run aria.extract — call vision.read on this tab to read it visually.]'
+    : '';
+  return {
+    ok: true,
+    content: text + hint,
+    data: { url, nodeCount: ax.length, interactiveCount: byIndex.size, truncated, sparse },
+  };
+}
+
 export const ariaExtractTool: ToolDefDescriptor<{ tabId: number; maxChars?: number }> = {
   name: 'aria.extract',
   description:
@@ -56,37 +84,7 @@ export const ariaExtractTool: ToolDefDescriptor<{ tabId: number; maxChars?: numb
   argsSchema: z.object({
     tabId: z.number().int(),
   }),
-  async dispatch({ tabId }) {
-    // Fixed 12K-char window (NOT model-controlled — e4b kept starving itself by
-    // passing tiny maxChars). capTree keeps the top of the page, where products
-    // live, so the first ~10-15 land in the window without drowning the model.
-    const cap = 12_000;
-    const url = await new Promise<string>((resolve) =>
-      chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')),
-    );
-    const ax = await withCdp(tabId, (send) => getAxNodes(send));
-    const tree = simplifyAxTree(ax);
-    const { byIndex } = assignIndices(tree);
-    const { text, truncated } = capTree(tree, cap);
-    _cache.set(tabId, { url, ts: Date.now(), byIndex, tree });
-    // When the a11y tree is empty/near-root (canvas/JS-heavy or blocked pages),
-    // steer the model to the visual fallback instead of re-extracting forever.
-    const sparse = ax.length <= 1 || byIndex.size === 0;
-    const hint = sparse
-      ? '\n\n[NOTE: this page exposes almost no accessibility tree. Do NOT re-run aria.extract — call vision.read on this tab to read it visually.]'
-      : '';
-    return {
-      ok: true,
-      content: text + hint,
-      data: {
-        url,
-        nodeCount: ax.length,
-        interactiveCount: byIndex.size,
-        truncated,
-        sparse,
-      },
-    };
-  },
+  dispatch: ({ tabId }) => extractAria(tabId),
 };
 
 export async function resolveBackendId(tabId: number, elementIndex: number): Promise<number> {

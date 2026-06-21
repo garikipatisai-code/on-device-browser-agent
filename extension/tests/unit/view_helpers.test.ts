@@ -63,7 +63,13 @@ describe('view/result', () => {
     expect(latestFinish([finish('partial', 'old'), log('x'), finish('success', 'new')])).toEqual({
       verdict: 'success',
       summary: 'new',
+      sources: [],
     });
+  });
+
+  it('latestFinish carries source citations when present', () => {
+    const withSrc: TimelineEvent = { kind: 'finish', ts: 2, verdict: 'success', summary: 'done', sources: ['https://shop.example/p'] };
+    expect(latestFinish([withSrc])?.sources).toEqual(['https://shop.example/p']);
   });
 
   it('planProgress counts done + locates the active step', () => {
