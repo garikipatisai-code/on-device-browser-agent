@@ -111,7 +111,7 @@ export class ScriptedBrowser {
   }
 
   async openResult(index: number, ctx: ToolContext): Promise<ToolResult> {
-    const r = this.lastResults[index - 1];
+    const r = this.lastResults[Math.max(1, index) - 1]; // tolerate a 0-based "first result", like the real tool
     if (!r) return { ok: false, content: `No result #${index}.` };
     return this.openTab(r.url, ctx);
   }
@@ -137,7 +137,7 @@ export function buildScriptedRegistry(state: ScriptedBrowser): ToolRegistry {
   r.register({
     name: 'open_result',
     description: 'Open one of the most recent search results by its number (e.g. {"index":1}).',
-    argsSchema: z.object({ index: z.number().int().positive() }),
+    argsSchema: z.object({ index: z.number().int().min(0) }),
     dispatch: ({ index }, ctx) => state.openResult(index, ctx),
   });
   r.register({

@@ -149,12 +149,15 @@ export const tabOpenTool: ToolDefDescriptor<{ url: string }> = {
 export const openResultTool: ToolDefDescriptor<{ index: number }> = {
   name: 'open_result',
   description:
-    'Open one of the most recent search results by its number (e.g. {"index":1}). Use this to navigate to a search result — never retype or guess its URL.',
-  argsSchema: z.object({ index: z.number().int().positive() }),
+    'Open one of the most recent search results by its number (e.g. {"index":1} for the first result). Use this to navigate to a search result — never retype or guess its URL.',
+  argsSchema: z.object({ index: z.number().int().min(0) }),
   async dispatch({ index }, ctx) {
     const results = getLastSearchResults();
     if (!results.length) return { ok: false, content: 'No recent search results — call search first.' };
-    const r = results[index - 1];
+    // Small models frequently pass a 0-based index for "the first result". Accept it as #1 rather
+    // than rejecting the whole turn — this slip was wasting multiple turns per run re-trying 0→1.
+    const n = index < 1 ? 1 : index;
+    const r = results[n - 1];
     if (!r) {
       return { ok: false, content: `No result #${index}. The last search returned ${results.length} results (use 1–${results.length}).` };
     }
