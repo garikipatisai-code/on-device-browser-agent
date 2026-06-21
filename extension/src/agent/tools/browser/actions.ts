@@ -225,15 +225,16 @@ export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: num
 
 export const tabScrollTool: ToolDefDescriptor<{ tabId: number; direction: 'up' | 'down'; pixels?: number }> = {
   name: 'tab.scroll',
-  description: 'Scroll the page up or down by a given number of pixels (default 600). Requires click-only tier.',
+  description: 'Scroll the page up or down (default 600px) to read more of it. Allowed on any page you can read — scrolling changes nothing on the page.',
   argsSchema: z.object({
     tabId: z.number().int(),
     direction: z.enum(['up', 'down']),
     pixels: z.number().int().min(50).max(5_000).optional(),
   }),
-  async dispatch({ tabId, direction, pixels }, ctx) {
-    const url = await tabUrl(tabId);
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers);
+  async dispatch({ tabId, direction, pixels }) {
+    // No tier gate: scrolling is a read-only viewport move (it clicks/types/submits nothing). If
+    // the agent is allowed to read the page, it may scroll to reach more of it — blocking this
+    // behind click-only stranded the agent on long read-only pages (e.g. Wikipedia lists).
     const dy = (pixels ?? 600) * (direction === 'down' ? 1 : -1);
     const moved = await withCdp(tabId, async (send) => {
       // window.scrollBy via JS — a synthetic mouseWheel event hangs on a background tab. Read
