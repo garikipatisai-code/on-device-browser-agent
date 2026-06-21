@@ -515,11 +515,15 @@ export class Orchestrator {
   private async evaluate(hot: AgentStateHot, stepId: string, lastResult: string) {
     await patchHot({ phase: 'EVALUATING' });
     const step = hot.plan!.steps.find((s) => s.id === stepId)!;
+    // Pass the scratchpad so the evaluator can see data gathered on EARLIER turns — otherwise it
+    // judges only the current page and mis-FAILs a step whose data was gathered before the agent
+    // moved on (the root of the replan storms).
+    const scratch = await getScratchpad(this.taskId);
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'evaluator', stepId });
     const t0 = performance.now();
     const ev = await timed('evaluator', () =>
       runEvaluator({
-        ctx: this.commonCtx(hot),
+        ctx: this.commonCtx(hot, scratch),
         model: this.opts.settings.evaluatorModel,
         ollama: this.opts.ollama,
         lastExecutorResult: lastResult,
