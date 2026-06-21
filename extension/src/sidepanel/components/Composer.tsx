@@ -7,6 +7,8 @@ const EXAMPLES = [
   'Summarize the top Hacker News story right now',
 ];
 
+type Mode = 'goal' | 'apply' | 'askpage';
+
 interface Props {
   running: boolean;
   goal: string;
@@ -15,6 +17,7 @@ interface Props {
   applyUrl: string;
   onApplyUrlChange: (v: string) => void;
   onApply: () => void;
+  onAskPage: (question: string) => void;
   onStop: () => void;
   showExamples: boolean;
 }
@@ -27,10 +30,12 @@ export function Composer({
   applyUrl,
   onApplyUrlChange,
   onApply,
+  onAskPage,
   onStop,
   showExamples,
 }: Props) {
-  const [mode, setMode] = useState<'goal' | 'apply'>('goal');
+  const [mode, setMode] = useState<Mode>('goal');
+  const [question, setQuestion] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Auto-grow the goal textarea (1→~4 lines) as the user types.
@@ -46,6 +51,36 @@ export function Composer({
       <Icon name="stop" size={14} /> Stop
     </button>
   );
+
+  if (mode === 'askpage') {
+    return (
+      <div className="composer card">
+        <div className="composer-field">
+          <input
+            className="composer-input"
+            placeholder="Ask about the page you're on — e.g. what's the key takeaway?"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            disabled={running}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !running && question.trim()) onAskPage(question.trim());
+            }}
+          />
+          {running ? (
+            StopBtn
+          ) : (
+            <button className="btn btn-primary" onClick={() => question.trim() && onAskPage(question.trim())} disabled={!question.trim()}>
+              <Icon name="eye" size={13} /> Ask
+            </button>
+          )}
+        </div>
+        <div className="field-hint">Reads your current tab on-device — the page never leaves your machine.</div>
+        <button className="apply-toggle" onClick={() => setMode('goal')} disabled={running}>
+          <Icon name="chevron" size={13} /> Back to a goal
+        </button>
+      </div>
+    );
+  }
 
   if (mode === 'apply') {
     return (
@@ -69,7 +104,7 @@ export function Composer({
             </button>
           )}
         </div>
-        <button className="apply-toggle" onClick={() => setMode('goal')}>
+        <button className="apply-toggle" onClick={() => setMode('goal')} disabled={running}>
           <Icon name="chevron" size={13} /> Back to a goal
         </button>
       </div>
@@ -113,9 +148,14 @@ export function Composer({
         </div>
       )}
 
-      <button className="apply-toggle" onClick={() => setMode('apply')} disabled={running}>
-        <Icon name="flag" size={13} /> Apply to a job instead
-      </button>
+      <div className="composer-modes">
+        <button className="apply-toggle" onClick={() => setMode('askpage')} disabled={running}>
+          <Icon name="eye" size={13} /> Ask about this page
+        </button>
+        <button className="apply-toggle" onClick={() => setMode('apply')} disabled={running}>
+          <Icon name="flag" size={13} /> Apply to a job
+        </button>
+      </div>
     </div>
   );
 }

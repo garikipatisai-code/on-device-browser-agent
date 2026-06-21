@@ -150,7 +150,7 @@ if (typeof chrome !== 'undefined' && chrome.alarms) {
   }
 })();
 
-async function handleStart(goal: string) {
+async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']) {
   log('handleStart goal=', JSON.stringify(goal));
   if (_orch || _starting) {
     log('handleStart: a task is already running — rejecting');
@@ -205,6 +205,7 @@ async function handleStart(goal: string) {
     ollama,
     registry,
     settings,
+    seedPlan,
     emit: (ev) => {
       if (myRun === _runId) appendEventLocal(ev); // a superseded run must not pollute the live timeline
     },
@@ -365,6 +366,18 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
             // keepalive, with no cumulative SW lifetime limit. handleStart has its
             // own try/catch/finally, so detaching loses no error handling.
             void handleStart(cmd.goal);
+            break;
+          case 'agent.askPage':
+            // "Ask this page" fast path: seed a 1-step read-the-current-page-and-answer plan so
+            // the planner (slowest call) is skipped. The goal IS the question; tab.read_active
+            // pulls the user's active tab on-device.
+            void handleStart(cmd.question, [
+              {
+                description: `Read the current page (tab.read_active) and answer the user's question, citing only what the page actually says: ${cmd.question}`,
+                successCriteria: 'answered the question from the current page, or said it is not on the page',
+                toolHint: 'tab.read_active',
+              },
+            ]);
             break;
           case 'agent.abort':
             await handleAbort();

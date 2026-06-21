@@ -30,7 +30,7 @@ import {
   recordAction,
   resetForNewStep,
 } from './safety/circuit_breaker';
-import { currentStep, walkPlan } from './plan';
+import { currentStep, newPlan, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
 import { redact, redactDeep } from './safety/redact';
@@ -47,7 +47,7 @@ import { renderProfileBlock } from './profile';
 // such result forward into every executor turn (as CURRENT PAGE CONTENT) so that
 // synthesis/report turns can actually see the data — the scratchpad only keeps an
 // 800-char tail, far too little to list products/prices from.
-const READING_TOOLS = new Set(['aria.extract', 'vision.read', 'search']);
+const READING_TOOLS = new Set(['aria.extract', 'vision.read', 'search', 'tab.read_active']);
 
 // Observation tools (read the page). The executor may not call the SAME one twice
 // in a row within a step — it was looping aria.extract instead of acting. Allowing
@@ -70,6 +70,8 @@ export interface OrchestratorOpts {
   signal?: AbortSignal;
   maxReplans?: number;
   maxStepTurns?: number;
+  /** A pre-built plan that bypasses the planner LLM call (fast path, e.g. "Ask this page"). */
+  seedPlan?: Array<{ description: string; successCriteria: string; toolHint?: string }>;
 }
 
 export interface RunResult {
@@ -105,6 +107,8 @@ export class Orchestrator {
   private matchedWorkflow: Workflow | null = null;
   // The tool sequence executed this run — generalized into a recipe on success (Phase 2).
   private trace: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  // Distinct page URLs read this run — surfaced as citations on the finish.
+  private sourceUrls = new Set<string>();
 
   constructor(private opts: OrchestratorOpts) {
     this.signal = opts.signal ?? new AbortController().signal;
@@ -125,6 +129,7 @@ export class Orchestrator {
     this.observeGateStep = null;
     clearSearchResults(); // don't let a prior task's results ground/block this one
     this.trace = [];
+    this.sourceUrls = new Set();
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
     this.taskId = ulid();
     const hot = await _setHot(trimmed);
@@ -139,7 +144,12 @@ export class Orchestrator {
     let turn = 0;
     const maxTurns = (this.opts.maxStepTurns ?? 8) * 12;
 
-    hot = await this.plan(hot);
+    // Fast path: a seeded plan (e.g. "Ask this page") skips the planner entirely — the slowest
+    // call (up to 300s) — for goals where the steps are already known.
+    hot =
+      this.opts.seedPlan && this.opts.seedPlan.length
+        ? await this.seedPlanInto(hot, this.opts.seedPlan)
+        : await this.plan(hot);
 
     while (turn < maxTurns) {
       this.assertNotAborted();
@@ -444,7 +454,7 @@ export class Orchestrator {
     const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
     this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, 12_000) };
     this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
-    this.recordObserved(obs.content);
+    this.recordObserved(obs.content, obsUrl);
     this.emit({
       kind: 'log',
       ts: Date.now(),
@@ -468,7 +478,7 @@ export class Orchestrator {
     if (after && after.ok && after.content) {
       const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
       this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, 12_000) };
-      this.recordObserved(after.content);
+      this.recordObserved(after.content, afterUrl);
     }
   }
 
@@ -487,7 +497,7 @@ export class Orchestrator {
       const data = out.result.data;
       const url = data && typeof data.url === 'string' ? data.url : undefined;
       this.lastRead = { tool: out.tool, url, content: (out.result.content ?? '').slice(0, 12_000) };
-      this.recordObserved(out.result.content ?? '');
+      this.recordObserved(out.result.content ?? '', url);
     }
 
     // redact() before persisting: tool args (e.g. tab.type for a job application) can carry the
@@ -541,9 +551,22 @@ export class Orchestrator {
     return out;
   }
 
-  private recordObserved(content: string): void {
+  private recordObserved(content: string, url?: string): void {
+    if (url && /^https?:\/\//i.test(url)) this.sourceUrls.add(url);
     if (!content) return;
     this.observedText = `${this.observedText}\n${content}`.slice(-60_000);
+  }
+
+  /** Apply a pre-built plan without calling the planner LLM (fast path). */
+  private async seedPlanInto(
+    hot: AgentStateHot,
+    steps: Array<{ description: string; successCriteria: string; toolHint?: string }>,
+  ): Promise<AgentStateHot> {
+    hot = await patchHot({ phase: 'PLANNING' });
+    const plan = newPlan(steps);
+    hot = await this.applyPlan(hot, plan);
+    this.emit({ kind: 'planner.plan', ts: Date.now(), plan });
+    return hot;
   }
 
   /** True if this URL's domain is upgraded to click-only or higher — gates the
@@ -644,7 +667,7 @@ export class Orchestrator {
         /* recording is best-effort, never fatal */
       }
     }
-    this.emit({ kind: 'finish', ts: Date.now(), verdict, summary });
+    this.emit({ kind: 'finish', ts: Date.now(), verdict, summary, sources: [...this.sourceUrls].slice(0, 5) });
     return { phase: 'DONE', summary, verdict, turns: this.turns, replans: hot.replanCount };
   }
 

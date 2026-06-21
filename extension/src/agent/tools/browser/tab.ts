@@ -4,6 +4,35 @@ import type { ToolContext, ToolDefDescriptor, ToolResult } from '../registry';
 import { patchHot } from '@/background/state_store';
 import { isBlockedUrl } from '@/agent/safety/domain_tiers';
 import { getLastSearchResults } from './search';
+import { extractAria } from './aria_tool';
+
+/** Read the page the USER is currently on (their active tab) — for "summarize this page",
+ *  "what does this page say about X", etc. Read-only; never opens or closes a tab, and the
+ *  page never leaves the device. Restricted URLs (chrome://, store, file) fail honestly. */
+export const tabReadActiveTool: ToolDefDescriptor<{ reason?: string }> = {
+  name: 'tab.read_active',
+  description:
+    "Read the page the USER is currently looking at (their active browser tab). Use this for any goal about the current/this page — summarize it, answer a question about it, check a claim. Read-only; does not open a new tab.",
+  argsSchema: z.object({ reason: z.string().optional() }),
+  async dispatch() {
+    const tab = await new Promise<chrome.tabs.Tab | undefined>((resolve) =>
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0])),
+    );
+    if (!tab || typeof tab.id !== 'number') {
+      return { ok: false, content: 'No active tab to read.' };
+    }
+    const url = tab.url ?? '';
+    if (!/^https?:\/\//i.test(url)) {
+      return {
+        ok: false,
+        content: `Can't read this page${url ? ` (${url})` : ''}. Open a normal web page (http/https) in the active tab, then try again.`,
+      };
+    }
+    const res = await extractAria(tab.id);
+    // Carry the tabId forward so a follow-on action (click/type) can target the same page.
+    return { ...res, data: { ...(res.data ?? {}), tabId: tab.id, url } };
+  },
+};
 
 async function waitForLoaded(tabId: number, timeoutMs: number): Promise<chrome.tabs.Tab> {
   const start = Date.now();

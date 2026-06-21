@@ -13,6 +13,7 @@ import {
   tabListTool,
   tabOpenTool,
   openResultTool,
+  tabReadActiveTool,
   tabScreenshotTool,
   tabWaitLoadedTool,
 } from './browser/tab';
@@ -44,6 +45,7 @@ export function buildRegistry(): ToolRegistry {
   r.register(tabWaitLoadedTool);
   r.register(tabScreenshotTool);
   r.register(ariaExtractTool);
+  r.register(tabReadActiveTool);
   r.register(searchTool);
   r.register(visionReadTool);
   // browser — act (domain-tier gated inside the tool)
