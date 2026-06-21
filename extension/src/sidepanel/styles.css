@@ -79,10 +79,11 @@
 }
 
 * { box-sizing: border-box; }
-/* height:100% (chained off the viewport), NOT 100vh: in a Chrome side panel 100vh can resolve to
-   the whole browser-window height, making .app taller than the panel so its overflow:hidden clips
-   the bottom (the Activity) with no way to scroll. 100% ties the chain to the actual panel height. */
-html, body, #root { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); }
+/* Let the panel scroll as a NORMAL document — no fixed app-shell height, no overflow:hidden, no
+   nested flex-scroll. After three failed attempts to make a 100vh/100%-pinned shell scroll inside
+   a Chrome side panel, this is the robust answer: body grows with content and the panel's own
+   scrollbar handles it, regardless of how the side panel reports its viewport height. */
+html, body, #root { margin: 0; padding: 0; min-height: 100%; background: var(--bg); color: var(--fg); }
 button, input, textarea, select { font: inherit; color: inherit; }
 ::selection { background: var(--accent-weak); }
 
@@ -100,9 +101,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: var(--r-ctl); }
 
 /* ---------- shell ---------- */
-.app { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--bg); }
+/* No fixed height / no overflow clipping — the document scrolls naturally (see html/body above). */
+.app { display: flex; flex-direction: column; background: var(--bg); }
 
+/* Brand + tabs stay pinned while the content below scrolls with the page. */
 .app-header {
+  position: sticky; top: 0; z-index: 20; background: var(--bg);
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border);
 }
@@ -133,8 +137,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .tab.active { background: var(--bg); color: var(--accent); box-shadow: var(--shadow-sm); }
 @media (prefers-color-scheme: dark) { .tab.active { background: var(--surface-2); } }
 
-/* ---------- content scroll area ---------- */
-.content { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+/* ---------- content (plain block — the document scrolls, not an inner box) ---------- */
+.content { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
 
 /* ---------- card ---------- */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: var(--sp-4); box-shadow: var(--shadow-sm); }
