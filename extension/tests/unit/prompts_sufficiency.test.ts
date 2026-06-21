@@ -59,3 +59,27 @@ describe('steer guidance injection (Hermes-inspired interrupt-and-redirect)', ()
     expect(user).toContain('use each city-proper figure');
   });
 });
+
+// Standing preferences: durable, user-edited guidance injected into EVERY run (Hermes USER.md,
+// scoped safely — user-controlled, not 4B auto-curated).
+describe('standing preferences injection', () => {
+  it('executor: surfaces standing preferences as guidance to honor', () => {
+    const user = buildExecutorMessages({ ...ctx, preferences: 'Always use city-proper population figures.' }).find(
+      (m) => m.role === 'user',
+    )!.content;
+    expect(user).toMatch(/preference/i);
+    expect(user).toContain('Always use city-proper population figures.');
+  });
+
+  it('planner: surfaces standing preferences too', () => {
+    const user = buildPlannerMessages({ ...ctx, preferences: 'Prefer official / primary sources.' }).find(
+      (m) => m.role === 'user',
+    )!.content;
+    expect(user).toContain('Prefer official / primary sources.');
+  });
+
+  it('no preferences block when empty', () => {
+    const user = buildExecutorMessages(ctx).find((m) => m.role === 'user')!.content;
+    expect(user).not.toMatch(/STANDING PREFERENCES/);
+  });
+});

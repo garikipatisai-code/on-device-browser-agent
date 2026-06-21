@@ -40,6 +40,8 @@ export interface CommonContext {
   profileBlock?: string;
   /** Corrections the user injected mid-task ("steer"). Surfaced as high-priority guidance. */
   steerNotes?: string[];
+  /** Durable user-set preferences (USER.md analog), injected into every run. */
+  preferences?: string;
 }
 
 /** Render mid-task user corrections as a high-priority guidance block (empty string when none,
@@ -49,6 +51,14 @@ function steerBlock(notes?: string[]): string {
   return `USER GUIDANCE (the user added this mid-task — follow it; it refines the GOAL above):\n${notes
     .map((n) => `- ${n}`)
     .join('\n')}`;
+}
+
+/** Render the user's durable standing preferences (empty string when unset). Persistent across
+ *  runs — honor it unless the GOAL explicitly contradicts it. */
+function preferencesBlock(preferences?: string): string {
+  const p = (preferences ?? '').trim();
+  if (!p) return '';
+  return `STANDING PREFERENCES (the user's persistent guidance — honor it unless the GOAL says otherwise):\n${p}`;
 }
 
 export function buildPlannerMessages(ctx: CommonContext, extra?: string, workflowRecipe?: string): ChatMessage[] {
@@ -73,6 +83,7 @@ To COMPARE or look up several specific named things (cities, products, people), 
 Do NOT bake specific or guessed URLs into steps — the Executor opens real URLs taken from the search results. Describe WHAT to open ("open the Amazon results page from the search output"), never a hand-written URL or a "navigate directly" instruction.`;
   const user = [
     `GOAL: ${ctx.goal}`,
+    preferencesBlock(ctx.preferences),
     steerBlock(ctx.steerNotes),
     workflowRecipe ? `PROVEN RECIPE (a known-good sequence for a task like this — build your plan from it):\n${workflowRecipe}` : '',
     `TOOLS:\n${ctx.toolCatalog}`,
@@ -117,6 +128,7 @@ Rules:
 ${SAFETY_RULES}`;
   const lines = [
     `GOAL: ${ctx.goal}`,
+    preferencesBlock(ctx.preferences),
     steerBlock(ctx.steerNotes),
     `TOOLS:\n${ctx.toolCatalog}`,
     tabsList(ctx.ownedTabs),
@@ -174,6 +186,7 @@ Output: ONLY a JSON object of the form:
   If this step passed but more of the goal remains, finishVerdict is null — do NOT end the task early just because one step succeeded.`;
   const user = [
     `GOAL: ${ctx.goal}`,
+    preferencesBlock(ctx.preferences),
     `ACTIVE STEP: ${step.description}`,
     `SUCCESS CRITERIA: ${step.successCriteria}`,
     ctx.recentActions ? `ACTIONS TAKEN THIS STEP (judge the whole sequence, not just the last):\n${ctx.recentActions}` : '',
