@@ -22,7 +22,7 @@ import { runExecutor } from './roles/executor';
 import { runEvaluator } from './roles/evaluator';
 import { runCompactor } from './roles/compactor';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
-import { checkBudget } from './budget';
+import { checkBudget, NUM_CTX } from './budget';
 import {
   type BreakerState,
   checkBreaker,
@@ -243,7 +243,7 @@ export class Orchestrator {
       if (verdict.trip) {
         this.emit({ kind: 'breaker.trip', ts: Date.now(), reason: `${verdict.reason}: ${verdict.detail ?? ''}` });
         if (hot.replanCount >= (this.opts.maxReplans ?? 3) - 1) {
-          return this.abortNow(hot, `Circuit breaker tripped (${verdict.reason}) and max replans reached.`);
+          return this.giveUp(hot, `Circuit breaker tripped (${verdict.reason}) and max replans reached.`);
         }
         hot = await this.replan(hot, `Breaker ${verdict.reason}: ${verdict.detail ?? ''}`);
         continue;
@@ -257,14 +257,14 @@ export class Orchestrator {
         }
         if (ev.verdict === 'FAIL' && ev.shouldReplan) {
           if (hot.replanCount >= (this.opts.maxReplans ?? 3) - 1) {
-            return this.abortNow(hot, `Evaluator requested replan but max replans reached.`);
+            return this.giveUp(hot, `Evaluator requested replan but max replans reached.`);
           }
           hot = await this.replan(hot, ev.reason);
         }
       }
     }
 
-    return this.abortNow(hot, `Max turns (${maxTurns}) reached.`);
+    return this.giveUp(hot, `Max turns (${maxTurns}) reached.`);
   }
 
   async abort(reason: string): Promise<void> {
@@ -676,6 +676,50 @@ export class Orchestrator {
     await patchHot({ phase: 'ABORTED' });
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
     return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };
+  }
+
+  /** The agent ran out of road (max replans/turns) — but it may have ALREADY read what the goal
+   *  needs (the plan-tracking just thrashed). Try one final answer from everything observed before
+   *  giving up empty; only abort if nothing was gathered. */
+  private async giveUp(hot: AgentStateHot, reason: string): Promise<RunResult> {
+    this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `${reason} Trying a final answer from what was gathered.` });
+    const answer = await this.synthesizeFromObserved(hot);
+    if (answer) {
+      const g = this.gateFinishSummary('partial', answer);
+      return this.finishOk(hot, g.verdict, g.summary);
+    }
+    return this.abortNow(hot, reason);
+  }
+
+  /** One model call that answers the goal from the observed corpus (everything read this task).
+   *  Returns null if nothing meaningful was gathered. The answer is grounding-gated by the caller. */
+  private async synthesizeFromObserved(hot: AgentStateHot): Promise<string | null> {
+    const corpus = this.observedText.trim();
+    if (corpus.length < 40) return null; // nothing was read — nothing to salvage
+    try {
+      const resp = await this.opts.ollama.chatOnce({
+        model: this.opts.settings.executorModel,
+        messages: [
+          {
+            role: 'system',
+            content:
+              "Answer the user's GOAL using ONLY the notes gathered while browsing (below). State the answer directly and concisely. Use only facts present in the notes — never invent a number or name. If the notes don't fully answer the GOAL, give the best partial answer and say what's missing.",
+          },
+          {
+            role: 'user',
+            content: `GOAL: ${hot.goal}\n\nGATHERED NOTES (the pages you read this task):\n${corpus.slice(-24_000)}\n\nAnswer the GOAL now from these notes.`,
+          },
+        ],
+        thinking: false,
+        numCtx: NUM_CTX,
+        timeoutMs: 120_000,
+        signal: this.signal,
+      });
+      const text = (resp.message.content ?? '').trim();
+      return text.length ? text : null;
+    } catch {
+      return null;
+    }
   }
 
   private async cleanupTabs(hot: AgentStateHot): Promise<void> {
