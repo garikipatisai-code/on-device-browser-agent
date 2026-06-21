@@ -161,8 +161,8 @@ export function Timeline({
           <span className="activity-count">{events.length}</span>
           <Icon name="chevron" size={14} className="chev" />
         </button>
-        <button className="icon-btn" onClick={copyTrace} title="Copy the full activity log" aria-label="Copy activity log">
-          <Icon name={copied ? 'check' : 'copy'} size={14} />
+        <button className="btn btn-ghost btn-sm copy-btn" onClick={copyTrace} title="Copy the full activity log (every step)" aria-label="Copy activity log">
+          <Icon name={copied ? 'check' : 'copy'} size={13} /> {copied ? 'Copied' : 'Copy steps'}
         </button>
       </div>
       {open && (
