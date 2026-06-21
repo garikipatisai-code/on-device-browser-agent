@@ -47,6 +47,14 @@ describe('parseTabResults — clean scraped result anchors', () => {
     expect(parseTabResults('not json')).toEqual([]);
     expect(parseTabResults('{"a":1}')).toEqual([]);
   });
+
+  it('unwraps Google /url?q= redirects to the real destination', () => {
+    const raw = JSON.stringify([
+      { title: 'Result', url: 'https://www.google.com/url?q=https://example.com/page&sa=U' },
+      { title: 'Google nav', url: 'https://www.google.com/preferences' }, // engine nav → drop
+    ]);
+    expect(parseTabResults(raw).map((r) => r.url)).toEqual(['https://example.com/page']);
+  });
 });
 
 describe('looksBlocked (real captured fixtures)', () => {
