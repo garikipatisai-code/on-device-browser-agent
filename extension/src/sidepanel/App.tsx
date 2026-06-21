@@ -19,6 +19,7 @@ import { RunState } from './components/RunState';
 import { ResultCard } from './components/ResultCard';
 import { Timeline } from './components/Timeline';
 import { Alert } from './components/Alert';
+import { ConnectionCard } from './components/ConnectionCard';
 import { Icon } from './components/Icon';
 import { SettingsPanel } from './components/SettingsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
@@ -44,6 +45,7 @@ export function App() {
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [ollamaDown, setOllamaDown] = useState(false);
   const clientRef = useRef<PortClient | null>(null);
 
   // ---- SW connection (contract: do not change message shapes) ----
@@ -96,8 +98,16 @@ export function App() {
         case 'preflight':
           if (!msg.ok) {
             const d = (msg.details ?? {}) as { error?: string; hint?: string };
-            setNotice({ msg: d.error ? `${d.error}${d.hint ? ` — ${d.hint}` : ''}` : 'Preflight failed.', kind: 'warn' });
+            // "Ollama unreachable" is the launch-time case the ConnectionCard handles (start it +
+            // auto-reconnect). Other preflight failures (e.g. missing models) stay a normal notice.
+            if (/unreachable/i.test(d.error ?? '')) {
+              setOllamaDown(true);
+            } else {
+              setOllamaDown(false);
+              setNotice({ msg: d.error ? `${d.error}${d.hint ? ` — ${d.hint}` : ''}` : 'Preflight failed.', kind: 'warn' });
+            }
           } else {
+            setOllamaDown(false);
             setNotice(null);
           }
           break;
@@ -108,6 +118,7 @@ export function App() {
     client.send({ type: 'settings.get' });
     client.send({ type: 'agent.status' });
     client.send({ type: 'models.list' });
+    client.send({ type: 'preflight' }); // connection check on launch → surface the down-state immediately
     return () => {
       client.disconnect();
       clientRef.current = null;
@@ -129,6 +140,16 @@ export function App() {
   useEffect(() => {
     if (running) setActivityOpen(true);
   }, [running]);
+
+  // While Ollama is down, poll the connection so the panel reconnects on its own the moment the
+  // user starts `ollama serve` — no click needed. (The extension can't launch the process itself.)
+  useEffect(() => {
+    if (!ollamaDown) return;
+    const id = setInterval(() => clientRef.current?.send({ type: 'preflight' }), 3500);
+    return () => clearInterval(id);
+  }, [ollamaDown]);
+
+  const handleRetry = () => send({ type: 'preflight' });
 
   const handleStart = () => {
     const trimmed = goal.trim();
@@ -173,6 +194,8 @@ export function App() {
       <div className="content" role="tabpanel">
         {tab === 'agent' && (
           <>
+            {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
+
             <Composer
               running={running}
               goal={goal}
@@ -186,7 +209,7 @@ export function App() {
               showExamples={events.length === 0 && status.phase === 'IDLE'}
             />
 
-            {notice && <Alert kind={notice.kind}>{notice.msg}</Alert>}
+            {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
 
             {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
 

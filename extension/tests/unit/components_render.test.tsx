@@ -7,6 +7,7 @@ import { DEFAULT_SETTINGS, type Plan, type TimelineEvent } from '@/shared/messag
 import { Brand } from '@/sidepanel/components/Brand';
 import { Tabs } from '@/sidepanel/components/Tabs';
 import { Alert } from '@/sidepanel/components/Alert';
+import { ConnectionCard } from '@/sidepanel/components/ConnectionCard';
 import { Composer } from '@/sidepanel/components/Composer';
 import { RunState } from '@/sidepanel/components/RunState';
 import { ResultCard } from '@/sidepanel/components/ResultCard';
@@ -85,6 +86,15 @@ describe('redesigned components render across states', () => {
   it('Alert renders error + warn', () => {
     expect(renderToStaticMarkup(<Alert kind="error">boom</Alert>)).toContain('boom');
     expect(renderToStaticMarkup(<Alert kind="warn">heads up</Alert>)).toContain('heads up');
+  });
+
+  it('ConnectionCard surfaces the down-state with the start command + retry', () => {
+    const html = renderToStaticMarkup(<ConnectionCard baseUrl="http://localhost:11434" onRetry={noop} />);
+    expect(html).toContain('Ollama');
+    expect(html).toMatch(/running/i);
+    expect(html).toContain('ollama serve');
+    expect(html).toContain('http://localhost:11434');
+    expect(html).toMatch(/retry/i);
   });
 
   it('SettingsPanel renders connection, models, profile, domain sections', () => {
