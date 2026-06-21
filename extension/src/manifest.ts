@@ -25,8 +25,16 @@ export const manifest: ManifestV3Export = {
     'alarms',
     'unlimitedStorage',
     'scripting',
+    'declarativeNetRequest',
   ],
   host_permissions: ['<all_urls>'],
+  // Ollama allows GET /api/tags from any origin but 403s POST /api/chat from a chrome-extension://
+  // origin (it doesn't allowlist extensions by default). Strip the Origin header on requests to the
+  // local Ollama port so it sees a no-origin request (like curl) and accepts it — no OLLAMA_ORIGINS
+  // env-var setup required.
+  declarative_net_request: {
+    rule_resources: [{ id: 'ollama_origin', enabled: true, path: 'rules/ollama.json' }],
+  },
   content_security_policy: {
     extension_pages:
       "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; base-uri 'self'",
