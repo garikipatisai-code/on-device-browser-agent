@@ -88,6 +88,38 @@ describe('traceToWorkflow (Phase 2 generalization)', () => {
     expect(traceToWorkflow('auto:2', 'g', '*', [{ tool: 'echo', args: {} }, { tool: 'finish', args: {} }])).toBeNull();
   });
 
+  it('collapses a repeated per-entity cycle (search→open, search→open, …) into ONE occurrence', () => {
+    // The live Wikipedia compare run: search+open for Austin, search+open for Seattle, search for
+    // Denver (answered from the snippet), finish. The recipe must store the (search→open) PATTERN
+    // once, not replay it per city — otherwise it teaches the redundancy back to the planner.
+    const perEntity = [
+      { tool: 'search', args: { query: 'population of Austin' } },
+      { tool: 'open_result', args: { index: 1 } },
+      { tool: 'search', args: { query: 'population of Seattle' } },
+      { tool: 'open_result', args: { index: 1 } },
+      { tool: 'search', args: { query: 'population of Denver' } },
+      { tool: 'finish', args: { verdict: 'success', summary: '…' } },
+    ];
+    const wf = traceToWorkflow('auto:wiki', 'compare the populations of three cities', '*', perEntity);
+    const hints = wf!.steps.map((s) => s.toolHint);
+    // one full search→open cycle removed (the asymmetric trailing search is real — Denver had no open)
+    expect(hints).toEqual(['search', 'open_result', 'search', 'finish']);
+  });
+
+  it('collapses a fully-symmetric per-entity loop to a single search→open→report', () => {
+    const symmetric = [
+      { tool: 'search', args: {} },
+      { tool: 'open_result', args: { index: 1 } },
+      { tool: 'search', args: {} },
+      { tool: 'open_result', args: { index: 1 } },
+      { tool: 'search', args: {} },
+      { tool: 'open_result', args: { index: 1 } },
+      { tool: 'finish', args: {} },
+    ];
+    const wf = traceToWorkflow('auto:sym', 'look up three things and report', '*', symmetric);
+    expect(wf!.steps.map((s) => s.toolHint)).toEqual(['search', 'open_result', 'finish']);
+  });
+
   it('derives the domain from the first opened URL', () => {
     expect(deriveDomain(trace, 'find a mouse')).toBe('amazon.com');
     expect(deriveDomain([], 'go to bestbuy.com')).toBe('bestbuy.com');
