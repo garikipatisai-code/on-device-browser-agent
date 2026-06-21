@@ -44,4 +44,10 @@ describe('buildEvaluatorMessages — page-aware', () => {
     expect(sys).toMatch(/scratchpad|gathered|earlier turn/i);
     expect(sys).toMatch(/even if .*current page|moved on|later page|not .*FAIL .*because the current page/i);
   });
+
+  it('shows the evaluator the user’s standing preferences so it judges against them', () => {
+    const msgs = buildEvaluatorMessages({ ...baseCtx, preferences: 'Use city-proper figures, not metro.' }, 'r', step);
+    const user = msgs.find((m) => m.role === 'user')!.content;
+    expect(user).toContain('Use city-proper figures, not metro.');
+  });
 });

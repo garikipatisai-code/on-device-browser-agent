@@ -39,6 +39,9 @@ export interface Settings {
   /** JSON object of the user's data (name, email, etc.) used to fill application
    *  forms. Injected into the Executor context; never invented by the model. */
   profileJson?: string;
+  /** Durable, user-edited standing guidance injected into every run (planner/executor/evaluator),
+   *  e.g. "use city-proper population figures" or "prefer official sources". */
+  preferences?: string;
   cloud?: {
     provider?: 'deepseek' | 'anthropic';
     apiKey?: string;
@@ -62,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   visionModel: 'gemma4:e4b',
   domainTiers: {},
   profileJson: '',
+  preferences: '',
 };
 
 /** Treat a bare model name as equal to its `:latest` tag (Ollama's default). */

@@ -615,6 +615,7 @@ export class Orchestrator {
       scratchpad,
       profileBlock: renderProfileBlock(this.opts.settings.profileJson),
       steerNotes: this.steerNotes.length ? [...this.steerNotes] : undefined,
+      preferences: (this.opts.settings.preferences ?? '').trim() || undefined,
       pageContentBlock: this.lastRead
         ? wrapPageContent(
             `${this.lastRead.tool}${this.lastRead.url ? ` url=${this.lastRead.url}` : ''}`,

@@ -155,6 +155,26 @@ export function SettingsPanel({
         </div>
       </div>
 
+      {/* Standing preferences */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="plan" size={13} /> Standing preferences
+        </div>
+        <div className="field-hint">
+          Persistent guidance the agent honors on every task (planner, executor, and evaluator) — e.g. "use
+          city-proper population, not metro", "prefer official/primary sources", "I'm in the UK: use £ and UK
+          results". Stays on your machine.
+        </div>
+        <div className="field">
+          <textarea
+            rows={4}
+            value={local.preferences ?? ''}
+            onChange={(e) => update('preferences', e.target.value)}
+            placeholder={'e.g.\n- Use city-proper population, not metro\n- Prefer official or primary sources'}
+          />
+        </div>
+      </div>
+
       {/* Domain access */}
       <div className="card setting-group">
         <div className="card-title">
