@@ -47,3 +47,56 @@ describe('runPlanner — retry on an unusable plan (do not abort the task on a t
     expect(out.plan.steps[0].description).toBe('do it');
   });
 });
+
+describe('runPlanner — a recipe must not collapse a multi-part goal into a single step', () => {
+  // Live failure: a matched recipe seeded a 1-step plan ("search for all three in sequence") for a
+  // 3-city comparison → one combined search → a giant list page → wrong answer. When a recipe is
+  // injected but the plan comes back as a lone step, retry once WITHOUT the recipe so the planner
+  // decomposes the goal freely.
+  const onePlan = JSON.stringify({ steps: [{ description: 'search for all three in sequence', successCriteria: 'gathered' }] });
+  const richPlan = JSON.stringify({
+    steps: [
+      { description: 'find Austin population', successCriteria: 'a' },
+      { description: 'find Seattle population', successCriteria: 'b' },
+      { description: 'find Denver population', successCriteria: 'c' },
+      { description: 'compare and report', successCriteria: 'd' },
+    ],
+  });
+
+  it('retries WITHOUT the recipe on a lone-step recipe plan, adopting the richer decomposition', async () => {
+    const recipeSeen: boolean[] = [];
+    let calls = 0;
+    const ollama = makeFakeOllama(
+      { planner: [rawResponse({ content: onePlan }), rawResponse({ content: richPlan })] },
+      {
+        onChat: (_m, role, messages) => {
+          if (role !== 'planner') return;
+          calls++;
+          recipeSeen.push(messages.some((m) => /known-good sequence/i.test(m.content)));
+        },
+      },
+    );
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1. Search\n2. Report' });
+    expect(out.plan.steps.length).toBeGreaterThanOrEqual(3);
+    expect(calls).toBe(2);
+    expect(recipeSeen[0]).toBe(true); // first attempt carried the recipe
+    expect(recipeSeen[1]).toBe(false); // retry dropped it
+  });
+
+  it('keeps the single step if the recipe-free retry is no richer (never makes the plan worse)', async () => {
+    const ollama = makeFakeOllama({ planner: [rawResponse({ content: onePlan }), rawResponse({ content: onePlan })] });
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1. Search' });
+    expect(out.plan.steps.length).toBe(1);
+  });
+
+  it('does NOT do the recipe-free retry when no recipe was used (a lone-step plan stands)', async () => {
+    let calls = 0;
+    const ollama = makeFakeOllama(
+      { planner: [rawResponse({ content: onePlan })] },
+      { onChat: (_m, role) => { if (role === 'planner') calls++; } },
+    );
+    const out = await runPlanner({ ctx, model: 'm', ollama });
+    expect(out.plan.steps.length).toBe(1);
+    expect(calls).toBe(1);
+  });
+});
