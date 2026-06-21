@@ -89,6 +89,7 @@ describe('redesigned components render across states', () => {
     expect(open).toContain('Activity');
     expect(open).toContain('Planned 3 steps');
     expect(open).toContain('search');
+    expect(open).toContain('Copy steps'); // labeled (not icon-only) so the steps-copy is unmissable
     expect(renderToStaticMarkup(<Timeline events={[]} open onToggle={noop} />)).toBe('');
   });
 
