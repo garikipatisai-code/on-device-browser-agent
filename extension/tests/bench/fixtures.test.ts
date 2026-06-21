@@ -94,3 +94,44 @@ describe('adversarial distractor fixtures (semantic selection, not just groundin
     expect(score('spec-pick', 'The capacity is 30 litres.').correct).toBe(false);
   });
 });
+
+describe('wikipedia-compare fixture (consistent city-proper basis → Austin, no metro mixing)', () => {
+  // Locks in the live failure mode this hardening pass fixed: the agent used to compare one
+  // city's CITY-PROPER figure against another's METRO-area figure and wrongly crown Seattle.
+  // The honest, like-for-like answer compares each city's city-proper number → Austin (961,855).
+  const task = () => BENCH_TASKS.find((t) => t.id === 'wikipedia-compare');
+  // observed = the list page, which carries BOTH city and metro figures, so every number in any
+  // answer is "grounded" — only mustContain/mustNotContain can enforce the basis (grounding can't).
+  const observedText = () => task()?.pages.list.aria ?? '';
+  const score = (summary: string) =>
+    scoreRun(task()!.expect, { phase: 'DONE', verdict: 'success', turns: 6, replans: 0, summary, observedText: observedText() });
+
+  it('is registered', () => {
+    expect(task()).toBeTruthy();
+  });
+
+  it('accepts the city-proper comparison that names Austin largest (the live good answer)', () => {
+    expect(
+      score(
+        'Based on Wikipedia data:\n*   **Austin:** 961,855 (at the 2020 census)\n' +
+          '*   **Seattle:** 784,777 (in 2025)\n*   **Denver:** 715,522 (at the 2020 census)\n\n' +
+          'Austin is the largest city among the three.',
+      ),
+    ).toMatchObject({ correct: true, grounded: true });
+  });
+
+  it('rejects the metro-mixing answer that crowns Seattle (the historic failure)', () => {
+    const wrong = score(
+      'Seattle has the largest population — its metropolitan area is over 4.15 million, vs Austin metro 2.55 million.',
+    );
+    expect(wrong.correct).toBe(false); // missing the city-proper figures + never names Austin largest
+    expect(wrong.grounded).toBe(false); // metro figures + "Seattle largest" are on-page but the wrong basis
+  });
+
+  it('rejects the right-numbers/wrong-verdict answer (Seattle crowned despite city figures)', () => {
+    // All three city numbers present and grounded, but the conclusion is arithmetically wrong.
+    const wrong = score('Austin 961,855, Seattle 784,777, Denver 715,522 — Seattle is the largest.');
+    expect(wrong.correct).toBe(false); // "Austin … largest" not asserted
+    expect(wrong.grounded).toBe(false); // "Seattle … largest" trips mustNotContain
+  });
+});

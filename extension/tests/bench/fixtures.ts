@@ -298,4 +298,63 @@ export const BENCH_TASKS: BenchTask[] = [
       mustContain: [/1100|1,100/], // the weight; reporting capacity (30) or price (45) fails
     },
   },
+
+  {
+    id: 'wikipedia-compare',
+    goal: 'Using Wikipedia, compare the populations of Austin, Seattle, and Denver and tell me which is largest.',
+    // Regression guard for the live failure this hardening pass fixed: the agent used to compare
+    // one city's CITY-PROPER population against another's METRO-area figure and wrongly crown
+    // Seattle. The honest, like-for-like answer uses each city's own city-proper number → Austin
+    // (961,855) > Seattle (784,777) > Denver (715,522). Both the search snippets and the list page
+    // below carry city AND metro figures, so EVERY number is grounded — only mustContain /
+    // mustNotContain can enforce the consistent basis (the semantic axis grounding can't see),
+    // exactly like sale-price / spec-pick. A freshly opened result lands on `start`, so whichever
+    // result the model opens it reads the same list page; it can equally answer from the snippets.
+    start: 'list',
+    pages: {
+      list: {
+        url: 'https://en.wikipedia.org/wiki/List_of_United_States_cities_by_population',
+        aria:
+          `   heading "List of United States cities by population"\n` +
+          `   text "Ranked by city-proper population; metropolitan-area figures are listed separately."\n` +
+          `   text "Austin, Texas — city population 961,855 (2020 census); Austin metro area about 2.55 million."\n` +
+          `   text "Seattle, Washington — city population 784,777 (2025 estimate); Seattle metropolitan area over 4.15 million."\n` +
+          `   text "Denver, Colorado — city population 715,522 (2020 census); Denver metro area about 2.98 million."`,
+      },
+    },
+    transitions: [],
+    search: [
+      {
+        title: 'Austin, Texas - Wikipedia',
+        url: 'https://en.wikipedia.org/wiki/Austin,_Texas',
+        snippet:
+          'With a population of 961,855 at the 2020 census, it is the 12th-most populous city in the U.S., while the Austin metro area has an estimated 2.55 million residents.',
+      },
+      {
+        title: 'Seattle - Wikipedia',
+        url: 'https://en.wikipedia.org/wiki/Seattle',
+        snippet:
+          'It is the 18th-most populous city in the United States with a population of 784,777 in 2025, while the Seattle metropolitan area at over 4.15 million residents is the 15th-most populous in the nation.',
+      },
+      {
+        title: 'Denver - Wikipedia',
+        url: 'https://en.wikipedia.org/wiki/Denver',
+        snippet: 'Denver is the 19th-most populous city in the United States, with a population of 715,522 at the 2020 census.',
+      },
+    ],
+    expect: {
+      verdict: ['success'],
+      mustContain: [
+        /961,?855/, // Austin — city proper
+        /784,?777/, // Seattle — city proper
+        /715,?522/, // Denver — city proper
+        /austin\b[\s\S]{0,30}\b(largest|biggest|most populous|highest|greatest)/i, // …and Austin named largest
+      ],
+      mustNotContain: [
+        /seattle\b[\s\S]{0,30}\b(largest|biggest)/i, // the metro-mixing wrong verdict (Seattle crowned)
+        /2[.,]55\s*million/i, // metro figure → wrong / mixed basis
+        /4[.,]15\s*million/i,
+      ],
+    },
+  },
 ];
