@@ -225,7 +225,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 /* ---------- activity (timeline) ---------- */
 .activity { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
-.activity-head { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: var(--sp-3) var(--sp-4); background: none; border: none; cursor: pointer; color: var(--fg-mute); }
+.activity-head-row { display: flex; align-items: center; padding-right: var(--sp-2); }
+.activity-head { flex: 1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); background: none; border: none; cursor: pointer; color: var(--fg-mute); }
 .activity-head:hover { color: var(--fg); }
 .activity-head .chev { margin-left: auto; transition: transform 160ms; }
 .activity-head.open .chev { transform: rotate(90deg); }

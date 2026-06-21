@@ -127,6 +127,7 @@ export function Timeline({
   onToggle: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     const el = bodyRef.current;
     if (el && open) el.scrollTop = el.scrollHeight;
@@ -134,14 +135,36 @@ export function Timeline({
 
   if (events.length === 0) return null;
 
+  // Plain-text dump of the whole run, so it can be copied + shared even after the run ends.
+  const copyTrace = () => {
+    const text = events
+      .map((e) => {
+        const b = body(e);
+        return `${fmtTs(e.ts)}  ${title(e)}${b ? `\n    ${b.replace(/\n/g, '\n    ')}` : ''}`;
+      })
+      .join('\n');
+    navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => undefined,
+    );
+  };
+
   return (
     <div className="activity">
-      <button className={`activity-head ${open ? 'open' : ''}`} onClick={onToggle} aria-expanded={open}>
-        <Icon name="plan" size={14} />
-        <span>Activity</span>
-        <span className="activity-count">{events.length}</span>
-        <Icon name="chevron" size={14} className="chev" />
-      </button>
+      <div className="activity-head-row">
+        <button className={`activity-head ${open ? 'open' : ''}`} onClick={onToggle} aria-expanded={open}>
+          <Icon name="plan" size={14} />
+          <span>Activity</span>
+          <span className="activity-count">{events.length}</span>
+          <Icon name="chevron" size={14} className="chev" />
+        </button>
+        <button className="icon-btn" onClick={copyTrace} title="Copy the full activity log" aria-label="Copy activity log">
+          <Icon name={copied ? 'check' : 'copy'} size={14} />
+        </button>
+      </div>
       {open && (
         <div className="activity-body" ref={bodyRef}>
           {events.map((e, i) => (
