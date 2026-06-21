@@ -79,7 +79,10 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { margin: 0; padding: 0; height: 100vh; background: var(--bg); color: var(--fg); }
+/* height:100% (chained off the viewport), NOT 100vh: in a Chrome side panel 100vh can resolve to
+   the whole browser-window height, making .app taller than the panel so its overflow:hidden clips
+   the bottom (the Activity) with no way to scroll. 100% ties the chain to the actual panel height. */
+html, body, #root { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); }
 button, input, textarea, select { font: inherit; color: inherit; }
 ::selection { background: var(--accent-weak); }
 
