@@ -57,6 +57,8 @@ If a PROVEN RECIPE is given below, base your plan on it: turn each recipe step i
 
 Each step is a single browser action or observation. Prefer observing before acting (extract a page → decide → act). Keep 3–5 concrete steps for typical goals. The FINAL step must be to report the requested items AS THE ANSWER (e.g. "list the 3 products with names and prices"). Do NOT add vague "analyze", "re-evaluate", or "assume" steps.
 
+To COMPARE or look up several specific named things (cities, products, people), open and read EACH one's OWN page — one step per item — and pull the fact from its summary/infobox. This is far more reliable than parsing a single giant list or table page (small models lose rows in big tables). If the goal names a source ("using Wikipedia", "on Amazon"), every page you open MUST be on that source — never wander to another site.
+
 Do NOT bake specific or guessed URLs into steps — the Executor opens real URLs taken from the search results. Describe WHAT to open ("open the Amazon results page from the search output"), never a hand-written URL or a "navigate directly" instruction.`;
   const user = [
     `GOAL: ${ctx.goal}`,
