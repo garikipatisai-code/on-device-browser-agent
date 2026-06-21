@@ -99,6 +99,11 @@ export class Orchestrator {
   private turns = 0;
   // Consecutive fatal tool results — a hard block (e.g. tier denial) ends the run promptly.
   private consecutiveFatal = 0;
+  // Sticky (per-run) flag: the agent hit an action/tier denial at some point. Used to decide
+  // whether a later non-success exit should be SALVAGED from observedText — a give-up that
+  // follows a denial usually means the facts were already read (e.g. search snippets) and the
+  // model just fumbled the last mile, vs an honest "not found" (no denial → keep that verdict).
+  private sawActionDenial = false;
   // Observe-then-act gate: the observation tool used on the previous turn (blocked
   // on the next turn) and the step it applies to (reset when the step changes).
   private lastObserveTool: string | null = null;
@@ -125,6 +130,7 @@ export class Orchestrator {
     this.verifyAttempts = 0;
     this.turns = 0;
     this.consecutiveFatal = 0;
+    this.sawActionDenial = false;
     this.lastObserveTool = null;
     this.observeGateStep = null;
     clearSearchResults(); // don't let a prior task's results ground/block this one
@@ -169,8 +175,11 @@ export class Orchestrator {
         // Honest failures (blocked/failed) aren't fabrication risks. A 'partial' carries data,
         // so route it through the grounding gate too (flags an ungrounded number, no retry).
         if (fin.verdict !== 'success') {
-          const g = this.gateFinishSummary(fin.verdict, fin.summary);
-          return this.finishOk(hot, g.verdict, g.summary);
+          // But the model may be conceding defeat while observedText ALREADY holds the answer (it
+          // hit a read-only/tier denial after the facts were read). Prefer a grounded salvage over
+          // the defeatist message; preferSalvageOnDenial no-ops (keeps this verdict) if no denial
+          // occurred — so a genuine "not found" stays an honest blocked/failed.
+          return this.preferSalvageOnDenial(hot, this.gateFinishSummary(fin.verdict, fin.summary));
         }
         const v = this.verifyFinish(fin.summary);
         if (v.ok) {
@@ -227,13 +236,14 @@ export class Orchestrator {
       // A fatal tool result (blocked URL/scheme, tier denial) is unrecoverable; if the
       // executor keeps hitting one, stop promptly rather than burning turns to no-progress.
       if (execOut.result.fatal) {
+        this.sawActionDenial = true; // remember it, so a later give-up salvages from what was read
         this.consecutiveFatal += 1;
         if (this.consecutiveFatal >= 2) {
-          return this.finishOk(
-            hot,
-            'blocked',
-            `Blocked: ${(execOut.result.content ?? 'repeated unrecoverable tool error').slice(0, 500)}`,
-          );
+          // Salvage first: the facts may already be in observedText (e.g. read before the denials).
+          return this.preferSalvageOnDenial(hot, {
+            verdict: 'blocked',
+            summary: `Blocked: ${(execOut.result.content ?? 'repeated unrecoverable tool error').slice(0, 500)}`,
+          });
         }
       } else {
         this.consecutiveFatal = 0;
@@ -693,6 +703,25 @@ export class Orchestrator {
       return this.finishOk(hot, g.verdict, g.summary);
     }
     return this.abortNow(hot, reason);
+  }
+
+  /** A non-success exit AFTER an action/tier denial often means the agent gave up on the last
+   *  mile while the facts were ALREADY gathered (e.g. search snippets in observedText, then a
+   *  read-only click was denied). Prefer a grounded answer salvaged from what was read; fall back
+   *  to the honest blocked/failed result if nothing was gathered OR no denial occurred. Gating on
+   *  an actual denial keeps genuine "not found" finishes honest (they never salvage). */
+  private async preferSalvageOnDenial(
+    hot: AgentStateHot,
+    fallback: { verdict: string; summary: string },
+  ): Promise<RunResult> {
+    if (this.sawActionDenial) {
+      const salvaged = await this.synthesizeFromObserved(hot);
+      if (salvaged) {
+        const g = this.gateFinishSummary('partial', salvaged);
+        return this.finishOk(hot, g.verdict, g.summary);
+      }
+    }
+    return this.finishOk(hot, fallback.verdict, fallback.summary);
   }
 
   /** One model call that answers the goal from the observed corpus (everything read this task).
