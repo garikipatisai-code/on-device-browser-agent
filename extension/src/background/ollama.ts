@@ -228,7 +228,14 @@ function isRetryable(err: unknown): boolean {
 }
 
 function httpError(status: number, body: string): Error & { status: number } {
-  const err = new Error(`Ollama HTTP ${status}: ${body.slice(0, 256)}`) as Error & { status: number };
+  // 403 from Ollama almost always means it's running but rejecting the extension's request
+  // origin (it allows GET /api/tags but blocks POST /api/chat from a chrome-extension:// origin).
+  // Surface the fix instead of a bare status code.
+  const msg =
+    status === 403
+      ? `Ollama refused the request (403). It's running but blocking this extension's origin. Restart it allowing the extension: OLLAMA_ORIGINS='*' ollama serve (macOS app: launchctl setenv OLLAMA_ORIGINS "*", then reopen Ollama).`
+      : `Ollama HTTP ${status}: ${body.slice(0, 256)}`;
+  const err = new Error(msg) as Error & { status: number };
   err.status = status;
   return err;
 }
