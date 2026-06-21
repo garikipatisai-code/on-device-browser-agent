@@ -130,4 +130,15 @@ describe('action tools — read-back verification (no phantom success)', () => {
     expect(res.ok).toBe(true);
     expect(res.content).toMatch(/600/);
   });
+
+  it('tab.scroll works on a read-only domain (scrolling is reading, not acting)', async () => {
+    s.scrollBefore = 0;
+    s.scrollAfter = 600;
+    // read-only tier (no upgrade) used to throw "Cannot click-only" and strand the agent on long
+    // pages; scrolling must be allowed wherever the agent can read.
+    const readOnly = { settings: { domainTiers: {} }, signal: undefined } as unknown as ToolContext;
+    const res = await tabScrollTool.dispatch({ tabId: 5, direction: 'down' }, readOnly);
+    expect(res.ok).toBe(true);
+    expect(res.content).toMatch(/600/);
+  });
 });
