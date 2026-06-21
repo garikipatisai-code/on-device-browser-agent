@@ -78,6 +78,36 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
   if (steps.length === 0) {
     throw new Error(`Planner returned no usable steps. Raw: ${raw.slice(0, 200)}`);
   }
+  // A matched recipe can over-collapse a multi-part goal into a SINGLE step (observed live: a
+  // 3-city comparison planned as one "search for all three in sequence" step → one combined search
+  // → a giant list page → wrong answer). When a recipe was injected but the plan is a lone step,
+  // retry once WITHOUT the recipe, nudging the planner to decompose. Adopt it only if it is
+  // genuinely richer, so this can never make the plan worse (or empty).
+  if (steps.length === 1 && input.workflowRecipe) {
+    const decomposeMessages = [
+      ...buildPlannerMessages(input.ctx, input.replanContext), // no recipe this pass
+      {
+        role: 'user' as const,
+        content:
+          'That plan has only ONE step, but this goal has several distinct parts. Break it into 3–5 concrete steps — one per item/part (e.g. one step per city or product), ending with a step that reports the answer. Respond with ONLY {"steps":[{"description":"...","successCriteria":"..."}]}.',
+      },
+    ];
+    const r2 = await input.ollama.chatOnce({
+      model: input.model,
+      messages: decomposeMessages,
+      format: 'json',
+      thinking: true,
+      timeoutMs: input.timeoutMs ?? 300_000,
+      signal: input.signal,
+      numCtx: NUM_CTX,
+    });
+    const s2 = extractSteps(r2.message.content ?? '');
+    if (s2.length > steps.length) {
+      steps = s2;
+      raw = r2.message.content ?? '';
+      resp = r2;
+    }
+  }
   const plan = newPlan(
     steps.map((s) => ({
       description: s.description,
