@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   AgentStatus,
   MetricsSnapshot,
@@ -9,15 +9,22 @@ import type {
 } from '@/shared/messages';
 import { DEFAULT_SETTINGS } from '@/shared/messages';
 import { createPortClient, type PortClient } from './port';
+import { buildApplyGoal } from './apply';
+import { isRunning } from './view/phase';
+import { latestFinish } from './view/result';
+import { Brand } from './components/Brand';
+import { Tabs, type TabId } from './components/Tabs';
+import { Composer } from './components/Composer';
+import { RunState } from './components/RunState';
+import { ResultCard } from './components/ResultCard';
 import { Timeline } from './components/Timeline';
+import { Alert } from './components/Alert';
+import { Icon } from './components/Icon';
 import { SettingsPanel } from './components/SettingsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
-import { buildApplyGoal } from './apply';
-
-type Tab = 'agent' | 'settings' | 'metrics';
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('agent');
+  const [tab, setTab] = useState<TabId>('agent');
   const [goal, setGoal] = useState('');
   const [applyUrl, setApplyUrl] = useState('');
   const [status, setStatus] = useState<AgentStatus>({
@@ -34,8 +41,12 @@ export function App() {
   const [notice, setNotice] = useState<{ msg: string; kind: 'warn' | 'error' } | null>(null);
   const [installedModels, setInstalledModels] = useState<string[]>([]);
   const [extractingProfile, setExtractingProfile] = useState(false);
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(0);
+  const [activityOpen, setActivityOpen] = useState(false);
   const clientRef = useRef<PortClient | null>(null);
 
+  // ---- SW connection (contract: do not change message shapes) ----
   useEffect(() => {
     const c = (globalThis as { chrome?: typeof chrome }).chrome;
     if (!c?.runtime?.connect) {
@@ -51,8 +62,6 @@ export function App() {
           setEvents(msg.events);
           break;
         case 'append':
-          // Mirror the SW's own 1000-event cap so a long task can't grow the panel
-          // array unbounded between full 'timeline' resyncs.
           setEvents((prev) => [...prev, msg.event].slice(-1000));
           break;
         case 'settings':
@@ -84,19 +93,10 @@ export function App() {
             setNotice({ msg: msg.error ?? 'Profile extraction failed.', kind: 'error' });
           }
           break;
-        case 'resumeStored':
-          if (msg.ok) {
-            setNotice({ msg: `Résumé "${msg.name}" stored — the agent can attach it to applications.`, kind: 'warn' });
-          } else {
-            setNotice({ msg: msg.error ?? 'Could not store the résumé file.', kind: 'error' });
-          }
-          break;
         case 'preflight':
           if (!msg.ok) {
-            setNotice({
-              msg: `Preflight failed: ${JSON.stringify(msg.details).slice(0, 200)}`,
-              kind: 'warn',
-            });
+            const d = (msg.details ?? {}) as { error?: string; hint?: string };
+            setNotice({ msg: d.error ? `${d.error}${d.hint ? ` — ${d.hint}` : ''}` : 'Preflight failed.', kind: 'warn' });
           } else {
             setNotice(null);
           }
@@ -114,27 +114,28 @@ export function App() {
     };
   }, []);
 
-  const send = (cmd: PanelCommand) => {
-    clientRef.current?.send(cmd);
-  };
+  const send = (cmd: PanelCommand) => clientRef.current?.send(cmd);
+  const running = isRunning(status.phase);
 
-  const running = status.phase !== 'IDLE' && status.phase !== 'DONE' && status.phase !== 'ABORTED';
+  // Tick the elapsed clock once a second while a run is active; freeze it when it ends.
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
-  const phaseClass = useMemo(() => {
-    if (status.phase === 'ABORTED') return 'error';
-    if (status.phase === 'DONE') return 'done';
-    if (running) return 'running';
-    return '';
-  }, [status.phase, running]);
+  // Surface the live activity automatically when a run starts.
+  useEffect(() => {
+    if (running) setActivityOpen(true);
+  }, [running]);
 
   const handleStart = () => {
     const trimmed = goal.trim();
     if (!trimmed) return;
     setEvents([]);
     setNotice(null);
-    // agent.start runs its own preflight (ping + model check) and broadcasts the result, and the
-    // model dropdown is populated by models.list on mount — so a separate preflight send here is a
-    // redundant second ping+listModels round-trip with no UI benefit.
+    setRunStartedAt(Date.now());
     send({ type: 'agent.start', goal: trimmed });
   };
 
@@ -145,101 +146,87 @@ export function App() {
     setGoal(g);
     setEvents([]);
     setNotice(null);
-    send({ type: 'preflight' });
+    setRunStartedAt(Date.now());
     send({ type: 'agent.start', goal: g });
   };
 
   const handleAbort = () => send({ type: 'agent.abort' });
 
+  const finish = latestFinish(events);
+  const elapsedMs = runStartedAt ? Math.max(0, now - runStartedAt) : 0;
+  const stepCount = status.plan?.steps.length ?? null;
+  const showEmpty = !running && events.length === 0;
+
   return (
     <div className="app">
-      <div className="tabs">
-        <button className={`tab ${tab === 'agent' ? 'active' : ''}`} onClick={() => setTab('agent')}>
-          Agent
-        </button>
-        <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>
-          Settings
-        </button>
-        <button className={`tab ${tab === 'metrics' ? 'active' : ''}`} onClick={() => setTab('metrics')}>
-          Metrics
-        </button>
-      </div>
+      <Brand />
+      <Tabs tab={tab} onTab={setTab} />
 
-      {tab === 'agent' && (
-        <>
-          <div className="apply-row" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            <input
-              className="goal-input"
-              placeholder="Apply to a job: paste a Greenhouse/Lever job URL"
-              value={applyUrl}
-              onChange={(e) => setApplyUrl(e.target.value)}
-              disabled={running}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !running) handleApply();
-              }}
+      <div className="content" role="tabpanel">
+        {tab === 'agent' && (
+          <>
+            <Composer
+              running={running}
+              goal={goal}
+              onGoalChange={setGoal}
+              onRun={handleStart}
+              applyUrl={applyUrl}
+              onApplyUrlChange={setApplyUrl}
+              onApply={handleApply}
+              onStop={handleAbort}
+              showExamples={events.length === 0 && status.phase === 'IDLE'}
             />
-            <button className="btn" onClick={handleApply} disabled={running || !applyUrl.trim()}>
-              Apply
-            </button>
-          </div>
-          <div className="goal-row">
-            <input
-              className="goal-input"
-              placeholder="State a goal (e.g. find a wireless mouse under $30)"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              disabled={running}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !running) handleStart();
-              }}
-            />
-            {running ? (
-              <button className="btn btn-danger" onClick={handleAbort}>
-                Stop
-              </button>
-            ) : (
-              <button className="btn btn-primary" onClick={handleStart} disabled={!goal.trim()}>
-                Run
-              </button>
+
+            {notice && <Alert kind={notice.kind}>{notice.msg}</Alert>}
+
+            {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
+
+            {!running && finish && (
+              <ResultCard
+                verdict={finish.verdict}
+                summary={finish.summary}
+                steps={stepCount}
+                elapsedMs={elapsedMs}
+                replans={status.replanCount}
+              />
             )}
-          </div>
-          <div className="status-row">
-            <span>
-              Phase: <span className={`status-phase ${phaseClass}`}>{status.phase}</span>
-              {status.replanCount > 0 ? ` · replans: ${status.replanCount}` : ''}
-            </span>
-            <span>
-              Steps:{' '}
-              {status.plan
-                ? `${status.plan.steps.filter((s) => s.status === 'completed').length}/${
-                    status.plan.steps.length
-                  }`
-                : '—'}
-            </span>
-          </div>
-          {notice && <div className={`notice ${notice.kind}`}>{notice.msg}</div>}
-          <Timeline events={events} />
-        </>
-      )}
 
-      {tab === 'settings' && (
-        <SettingsPanel
-          settings={settings}
-          installedModels={installedModels}
-          onSave={(patch) => send({ type: 'settings.set', settings: patch })}
-          onTier={(host, tier) => send({ type: 'domainTier.set', host, tier })}
-          onRefreshModels={() => send({ type: 'models.list' })}
-          extractingProfile={extractingProfile}
-          onExtractProfile={(resumeText) => {
-            setExtractingProfile(true);
-            setNotice(null);
-            send({ type: 'profile.extract', resumeText });
-          }}
-          onStoreResume={(payload) => send({ type: 'resume.store', ...payload })}
-        />
-      )}
+            {showEmpty ? (
+              <div className="empty">
+                <div className="empty-mark">
+                  <Icon name="spark" size={22} />
+                </div>
+                <div className="empty-title">Ready when you are</div>
+                <div className="empty-text">
+                  State a goal and I'll handle the browsing — planning, reading pages, and reporting the
+                  answer. Everything runs on your machine.
+                </div>
+              </div>
+            ) : (
+              <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
+            )}
+          </>
+        )}
 
-      {tab === 'metrics' && <MetricsPanel metrics={metrics} />}
+        {tab === 'settings' && (
+          <SettingsPanel
+            settings={settings}
+            installedModels={installedModels}
+            onSave={(patch) => send({ type: 'settings.set', settings: patch })}
+            onTier={(host, tier) => send({ type: 'domainTier.set', host, tier })}
+            onRefreshModels={() => send({ type: 'models.list' })}
+            extractingProfile={extractingProfile}
+            onExtractProfile={(resumeText) => {
+              setExtractingProfile(true);
+              setNotice(null);
+              send({ type: 'profile.extract', resumeText });
+            }}
+            onStoreResume={(payload) => send({ type: 'resume.store', ...payload })}
+          />
+        )}
+
+        {tab === 'metrics' && <MetricsPanel metrics={metrics} />}
+      </div>
     </div>
   );
 }

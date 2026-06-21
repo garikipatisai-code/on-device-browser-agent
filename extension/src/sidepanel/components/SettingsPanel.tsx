@@ -3,6 +3,7 @@ import type { DomainTier, Settings } from '@/shared/messages';
 import { sameModel } from '@/shared/messages';
 import { extractResumeText } from '../resume';
 import { fileToBase64 } from '../file_bytes';
+import { Icon } from './Icon';
 
 interface Props {
   settings: Settings;
@@ -16,6 +17,8 @@ interface Props {
 }
 
 type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
+
+const TIERS: DomainTier[] = ['read-only', 'click-only', 'full-action'];
 
 export function SettingsPanel({
   settings,
@@ -32,164 +35,180 @@ export function SettingsPanel({
   const [newTier, setNewTier] = useState<DomainTier>('read-only');
   const [resumeMsg, setResumeMsg] = useState('');
 
-  // Sync the profile box when the SW returns an extracted profile (settings prop updates).
   useEffect(() => {
     setLocal((s) => ({ ...s, profileJson: settings.profileJson }));
   }, [settings.profileJson]);
 
-  const update = <K extends keyof Settings>(k: K, v: Settings[K]) =>
-    setLocal((s) => ({ ...s, [k]: v }));
+  const update = <K extends keyof Settings>(k: K, v: Settings[K]) => setLocal((s) => ({ ...s, [k]: v }));
 
   const isInstalled = (name: string) =>
     installedModels.length === 0 || installedModels.some((m) => sameModel(m, name));
+  const connected = installedModels.length > 0;
 
   const modelField = (key: ModelKey, label: string) => {
     const value = local[key] as string;
     const known = isInstalled(value);
     return (
       <div className="field" key={key}>
-        <label>{label}</label>
+        <div className="row-between">
+          <span className="field-label">{label}</span>
+          <span className={`model-chip ${known ? 'on' : 'off'}`}>
+            <Icon name={known ? 'check' : 'alert'} size={10} /> {known ? 'installed' : 'not pulled'}
+          </span>
+        </div>
         <input
           list="installed-models"
           value={value}
           onChange={(e) => update(key, e.target.value as Settings[ModelKey])}
           style={!known ? { borderColor: 'var(--warn)' } : undefined}
         />
-        {!known && (
-          <div style={{ fontSize: 10, color: 'var(--warn)', marginTop: 2 }}>
-            Not in your installed list — pull it or pick one below.
-          </div>
-        )}
       </div>
     );
   };
 
   return (
     <div className="settings">
-      <div className="section-head">Ollama</div>
-      <div className="field">
-        <label>Base URL</label>
-        <input value={local.ollamaBaseUrl} onChange={(e) => update('ollamaBaseUrl', e.target.value)} />
+      {/* Connection */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="globe" size={13} /> Connection
+        </div>
+        <div className="field">
+          <span className="field-label">Ollama base URL</span>
+          <input value={local.ollamaBaseUrl} onChange={(e) => update('ollamaBaseUrl', e.target.value)} />
+        </div>
+        <div className="row-between">
+          <span className="field-hint">
+            <span className={`status-dot ${connected ? 'on' : 'off'}`} style={{ display: 'inline-block', marginRight: 6 }} />
+            {connected ? `${installedModels.length} model(s) installed` : 'No models detected — start "ollama serve"'}
+          </span>
+          <button className="btn btn-sm" onClick={onRefreshModels}>
+            <Icon name="spinner" size={12} /> Refresh
+          </button>
+        </div>
       </div>
 
-      <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Models</span>
-        <button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={onRefreshModels}>
-          ↻ Refresh installed
-        </button>
+      {/* Models */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="spark" size={13} /> Models
+        </div>
+        <datalist id="installed-models">
+          {installedModels.map((m) => (
+            <option value={m} key={m} />
+          ))}
+        </datalist>
+        {modelField('plannerModel', 'Planner')}
+        {modelField('executorModel', 'Executor')}
+        {modelField('evaluatorModel', 'Evaluator')}
+        {modelField('compactorModel', 'Compactor')}
+        {modelField('visionModel', 'Vision (multimodal)')}
+        {modelField('embeddingModel', 'Embeddings')}
       </div>
 
-      {/* Shared autocomplete source: whatever `ollama list` returned. */}
-      <datalist id="installed-models">
-        {installedModels.map((m) => (
-          <option value={m} key={m} />
-        ))}
-      </datalist>
-
-      <div style={{ fontSize: 11, color: 'var(--fg-mute)', marginBottom: 8 }}>
-        {installedModels.length > 0
-          ? `${installedModels.length} model(s) installed: ${installedModels.join(', ')}`
-          : 'No installed models detected. Start "ollama serve" and click Refresh.'}
-      </div>
-
-      {modelField('plannerModel', 'Planner (thinking ON, ~32K ctx)')}
-      {modelField('executorModel', 'Executor (thinking OFF, ≤6K ctx)')}
-      {modelField('evaluatorModel', 'Evaluator (thinking ON, ~8K ctx)')}
-      {modelField('compactorModel', 'Compactor (fast, local only)')}
-      {modelField('visionModel', 'Vision (multimodal — reads pages by screenshot)')}
-      {modelField('embeddingModel', 'Embeddings')}
-
-      <div className="section-head" style={{ marginTop: 16 }}>Profile (for filling forms)</div>
-      <div style={{ fontSize: 11, color: 'var(--fg-mute)', marginBottom: 8 }}>
-        Upload a résumé (.pdf / .docx / .txt) and the model fills this in — or edit the JSON directly. The file is also stored so the agent can attach it to an application form.
-      </div>
-      <div className="field">
-        <input
-          type="file"
-          accept=".pdf,.docx,.txt,.md,.html"
-          disabled={extractingProfile}
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = ''; // allow re-selecting the same file
-            if (!file) return;
-            setResumeMsg('Reading file…');
-            try {
-              const base64 = await fileToBase64(file);
-              onStoreResume({ name: file.name, mime: file.type || 'application/octet-stream', base64 });
-              const text = await extractResumeText(file);
-              if (!text.trim()) {
-                setResumeMsg('Stored the file. No text found to auto-fill the profile (a scanned PDF needs OCR).');
-                return;
+      {/* Profile */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="flag" size={13} /> Profile (for filling forms)
+        </div>
+        <div className="field-hint">
+          Upload a résumé (.pdf / .docx / .txt) and the model fills this in — or edit the JSON. The file is
+          also stored so the agent can attach it to an application.
+        </div>
+        <div className="field">
+          <input
+            type="file"
+            accept=".pdf,.docx,.txt,.md,.html"
+            disabled={extractingProfile}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              setResumeMsg('Reading file…');
+              try {
+                const base64 = await fileToBase64(file);
+                onStoreResume({ name: file.name, mime: file.type || 'application/octet-stream', base64 });
+                const text = await extractResumeText(file);
+                if (!text.trim()) {
+                  setResumeMsg('Stored the file. No text found to auto-fill (a scanned PDF needs OCR).');
+                  return;
+                }
+                setResumeMsg('Extracting profile with the model…');
+                onExtractProfile(text);
+              } catch (err) {
+                setResumeMsg(`Error: ${(err as Error).message}`);
               }
-              setResumeMsg('Extracting profile with the model…');
-              onExtractProfile(text);
-            } catch (err) {
-              setResumeMsg(`Error: ${(err as Error).message}`);
-            }
-          }}
-        />
-        {(resumeMsg || extractingProfile) && (
-          <div style={{ fontSize: 11, color: 'var(--fg-mute)', marginTop: 4 }}>
-            {extractingProfile ? 'Extracting profile with the model…' : resumeMsg}
+            }}
+          />
+          {(resumeMsg || extractingProfile) && (
+            <div className="field-hint">{extractingProfile ? 'Extracting profile with the model…' : resumeMsg}</div>
+          )}
+        </div>
+        <div className="field">
+          <textarea
+            rows={6}
+            value={local.profileJson ?? ''}
+            onChange={(e) => update('profileJson', e.target.value)}
+            placeholder={'{\n  "name": "Jane Doe",\n  "email": "jane@example.com",\n  "phone": "555-0100"\n}'}
+            style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}
+          />
+        </div>
+      </div>
+
+      {/* Domain access */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="lock" size={13} /> Domain access
+        </div>
+        <div className="field-hint">
+          Unknown hosts are <code>read-only</code>. The agent cannot click or type until you upgrade a host.
+        </div>
+        {Object.entries(local.domainTiers).map(([host, tier]) => (
+          <div className="domain-row" key={host}>
+            <input value={host} readOnly />
+            <select
+              value={tier}
+              onChange={(e) => {
+                const t = e.target.value as DomainTier;
+                onTier(host, t);
+                setLocal((s) => ({ ...s, domainTiers: { ...s.domainTiers, [host]: t } }));
+              }}
+            >
+              {TIERS.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
-      </div>
-      <div className="field">
-        <textarea
-          rows={6}
-          value={local.profileJson ?? ''}
-          onChange={(e) => update('profileJson', e.target.value)}
-          placeholder={'{\n  "name": "Jane Doe",\n  "email": "jane@example.com",\n  "phone": "555-0100",\n  "location": "Austin, TX",\n  "experience": "5 years ..."\n}'}
-          style={{ width: '100%', fontFamily: 'monospace', fontSize: 11 }}
-        />
-      </div>
-
-      <button className="btn btn-primary" onClick={() => onSave(local)}>
-        Save settings
-      </button>
-
-      <div className="section-head" style={{ marginTop: 24 }}>
-        Domain tiers
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--fg-mute)', marginBottom: 8 }}>
-        Unknown hosts default to <code>read-only</code>. The agent cannot click or type until you
-        upgrade a domain here.
-      </div>
-      {Object.entries(local.domainTiers).map(([host, tier]) => (
-        <div className="domain-row" key={host}>
-          <input value={host} readOnly />
-          <select
-            value={tier}
-            onChange={(e) => {
-              const t = e.target.value as DomainTier;
-              onTier(host, t);
-              setLocal((s) => ({ ...s, domainTiers: { ...s.domainTiers, [host]: t } }));
+        ))}
+        <div className="domain-row">
+          <input placeholder="example.com" value={newHost} onChange={(e) => setNewHost(e.target.value)} />
+          <select value={newTier} onChange={(e) => setNewTier(e.target.value as DomainTier)}>
+            {TIERS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              const h = newHost.trim().toLowerCase();
+              if (!h) return;
+              onTier(h, newTier);
+              setLocal((s) => ({ ...s, domainTiers: { ...s.domainTiers, [h]: newTier } }));
+              setNewHost('');
             }}
           >
-            <option value="read-only">read-only</option>
-            <option value="click-only">click-only</option>
-            <option value="full-action">full-action</option>
-          </select>
+            <Icon name="plus" size={12} /> Add
+          </button>
         </div>
-      ))}
-      <div className="domain-row">
-        <input placeholder="example.com" value={newHost} onChange={(e) => setNewHost(e.target.value)} />
-        <select value={newTier} onChange={(e) => setNewTier(e.target.value as DomainTier)}>
-          <option value="read-only">read-only</option>
-          <option value="click-only">click-only</option>
-          <option value="full-action">full-action</option>
-        </select>
-        <button
-          className="btn"
-          onClick={() => {
-            const h = newHost.trim().toLowerCase();
-            if (!h) return;
-            onTier(h, newTier);
-            setLocal((s) => ({ ...s, domainTiers: { ...s.domainTiers, [h]: newTier } }));
-            setNewHost('');
-          }}
-        >
-          Add
+      </div>
+
+      <div className="save-bar">
+        <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => onSave(local)}>
+          <Icon name="check" size={14} /> Save settings
         </button>
       </div>
     </div>
