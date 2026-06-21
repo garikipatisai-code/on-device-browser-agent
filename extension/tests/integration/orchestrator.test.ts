@@ -1008,3 +1008,48 @@ describe('orchestrator — ask-page fast path (seeded plan skips the planner + c
     expect(fin.sources).toContain('https://shop.example/p'); // citation surfaced
   });
 });
+
+describe('orchestrator — salvages an answer from what it read instead of giving up empty', () => {
+  it('on a give-up (max replans), synthesizes a grounded partial answer from everything observed', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return {
+          ok: true,
+          content: 'Austin population 975000. Seattle population 785000. Denver population 716000.',
+          data: { url: 'https://en.wikipedia.org/wiki/Austin,_Texas' },
+        };
+      },
+    });
+    // Read the data once, then repeat a no-op until the action-repeat breaker trips → with
+    // maxReplans:1 that's an immediate give-up. The data is already in observedText by then.
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'gather and compare', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: 'x' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: 'x' } }] }),
+        rawResponse({ toolCalls: [{ name: 'noop', args: { note: 'x' } }] }),
+      ],
+      evaluator: [],
+      // The final synthesis call (a non-role prompt → 'unknown') answers from the gathered notes.
+      unknown: [rawResponse({ content: 'Austin has the largest population at 975000, ahead of Seattle (785000) and Denver (716000).' })],
+    });
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: () => undefined,
+      maxReplans: 1,
+      maxStepTurns: 8,
+    });
+    const result = await orch.runUntilTerminal(await orch.start('compare Austin, Seattle, Denver populations'));
+
+    expect(result.verdict).toBe('partial'); // salvaged — NOT 'aborted' with no answer
+    expect(result.summary).toContain('Austin');
+    expect(result.summary).toContain('975000');
+  });
+});
