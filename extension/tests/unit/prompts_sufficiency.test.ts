@@ -83,3 +83,19 @@ describe('standing preferences injection', () => {
     expect(user).not.toMatch(/STANDING PREFERENCES/);
   });
 });
+
+// The list-page trap: a COMBINED query ("Austin Seattle Denver population") returns a ranked
+// "List of…" page a 4B can't read row-by-row. Per-item queries put each fact in its own snippet.
+describe('per-item search queries (avoid the combined-query list-page trap)', () => {
+  it('planner: search ONE item per query, never a combined query', () => {
+    const sys = buildPlannerMessages(ctx)[0].content;
+    expect(sys).toMatch(/one item per query/i);
+    expect(sys).toMatch(/combined query|never .*combin/i);
+  });
+
+  it('executor: search just the one item, not all of them at once', () => {
+    const sys = buildExecutorMessages(ctx)[0].content;
+    expect(sys).toMatch(/one item per query|search just that item/i);
+    expect(sys).toMatch(/list|ranking/i);
+  });
+});
