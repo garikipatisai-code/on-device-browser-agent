@@ -150,6 +150,7 @@ Output: ONLY a JSON object of the form:
 {"verdict":"PASS"|"FAIL","reason":"specific evidence","shouldReplan":true|false,"finishVerdict":"success"|"blocked"|"failed"|null,"finishSummary":string|null}
 
 - Judge the RESULT, not the path. The Executor often does MORE than the active step in one turn (it may already have searched, clicked, or reached a later stage) — that is GOOD. If the step's criteria are met OR already surpassed, verdict PASS. NEVER FAIL or replan just because extra actions were taken, the step was "overshot", or the agent is ahead of the plan.
+- The agent gathers a step's data and then MOVES ON to later steps. CHECK THE SCRATCHPAD + ACTIONS below — they log what was gathered on earlier turns. A step is DONE (PASS) if its objective appears anywhere there, even if CURRENT PAGE CONTENT is now a different/later page (e.g. the step wanted Austin's population, the scratchpad shows it was extracted, and the agent has since moved on to Denver → PASS, not FAIL). Do NOT FAIL a step just because the current page moved on; FAIL only if its data was NEVER gathered this task.
 - shouldReplan=true ONLY for a wrong overall approach (wrong site, a genuine dead end) — NEVER for overshoot, extra steps, or a single failed action.
 - An error/empty page is NOT success: if the page shows "Page Not Found"/404, "no results", a captcha, a login wall, or near-empty content, the step FAILED — verdict FAIL. Never rationalize an error or empty page as a pass.
 - VERIFY against the page: CURRENT PAGE CONTENT below (when present) is the ACTUAL page. If the result asserts a specific fact, number, or rating that is NOT present there, the step has NOT succeeded — verdict FAIL and name the unsupported claim. Never trust the executor's summary over the page.
@@ -162,6 +163,7 @@ Output: ONLY a JSON object of the form:
     `ACTIVE STEP: ${step.description}`,
     `SUCCESS CRITERIA: ${step.successCriteria}`,
     ctx.recentActions ? `ACTIONS TAKEN THIS STEP (judge the whole sequence, not just the last):\n${ctx.recentActions}` : '',
+    ctx.scratchpad ? `SCRATCHPAD (everything gathered so far this task — earlier turns' reads + findings; a step counts as DONE if its data appears here, even if the current page has moved on):\n${ctx.scratchpad}` : '',
     `MOST RECENT EXECUTOR OUTPUT:\n${lastResult.slice(0, 4_000)}`,
     ctx.pageContentBlock
       ? `CURRENT PAGE CONTENT (the actual page — verify the result's claims against THIS, not the executor's words):\n${ctx.pageContentBlock}`
