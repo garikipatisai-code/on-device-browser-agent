@@ -36,12 +36,21 @@ describe('redesigned components render across states', () => {
 
   it('Composer renders the goal field, an example chip, and the mode toggles', () => {
     const html = renderToStaticMarkup(
-      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onStop={noop} showExamples />,
+      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples />,
     );
     expect(html).toContain('State a goal');
     expect(html).toContain('Run');
     expect(html).toMatch(/Apply to a job/i);
     expect(html).toMatch(/Ask about this page/i);
+    expect(html).not.toMatch(/Steer the running task/i); // steer only appears while running
+  });
+
+  it('Composer shows the steer input while a task is running (mid-run redirect)', () => {
+    const html = renderToStaticMarkup(
+      <Composer running goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples={false} />,
+    );
+    expect(html).toMatch(/Steer the running task/i); // the steer field
+    expect(html).toMatch(/Stop/); // and the stop button
   });
 
   it('RunState renders the human phase label + every plan step', () => {

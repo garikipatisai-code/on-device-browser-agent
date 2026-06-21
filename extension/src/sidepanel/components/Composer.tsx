@@ -18,6 +18,7 @@ interface Props {
   onApplyUrlChange: (v: string) => void;
   onApply: () => void;
   onAskPage: (question: string) => void;
+  onSteer: (text: string) => void;
   onStop: () => void;
   showExamples: boolean;
 }
@@ -31,11 +32,13 @@ export function Composer({
   onApplyUrlChange,
   onApply,
   onAskPage,
+  onSteer,
   onStop,
   showExamples,
 }: Props) {
   const [mode, setMode] = useState<Mode>('goal');
   const [question, setQuestion] = useState('');
+  const [steerText, setSteerText] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Auto-grow the goal textarea (1→~4 lines) as the user types.
@@ -45,6 +48,31 @@ export function Composer({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [goal, mode]);
+
+  const sendSteer = () => {
+    const t = steerText.trim();
+    if (!t) return;
+    onSteer(t);
+    setSteerText('');
+  };
+
+  // While a task runs, let the user redirect it WITHOUT aborting (Hermes-style "steer").
+  const SteerRow = running ? (
+    <div className="composer-field steer-row">
+      <input
+        className="composer-input"
+        placeholder="Steer the running task — e.g. search each city separately"
+        value={steerText}
+        onChange={(e) => setSteerText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && steerText.trim()) sendSteer();
+        }}
+      />
+      <button className="btn btn-ghost btn-sm" onClick={sendSteer} disabled={!steerText.trim()} title="Add guidance to the running task">
+        <Icon name="cursor" size={13} /> Steer
+      </button>
+    </div>
+  ) : null;
 
   const StopBtn = (
     <button className="btn btn-danger" onClick={onStop}>
@@ -74,6 +102,7 @@ export function Composer({
             </button>
           )}
         </div>
+        {SteerRow}
         <div className="field-hint">Reads your current tab on-device — the page never leaves your machine.</div>
         <button className="apply-toggle" onClick={() => setMode('goal')} disabled={running}>
           <Icon name="chevron" size={13} /> Back to a goal
@@ -104,6 +133,7 @@ export function Composer({
             </button>
           )}
         </div>
+        {SteerRow}
         <button className="apply-toggle" onClick={() => setMode('goal')} disabled={running}>
           <Icon name="chevron" size={13} /> Back to a goal
         </button>
@@ -137,6 +167,8 @@ export function Composer({
           </button>
         )}
       </div>
+
+      {SteerRow}
 
       {showExamples && !running && (
         <div className="chips">

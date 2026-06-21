@@ -38,6 +38,17 @@ export interface CommonContext {
   recentActions?: string;
   pageContentBlock?: string;
   profileBlock?: string;
+  /** Corrections the user injected mid-task ("steer"). Surfaced as high-priority guidance. */
+  steerNotes?: string[];
+}
+
+/** Render mid-task user corrections as a high-priority guidance block (empty string when none,
+ *  so the caller's `.filter(Boolean)` drops it). The user is trusted — this refines the GOAL. */
+function steerBlock(notes?: string[]): string {
+  if (!notes || !notes.length) return '';
+  return `USER GUIDANCE (the user added this mid-task — follow it; it refines the GOAL above):\n${notes
+    .map((n) => `- ${n}`)
+    .join('\n')}`;
 }
 
 export function buildPlannerMessages(ctx: CommonContext, extra?: string, workflowRecipe?: string): ChatMessage[] {
@@ -62,6 +73,7 @@ To COMPARE or look up several specific named things (cities, products, people), 
 Do NOT bake specific or guessed URLs into steps — the Executor opens real URLs taken from the search results. Describe WHAT to open ("open the Amazon results page from the search output"), never a hand-written URL or a "navigate directly" instruction.`;
   const user = [
     `GOAL: ${ctx.goal}`,
+    steerBlock(ctx.steerNotes),
     workflowRecipe ? `PROVEN RECIPE (a known-good sequence for a task like this — build your plan from it):\n${workflowRecipe}` : '',
     `TOOLS:\n${ctx.toolCatalog}`,
     SAFETY_RULES,
@@ -105,6 +117,7 @@ Rules:
 ${SAFETY_RULES}`;
   const lines = [
     `GOAL: ${ctx.goal}`,
+    steerBlock(ctx.steerNotes),
     `TOOLS:\n${ctx.toolCatalog}`,
     tabsList(ctx.ownedTabs),
     planText(ctx.plan, ctx.currentStepId),

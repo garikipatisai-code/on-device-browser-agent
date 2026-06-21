@@ -35,3 +35,27 @@ describe('information-sufficiency gating (answer from a search snippet, skip the
     expect(sys).toMatch(/each|per[- ]?item|one step per/i);
   });
 });
+
+// Mid-task "steer": the user corrects a running task without aborting it; the correction must
+// surface as high-priority guidance on the next executor turn (and on any replan).
+describe('steer guidance injection (Hermes-inspired interrupt-and-redirect)', () => {
+  it('executor: surfaces a mid-task steer as guidance the model must follow', () => {
+    const user = buildExecutorMessages({ ...ctx, steerNotes: ['search each city separately'] }).find(
+      (m) => m.role === 'user',
+    )!.content;
+    expect(user).toMatch(/guidance|steer/i);
+    expect(user).toContain('search each city separately');
+  });
+
+  it('executor: no guidance block when there are no steer notes', () => {
+    const user = buildExecutorMessages(ctx).find((m) => m.role === 'user')!.content;
+    expect(user).not.toMatch(/USER GUIDANCE/);
+  });
+
+  it('planner: also surfaces steer notes so a replan honors the correction', () => {
+    const user = buildPlannerMessages({ ...ctx, steerNotes: ['use each city-proper figure'] }).find(
+      (m) => m.role === 'user',
+    )!.content;
+    expect(user).toContain('use each city-proper figure');
+  });
+});
