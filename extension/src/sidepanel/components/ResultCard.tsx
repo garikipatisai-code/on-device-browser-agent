@@ -1,6 +1,19 @@
-import { useState } from 'react';
+import { Fragment, type ReactNode, useState } from 'react';
 import { describeVerdict, formatElapsed } from '../view/format';
 import { Icon, type IconName } from './Icon';
+
+/** Lightweight rich rendering of an answer (no markdown dependency): normalize literal "\n"/"\t"
+ *  some models emit as text, render **bold**, and keep real newlines (the container is pre-wrap). */
+function renderRich(text: string): ReactNode {
+  const normalized = text.replace(/\\n/g, '\n').replace(/\\t/g, '  ');
+  return normalized.split(/(\*\*[^*\n]+\*\*)/g).map((part, i) =>
+    /^\*\*[^*\n]+\*\*$/.test(part) ? (
+      <strong key={i}>{part.slice(2, -2)}</strong>
+    ) : (
+      <Fragment key={i}>{part}</Fragment>
+    ),
+  );
+}
 
 /** Heroes the agent's answer when a run finishes: verdict badge + summary + copy + meta. */
 export function ResultCard({
@@ -23,7 +36,7 @@ export function ResultCard({
   const icon: IconName = v.tone === 'ok' ? 'check' : v.tone === 'error' ? 'x' : 'flag';
 
   const copy = () => {
-    navigator.clipboard?.writeText(summary).then(
+    navigator.clipboard?.writeText(summary.replace(/\\n/g, '\n')).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -47,7 +60,7 @@ export function ResultCard({
           <Icon name={icon} size={13} /> {v.label}
         </span>
       </div>
-      <div className="result-summary">{summary}</div>
+      <div className="result-summary">{renderRich(summary)}</div>
       {sources.length > 0 && (
         <div className="result-sources">
           <Icon name="globe" size={12} />

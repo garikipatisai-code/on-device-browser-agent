@@ -64,6 +64,15 @@ describe('redesigned components render across states', () => {
     expect(html).toContain('shop.example');
   });
 
+  it('ResultCard renders **bold** and literal \\n as formatting, not raw markup', () => {
+    const html = renderToStaticMarkup(
+      <ResultCard verdict="partial" summary={'Line one.\\n\\n**Seattle** is largest.'} steps={1} elapsedMs={0} replans={0} />,
+    );
+    expect(html).toContain('<strong>Seattle</strong>'); // bold rendered
+    expect(html).not.toContain('**Seattle**'); // raw markdown gone
+    expect(html).not.toContain('\\n'); // literal escape normalized away
+  });
+
   it('ResultCard tones partial/blocked/failed correctly', () => {
     expect(renderToStaticMarkup(<ResultCard verdict="partial" summary="x" steps={1} elapsedMs={0} replans={0} />)).toContain('Partial');
     expect(renderToStaticMarkup(<ResultCard verdict="blocked" summary="x" steps={1} elapsedMs={0} replans={0} />)).toContain('Blocked');

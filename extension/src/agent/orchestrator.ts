@@ -703,7 +703,7 @@ export class Orchestrator {
           {
             role: 'system',
             content:
-              "Answer the user's GOAL using ONLY the notes gathered while browsing (below). State the answer directly and concisely. Use only facts present in the notes — never invent a number or name. If the notes don't fully answer the GOAL, give the best partial answer and say what's missing.",
+              "Answer the user's GOAL using ONLY the notes gathered while browsing (below). State the answer directly and concisely. Use only facts present in the notes — never invent a number or name. If the GOAL is a comparison, use the SAME basis for every item (e.g. each city's primary 'city' population — do NOT mix city and metro-area figures). If the notes don't fully answer the GOAL, give the best partial answer and say what's missing.",
           },
           {
             role: 'user',
