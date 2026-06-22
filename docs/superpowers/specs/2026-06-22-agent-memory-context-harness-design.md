@@ -60,11 +60,22 @@ A small in-memory ledger in the orchestrator, mirrored to the existing findings 
 - *Rejected — `record_fact` tool:* a 4B unreliably remembers to call it, and it grows the tool catalog (token cost + misuse surface).
 - *Deferred backstop — deterministic snippet capture:* no LLM, but crude extraction. Available later if evaluator capture proves too sparse.
 
+## Context window — configurable, staged, hardware-gated (Phase 2)
+
+Long-horizon tasks benefit from a larger window *in addition to* the ledger (the ledger fixes fact-retention at any window size; a bigger window gives it headroom before any cap bites). gemma4:e4b supports up to 131072 (`budget.ts:9`), and its sliding-window attention keeps the KV cache far below a naive transformer's. But the target box is 16 GB and `budget.ts:9` warns: *"if KV alloc exceeds VRAM, e4b fails to load and every task breaks."* This sandbox cannot reach Ollama, so VRAM headroom **must be verified by the user on the box** with `ollama ps` — it cannot be measured here.
+
+Therefore the window raise is **configurable and reversible**, not a hardcoded bump:
+
+- `NUM_CTX` becomes a setting (`settings.numCtx`), **default 32768** (the proven value) — `budget.ts` reads it with that fallback.
+- Per-role `BUDGETS` and the raw page/observed caps **derive from `numCtx`** (proportional), so raising the window scales the curated window coherently. `COMPACT_TRIGGER_FRAC` (0.8) is unchanged.
+- The user escalates **32K → 64K → 128K**, verifying each with `ollama ps` (model stays ~100% GPU, no CPU spill, a real long task completes). If a level won't load or spills, the setting reverts instantly — no rebuild.
+- Ships **after** the ledger. The ledger carries zero hardware risk; the window change defaults to today's behavior until the user opts up.
+
 ## Explicitly NOT changing (intentional prior decisions)
 
 - **Page content stays last in the prompt** (`prompts/index.ts:141-143`) — a deliberate recency placement (the carry-forward fix). Not reordered.
-- **`num_ctx` stays 32768** (`budget.ts:12`) — fixed per standing constraint.
-- **Compaction trigger is not lowered** — the ledger sidesteps the need for lossy 4B summarization.
+- **`num_ctx` default stays 32768** — only the *ceiling* becomes user-raisable; the proven default is untouched until the user verifies headroom.
+- **Compaction trigger fraction is not lowered** — the ledger sidesteps the need for lossy 4B summarization.
 - The lower-tier audit items (semantic tool-arg retry, table-aware truncation, bigger recent-actions window, `overBudget` enforcement) are **out of scope** for this pass.
 
 ## Components & isolation
@@ -84,7 +95,8 @@ Each unit is independently testable: ledger render/cap/dedup is pure; grounding 
 - Evaluator: `fact` parsed from clean JSON; salvaged/absent from a truncated response → no entry.
 - Resume: rehydrate `this.facts` from persisted findings.
 - Integration: a 6-item comparison retains all 6 facts at the synthesis turn; an ungrounded mid-plan prose answer is blocked from advancing the plan.
+- Budget scaling: `BUDGETS` + page/observed caps derive correctly from `numCtx` (32768 default unchanged; a larger window scales them proportionally); unset/invalid `numCtx` falls back to 32768.
 
 ## Implementation notes
 
-TDD, branch per change, ff-merge. No new tools, no new model role, no catalog growth, `num_ctx` untouched. The change is additive: if every new path no-ops, the agent behaves exactly as today.
+TDD, branch per change, ff-merge. No new tools, no new model role, no catalog growth. Sequenced: ledger + grounding (Phase 1, no hardware risk) → configurable window (Phase 2, defaults to today's 32K). The change is additive: if every new path no-ops and `numCtx` stays default, the agent behaves exactly as today.
