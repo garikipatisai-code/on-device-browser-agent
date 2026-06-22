@@ -1146,7 +1146,7 @@ describe('orchestrator — user recipe trust/quarantine (the authored-recipe saf
 
 describe('orchestrator — clean-run recipe gate (only a frictionless success is taught back)', () => {
   const seedCount = async () => (await loadWorkflows()).length;
-  // search + finish both map to recipe steps (≥2), so what's tested is the GATE, not triviality.
+  // A navigational run (search → open_result → finish) is "worth learning"; pure search→report isn't.
   const withSearch = () => {
     const reg = buildRegistry();
     reg.register({
@@ -1155,6 +1155,14 @@ describe('orchestrator — clean-run recipe gate (only a frictionless success is
       argsSchema: z.object({ query: z.string() }),
       async dispatch() {
         return { ok: true, content: '1. Austin — pop 961,855', data: { results: [{ url: 'https://x/' }] } };
+      },
+    });
+    reg.register({
+      name: 'open_result',
+      description: 'open a result',
+      argsSchema: z.object({ index: z.number().int() }),
+      async dispatch() {
+        return { ok: true, content: 'opened', data: { tabId: 5, url: 'https://x/' } };
       },
     });
     return reg;
@@ -1166,6 +1174,7 @@ describe('orchestrator — clean-run recipe gate (only a frictionless success is
       planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'find it and report', successCriteria: 'done' }] }) })],
       executor: [
         rawResponse({ toolCalls: [{ name: 'search', args: { query: 'Austin population' } }] }),
+        rawResponse({ toolCalls: [{ name: 'open_result', args: { index: 1 } }] }), // navigated → worth learning
         rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Austin 961,855' } }] }),
       ],
       evaluator: [],
@@ -1173,7 +1182,23 @@ describe('orchestrator — clean-run recipe gate (only a frictionless success is
     const orch = new Orchestrator({ ollama, registry: withSearch(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
     const r = await orch.runUntilTerminal(await orch.start('do a clean thing'));
     expect(r.verdict).toBe('success');
-    expect(await seedCount()).toBe(before + 1); // a clean run is recorded
+    expect(await seedCount()).toBe(before + 1); // a clean, navigational run is recorded
+  });
+
+  it('does NOT learn a recipe from a trivial search-and-report lookup (no navigation)', async () => {
+    const before = await seedCount();
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'find it', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'search', args: { query: 'capital of australia' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Canberra' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: withSearch(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const r = await orch.runUntilTerminal(await orch.start('Find the capital city of Australia'));
+    expect(r.verdict).toBe('success'); // still answers correctly
+    expect(await seedCount()).toBe(before); // …but a trivial lookup teaches nothing
   });
 
   it('does NOT save a recipe from a MESSY success (a tier denial happened en route)', async () => {

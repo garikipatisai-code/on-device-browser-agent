@@ -16,6 +16,7 @@ import {
   tokenize,
   traceHasRedundancy,
   traceToWorkflow,
+  traceWorthLearning,
   upsertUserWorkflow,
   type Workflow,
 } from '@/agent/workflow_memory';
@@ -211,6 +212,18 @@ describe('traceHasRedundancy (a re-search / re-open run is not worth teaching ba
         { tool: 'finish', args: {} },
       ]),
     ).toBe(false);
+  });
+});
+
+describe('traceWorthLearning (skip trivial lookups, learn real procedures)', () => {
+  it('is FALSE for a pure search-and-report lookup (no navigation)', () => {
+    expect(traceWorthLearning([{ tool: 'search', args: {} }, { tool: 'finish', args: {} }])).toBe(false);
+    expect(traceWorthLearning([{ tool: 'search', args: {} }, { tool: 'search', args: {} }, { tool: 'finish', args: {} }])).toBe(false);
+    expect(traceWorthLearning([{ tool: 'aria.extract', args: {} }, { tool: 'finish', args: {} }])).toBe(false);
+  });
+  it('is TRUE when the run navigated or interacted with a page', () => {
+    expect(traceWorthLearning([{ tool: 'search', args: {} }, { tool: 'open_result', args: { index: 1 } }, { tool: 'finish', args: {} }])).toBe(true);
+    expect(traceWorthLearning([{ tool: 'tab.open', args: {} }, { tool: 'tab.type', args: {} }, { tool: 'finish', args: {} }])).toBe(true);
   });
 });
 
