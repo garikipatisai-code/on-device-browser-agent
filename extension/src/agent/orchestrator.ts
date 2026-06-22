@@ -20,7 +20,7 @@ import type { ToolContext, ToolResult } from './tools/registry';
 import { runPlanner } from './roles/planner';
 import { runExecutor } from './roles/executor';
 import { runEvaluator, type Verdict } from './roles/evaluator';
-import { addGroundedFact, renderFacts, type Fact } from './facts';
+import { addGroundedFact, groundingCorpus, renderFacts, type Fact } from './facts';
 import { runCompactor } from './roles/compactor';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, NUM_CTX } from './budget';
@@ -697,7 +697,7 @@ export class Orchestrator {
     if (!summary || !summary.trim()) {
       return { ok: false, reason: 'no answer text provided' };
     }
-    const ungrounded = ungroundedNumbers(summary, this.observedText);
+    const ungrounded = ungroundedNumbers(summary, groundingCorpus(this.observedText, this.facts));
     if (ungrounded.length) {
       return { ok: false, reason: `value(s) not found on any page read: ${ungrounded.join(', ')}` };
     }
