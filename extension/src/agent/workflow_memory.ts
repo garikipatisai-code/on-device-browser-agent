@@ -192,8 +192,8 @@ export const SEED_WORKFLOWS: Workflow[] = [
     origin: 'builtin',
     domain: '*',
     // Research/explain/find-info on a topic — guards hallucination + missing citations + over-opening.
-    requiredAny: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'why', 'causes', 'where', 'list'],
-    goalKeywords: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'topic', 'sources', 'why', 'causes', 'where', 'list', 'inflation'],
+    requiredAny: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'why', 'causes', 'where'],
+    goalKeywords: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'topic', 'sources', 'why', 'causes', 'where', 'inflation'],
     goalSample: 'research / explain / find information on a topic and answer with sources',
     whenToUse: 'Researching, explaining, or finding information on a topic from the web.',
     steps: [
@@ -273,6 +273,68 @@ export const SEED_WORKFLOWS: Workflow[] = [
     steps: [
       { instruction: 'Read the page the USER is currently on with tab.read_active — their active tab, on-device. Do NOT open a new tab or web-search.', toolHint: 'tab.read_active' },
       { instruction: 'Answer ONLY from what that page says; if the answer is not on the page, say so.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-verify',
+    origin: 'builtin',
+    domain: '*',
+    // Fact-check a claim — guards stating unverified things + one-source bias.
+    requiredAny: ['verify', 'true', 'fact', 'confirm', 'accurate', 'debunk', 'myth', 'really', 'claim', 'hoax', 'whether'],
+    goalKeywords: ['verify', 'true', 'fact', 'confirm', 'accurate', 'debunk', 'myth', 'really', 'claim', 'hoax', 'whether', 'check'],
+    goalSample: 'verify whether a claim is true, using independent sources',
+    whenToUse: 'Fact-checking a claim — is it true? Reports supported / contradicted / unclear.',
+    steps: [
+      { instruction: 'Search the web for the exact claim.', toolHint: 'search' },
+      { instruction: 'Read 2–3 INDEPENDENT sources (not all the same site); open a page only if a snippet is too thin.', toolHint: 'open_result' },
+      { instruction: 'Judge the claim against what those sources actually say: SUPPORTED, CONTRADICTED, or UNCLEAR. If sources disagree, say so — never assert beyond the evidence.' },
+      { instruction: 'Report the verdict with the supporting evidence and the sources.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-live-value',
+    origin: 'builtin',
+    domain: '*',
+    // Current/fast-changing value — guards reciting a stale value from memory.
+    requiredAny: ['current', 'today', 'now', 'price', 'weather', 'stock', 'score', 'live', 'latest', 'temperature', 'forecast'],
+    goalKeywords: ['current', 'today', 'now', 'price', 'weather', 'stock', 'score', 'live', 'latest', 'temperature', 'forecast', 'cost', 'rate', 'available'],
+    goalSample: 'look up a current, fast-changing value (price, weather, score) right now',
+    whenToUse: 'Looking up a current / live value (price, weather, score, stock).',
+    steps: [
+      { instruction: 'Search the web for the CURRENT value (put "current"/"today" in the query).', toolHint: 'search' },
+      { instruction: 'Prefer the official/primary source. For a fast-changing value (price, stock, score, weather) OPEN the page to confirm — never trust a possibly-cached snippet or your own memory.', toolHint: 'open_result' },
+      { instruction: 'Report the value WITH its as-of time/date and source, and note it can change.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-howto',
+    origin: 'builtin',
+    domain: '*',
+    // Steps to do something — guards inventing plausible-but-wrong steps.
+    requiredAny: ['how', 'steps', 'guide', 'tutorial', 'instructions', 'setup', 'install', 'configure', 'tips', 'fix'],
+    goalKeywords: ['how', 'steps', 'guide', 'tutorial', 'instructions', 'setup', 'install', 'configure', 'tips', 'fix', 'create', 'build', 'make'],
+    goalSample: 'find and report the steps to do something, from a guide',
+    whenToUse: 'How to do something — report the steps from a guide.',
+    steps: [
+      { instruction: 'Search the web for a reputable how-to / guide for the task.', toolHint: 'search' },
+      { instruction: 'Read the best guide (open it if the snippet is too short to hold the full steps).', toolHint: 'open_result' },
+      { instruction: 'Report the steps IN ORDER, exactly as the source gives them (numbered); do NOT invent steps the source did not state. Cite the guide.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-collect-list',
+    origin: 'builtin',
+    domain: '*',
+    // Enumerate a complete list — guards list truncation / losing rows.
+    requiredAny: ['list', 'all', 'every', 'each', 'collect', 'enumerate'],
+    goalKeywords: ['list', 'all', 'every', 'each', 'collect', 'enumerate', 'top', 'names', 'items', 'results'],
+    goalSample: 'extract a complete list of items from a page or results',
+    whenToUse: 'Collecting a complete list of items (every product, link, name) from a page or results.',
+    steps: [
+      { instruction: 'Open the page or results that hold the list.', toolHint: 'open_result' },
+      { instruction: 'Read it and enumerate EVERY matching item — not just the first few.', toolHint: 'aria.extract' },
+      { instruction: 'If the list is long or paginated, scroll (or open the next page) to capture the rest before reporting.', toolHint: 'tab.scroll' },
+      { instruction: 'Report the complete list as a structured list (item + its key fields). If you could not get them all, say how many you captured.', toolHint: 'finish' },
     ],
   },
 ];
