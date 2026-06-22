@@ -41,12 +41,13 @@ export const BUDGETS: Record<Role, number> = budgetsFor(DEFAULT_NUM_CTX);
  *  the PER-READ page cap stays FIXED — the ARIA tool caps extraction at this size, and a 4B reads a
  *  single page more accurately in a focused chunk than a sprawling one (lost-in-the-middle). A bigger
  *  window's value for long multi-step tasks is remembering MORE across turns, not larger single reads. */
-export function capsFor(numCtx: number): { page: number; scratch: number; observed: number } {
+export function capsFor(numCtx: number): { page: number; scratch: number; observed: number; salvage: number } {
   const scale = numCtx / DEFAULT_NUM_CTX;
   return {
     page: 12_000,
     scratch: Math.round(12_000 * scale),
     observed: Math.round(60_000 * scale),
+    salvage: Math.round(24_000 * scale),
   };
 }
 

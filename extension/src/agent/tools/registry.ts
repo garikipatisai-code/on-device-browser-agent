@@ -12,6 +12,7 @@ export interface ToolContext {
   hot: AgentStateHot;
   settings: Settings;
   ollama: OllamaClient;
+  numCtx?: number;
   emit(event: TimelineEvent): void;
   addFinding(kind: string, data: unknown, stepId?: string): Promise<void>;
 }
