@@ -467,6 +467,7 @@ export class Orchestrator {
       hot,
       settings: this.opts.settings,
       ollama: this.opts.ollama,
+      numCtx: this.numCtx,
       emit: this.emit.bind(this),
       addFinding: async (kind, data, sid) => {
         await addFinding({
@@ -864,7 +865,7 @@ export class Orchestrator {
           },
           {
             role: 'user',
-            content: `GOAL: ${hot.goal}\n\nGATHERED NOTES (the pages you read this task):\n${corpus.slice(-24_000)}\n\nAnswer the GOAL now from these notes.`,
+            content: `GOAL: ${hot.goal}\n\nGATHERED NOTES (the pages you read this task):\n${corpus.slice(-this.caps.salvage)}\n\nAnswer the GOAL now from these notes.`,
           },
         ],
         thinking: false,

@@ -64,5 +64,7 @@ describe('budgetsFor / capsFor scale with the window', () => {
     expect(capsFor(131_072).observed).toBe(240_000); // cross-turn memory scales
     expect(capsFor(131_072).scratch).toBe(48_000);   // scratch scales
     expect(capsFor(131_072).page).toBe(12_000);      // per-read page is fixed by design
+    expect(capsFor(DEFAULT_NUM_CTX).salvage).toBe(24_000);
+    expect(capsFor(131_072).salvage).toBe(96_000);
   });
 });

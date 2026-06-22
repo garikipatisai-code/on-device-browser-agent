@@ -68,7 +68,7 @@ export const visionReadTool: ToolDefDescriptor<{ tabId: number; question?: strin
       model: ctx.settings.visionModel,
       messages: [{ role: 'user', content: question ?? DEFAULT_QUESTION, images: [b64] }],
       thinking: false,
-      numCtx: NUM_CTX,
+      numCtx: ctx.numCtx ?? NUM_CTX,
       timeoutMs: 120_000,
       signal: ctx.signal,
     });

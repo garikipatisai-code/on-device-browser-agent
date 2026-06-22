@@ -21,7 +21,7 @@ import {
 import { Orchestrator, type OrchestratorOpts } from '@/agent/orchestrator';
 import { buildRegistry } from '@/agent/tools';
 import { buildProfileExtractionMessages, normalizeExtractedProfile } from '@/agent/profile';
-import { NUM_CTX } from '@/agent/budget';
+import { NUM_CTX, clampNumCtx } from '@/agent/budget';
 import { metricsSnapshot } from '@/agent/metrics';
 import { persistTimeline, loadTimeline, clearPersistedTimeline } from './timeline_store';
 import { clearLearnedWorkflows, listRecipeViews, parseUserRecipe, upsertUserWorkflow, deleteRecipe } from '@/agent/workflow_memory';
@@ -307,7 +307,7 @@ async function handleProfileExtract(resumeText: string) {
       messages: buildProfileExtractionMessages(resumeText),
       format: 'json',
       thinking: false,
-      numCtx: NUM_CTX,
+      numCtx: clampNumCtx(settings.numCtx),
       timeoutMs: 120_000,
     });
     const profileJson = normalizeExtractedProfile(resp.message.content ?? '');
