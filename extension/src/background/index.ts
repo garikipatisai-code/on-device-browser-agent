@@ -24,6 +24,7 @@ import { buildProfileExtractionMessages, normalizeExtractedProfile } from '@/age
 import { NUM_CTX } from '@/agent/budget';
 import { metricsSnapshot } from '@/agent/metrics';
 import { persistTimeline, loadTimeline, clearPersistedTimeline } from './timeline_store';
+import { clearLearnedWorkflows } from '@/agent/workflow_memory';
 
 let _orch: Orchestrator | null = null;
 // Synchronous start-guard: handleStart awaits ping/listModels before _orch is set, so two
@@ -415,6 +416,10 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
             break;
           case 'models.list':
             await handleListModels();
+            break;
+          case 'recipes.clear':
+            await clearLearnedWorkflows();
+            broadcast({ type: 'error', message: 'Learned recipes cleared — the planner will rebuild them from clean runs.' });
             break;
           case 'preflight':
             await handlePreflight();

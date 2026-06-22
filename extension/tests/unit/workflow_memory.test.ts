@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   SEED_WORKFLOWS,
+  clearLearnedWorkflows,
   deriveDomain,
   hostFromGoal,
   loadWorkflows,
@@ -8,6 +9,7 @@ import {
   renderRecipe,
   saveWorkflow,
   tokenize,
+  traceHasRedundancy,
   traceToWorkflow,
 } from '@/agent/workflow_memory';
 import { resetStorage } from '../helpers';
@@ -108,6 +110,59 @@ describe('traceToWorkflow (Phase 2 generalization)', () => {
   it('derives the domain from the first opened URL', () => {
     expect(deriveDomain(trace, 'find a mouse')).toBe('amazon.com');
     expect(deriveDomain([], 'go to bestbuy.com')).toBe('bestbuy.com');
+  });
+});
+
+describe('traceHasRedundancy (a re-search / re-open run is not worth teaching back)', () => {
+  it('flags a repeated search query', () => {
+    expect(
+      traceHasRedundancy([
+        { tool: 'search', args: { query: 'Seattle population' } },
+        { tool: 'open_result', args: { index: 2 } },
+        { tool: 'search', args: { query: 'Seattle population' } }, // same query again
+        { tool: 'finish', args: {} },
+      ]),
+    ).toBe(true);
+  });
+
+  it('flags opening the same result URL/index twice', () => {
+    expect(
+      traceHasRedundancy([
+        { tool: 'search', args: { query: 'Seattle' } },
+        { tool: 'open_result', args: { index: 1 } },
+        { tool: 'open_result', args: { index: 1 } }, // re-open
+        { tool: 'finish', args: {} },
+      ]),
+    ).toBe(true);
+  });
+
+  it('does NOT flag a clean per-item run (distinct queries, distinct opens)', () => {
+    expect(
+      traceHasRedundancy([
+        { tool: 'search', args: { query: 'Austin population' } },
+        { tool: 'open_result', args: { index: 1 } },
+        { tool: 'search', args: { query: 'Seattle population' } },
+        { tool: 'open_result', args: { index: 1 } },
+        { tool: 'finish', args: {} },
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe('clearLearnedWorkflows (forget poisoned auto-recipes; seeds remain)', () => {
+  beforeEach(async () => {
+    await resetStorage();
+  });
+  it('removes saved recipes but loadWorkflows still returns the seeds', async () => {
+    const wf = traceToWorkflow('auto:x', 'check order status on shopsite.com', 'shopsite.com', [
+      { tool: 'tab.open', args: { url: 'https://shopsite.com' } },
+      { tool: 'aria.extract', args: { tabId: 1 } },
+      { tool: 'finish', args: {} },
+    ]);
+    await saveWorkflow(wf!);
+    expect((await loadWorkflows()).length).toBe(SEED_WORKFLOWS.length + 1);
+    await clearLearnedWorkflows();
+    expect((await loadWorkflows()).length).toBe(SEED_WORKFLOWS.length); // back to seeds only
   });
 });
 

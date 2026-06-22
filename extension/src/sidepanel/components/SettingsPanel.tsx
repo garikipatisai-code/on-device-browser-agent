@@ -14,6 +14,7 @@ interface Props {
   extractingProfile: boolean;
   onExtractProfile: (resumeText: string) => void;
   onStoreResume: (payload: { name: string; mime: string; base64: string }) => void;
+  onClearRecipes: () => void;
 }
 
 type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
@@ -29,11 +30,13 @@ export function SettingsPanel({
   extractingProfile,
   onExtractProfile,
   onStoreResume,
+  onClearRecipes,
 }: Props) {
   const [local, setLocal] = useState<Settings>(settings);
   const [newHost, setNewHost] = useState('');
   const [newTier, setNewTier] = useState<DomainTier>('read-only');
   const [resumeMsg, setResumeMsg] = useState('');
+  const [recipesCleared, setRecipesCleared] = useState(false);
 
   useEffect(() => {
     setLocal((s) => ({ ...s, profileJson: settings.profileJson }));
@@ -172,6 +175,22 @@ export function SettingsPanel({
             onChange={(e) => update('preferences', e.target.value)}
             placeholder={'e.g.\n- Use city-proper population, not metro\n- Prefer official or primary sources'}
           />
+        </div>
+        <div className="row-between">
+          <span className="field-hint">
+            Learned recipes speed up repeat tasks — but a messy one can steer the planner wrong. Forget
+            them to let the agent rebuild from clean runs.
+          </span>
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              onClearRecipes();
+              setRecipesCleared(true);
+              setTimeout(() => setRecipesCleared(false), 2000);
+            }}
+          >
+            <Icon name={recipesCleared ? 'check' : 'x'} size={12} /> {recipesCleared ? 'Cleared' : 'Forget learned recipes'}
+          </button>
         </div>
       </div>
 

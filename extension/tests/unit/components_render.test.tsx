@@ -127,6 +127,7 @@ describe('redesigned components render across states', () => {
         extractingProfile={false}
         onExtractProfile={noop}
         onStoreResume={noop}
+        onClearRecipes={noop}
       />,
     );
     expect(html).toContain('Connection');
@@ -134,6 +135,7 @@ describe('redesigned components render across states', () => {
     expect(html).toContain('Domain access');
     expect(html).toContain('shop.example');
     expect(html).toContain('Save settings');
+    expect(html).toMatch(/Forget learned recipes/i);
   });
 
   it('MetricsPanel renders the empty state and a populated table', () => {

@@ -101,6 +101,7 @@ export type PanelCommand =
   | { type: 'domainTier.set'; host: string; tier: DomainTier }
   | { type: 'profile.extract'; resumeText: string }
   | { type: 'resume.store'; name: string; mime: string; base64: string }
+  | { type: 'recipes.clear' }
   | { type: 'models.list' }
   | { type: 'preflight' };
 
