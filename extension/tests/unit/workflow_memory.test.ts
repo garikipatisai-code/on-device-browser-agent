@@ -12,6 +12,7 @@ import {
   quarantineWorkflow,
   renderRecipe,
   saveWorkflow,
+  scoreWorkflow,
   tokenize,
   traceHasRedundancy,
   traceToWorkflow,
@@ -126,6 +127,32 @@ describe('traceToWorkflow (Phase 2 generalization)', () => {
 
   it('returns null for a trivial trace', () => {
     expect(traceToWorkflow('auto:2', 'g', '*', [{ tool: 'echo', args: {} }, { tool: 'finish', args: {} }])).toBeNull();
+  });
+
+  it('generalizes learned-recipe match keywords: keeps task words, drops instance entities', () => {
+    const wf = traceToWorkflow(
+      'auto:g',
+      'Using Wikipedia, compare the populations of Austin, Seattle, and Denver — which is largest?',
+      '*',
+      [{ tool: 'search', args: {} }, { tool: 'open_result', args: { index: 1 } }],
+    );
+    // task words survive → the recipe matches ANY such comparison…
+    expect(wf!.goalKeywords).toContain('compare');
+    expect(wf!.goalKeywords).toContain('populations');
+    // …but the specific entities are stripped, so it isn't bound to those three cities/that source
+    expect(wf!.goalKeywords).not.toContain('austin');
+    expect(wf!.goalKeywords).not.toContain('seattle');
+    expect(wf!.goalKeywords).not.toContain('denver');
+    expect(wf!.goalKeywords).not.toContain('wikipedia');
+  });
+
+  it('a generalized learned recipe matches a DIFFERENT instance of the same task', () => {
+    const wf = traceToWorkflow('auto:cmp', 'compare the populations of Austin, Seattle, and Denver', '*', [
+      { tool: 'search', args: {} }, { tool: 'open_result', args: { index: 1 } },
+    ])!;
+    // a brand-new comparison goal (different cities) should still score above threshold
+    const score = scoreWorkflow(tokenize('compare the populations of Chicago, Houston, and Phoenix'), null, wf);
+    expect(score).toBeGreaterThan(0.25);
   });
 
   it('PRESERVES a per-entity loop (search→open ×N) — that repetition is the structure the planner expands', () => {

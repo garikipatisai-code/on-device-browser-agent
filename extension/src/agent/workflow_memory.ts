@@ -61,6 +61,25 @@ export function tokenize(s: string): string[] {
     .filter((t) => t.length > 2 && !STOPWORDS.has(t));
 }
 
+/** Like tokenize, but for LEARNED recipes: strip instance-specific entities so the recipe matches
+ *  the TASK kind, not one goal. Removes quoted phrases, standalone numbers, and proper-noun words
+ *  (Capitalized, non-sentence-initial — e.g. "Austin", "Wikipedia"), keeping task words (compare,
+ *  populations, find, price). Keeps tokenize's punctuation splitting so hosts like "shopsite.com"
+ *  still become matchable tokens. */
+export function generalizeGoalKeywords(goal: string): string[] {
+  const stripped = goal
+    .replace(/["'“”‘’][^"'“”‘’]*["'“”‘’]/g, ' ') // quoted phrases (specific values)
+    .replace(/\b\d[\d,.]*\b/g, ' '); // standalone numbers
+  const kept = stripped
+    .split(/\s+/)
+    .map((w, i) => {
+      const lead = w.replace(/^[^A-Za-z]+/, ''); // ignore leading punctuation for the capital test
+      return i > 0 && /^[A-Z][a-z]/.test(lead) ? ' ' : w; // drop a proper noun (not sentence-initial)
+    })
+    .join(' ');
+  return tokenize(kept);
+}
+
 const HOST_RE = /\b([a-z0-9-]+\.(?:com|org|net|io|co|gov|edu|in|de|ca|uk))\b/i;
 export function hostFromGoal(goal: string): string | null {
   const m = goal.toLowerCase().match(HOST_RE);
@@ -494,7 +513,9 @@ export function traceToWorkflow(
   // Redact PII from the goal before it's persisted to durable memory and re-injected
   // into future planner prompts (job-apply goals routinely carry email/phone/name).
   const safeGoal = redact(goal);
-  return { id, origin: 'auto', domain, goalKeywords: tokenize(safeGoal), goalSample: safeGoal, steps };
+  // Match on the TASK shape, not the instance: drop proper-noun entities (Austin), quoted phrases,
+  // and numbers so a learned recipe generalizes to the same KIND of task — not just this one goal.
+  return { id, origin: 'auto', domain, goalKeywords: generalizeGoalKeywords(safeGoal), goalSample: safeGoal, steps };
 }
 
 /** Best-effort site host for a trace (first opened URL → host), else from the goal. */
