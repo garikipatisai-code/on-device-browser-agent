@@ -24,6 +24,10 @@ describe('addGroundedFact', () => {
     expect(facts).toHaveLength(24);
     expect(facts[0].text).toBe('fact number 6 grounded');
   });
+  it('admits a fact with no numbers (no numeric claim to ground)', () => {
+    const out = addGroundedFact([], { step: 's', text: 'Item is in stock' }, 'unrelated observed text');
+    expect(out).toHaveLength(1);
+  });
 });
 
 describe('renderFacts', () => {
@@ -34,11 +38,21 @@ describe('renderFacts', () => {
     const block = renderFacts([{ step: 's', text: 'Austin: 961,855', url: 'https://x' }]);
     expect(block).toBe('- Austin: 961,855 [https://x]');
   });
+  it('truncates to maxChars at a line boundary (top bullet not garbled)', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ step: 's', text: `fact ${i} value` }));
+    const out = renderFacts(many, 20);
+    expect(out).toBeDefined();
+    expect(out!.length).toBeLessThanOrEqual(20);
+    expect(out!.startsWith('- ')).toBe(true);
+  });
 });
 
 describe('groundingCorpus', () => {
   it('includes fact texts so an evicted page still grounds the answer', () => {
     const corpus = groundingCorpus('', [{ step: 's', text: 'Denver: 715,522' }]);
     expect(corpus).toContain('715,522');
+  });
+  it('returns observed unchanged when facts list is empty', () => {
+    expect(groundingCorpus('page text', [])).toBe('page text');
   });
 });
