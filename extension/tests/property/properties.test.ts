@@ -54,8 +54,20 @@ describe('property: parseJSONPermissive', () => {
   });
 
   it('round-trips valid JSON', () => {
+    // JSON.stringify(-0) produces "0", so JSON.parse("0") returns +0 — this is a
+    // JSON-spec lossiness, not a parseJSONPermissive bug.  Filter out any value tree
+    // that contains -0 so the property only asserts the function's real contract:
+    // "for any value that JSON can represent losslessly, round-tripping via
+    //  JSON.stringify → parseJSONPermissive returns the original value."
+    function hasNegativeZero(v: unknown): boolean {
+      if (Object.is(v, -0)) return true;
+      if (Array.isArray(v)) return v.some(hasNegativeZero);
+      if (v !== null && typeof v === 'object')
+        return Object.values(v as Record<string, unknown>).some(hasNegativeZero);
+      return false;
+    }
     fc.assert(
-      fc.property(fc.jsonValue(), (v) => {
+      fc.property(fc.jsonValue().filter((v) => !hasNegativeZero(v)), (v) => {
         const s = JSON.stringify(v);
         expect(parseJSONPermissive(s)).toEqual(v);
       }),
