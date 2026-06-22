@@ -337,6 +337,65 @@ export const SEED_WORKFLOWS: Workflow[] = [
       { instruction: 'Report the complete list as a structured list (item + its key fields). If you could not get them all, say how many you captured.', toolHint: 'finish' },
     ],
   },
+  {
+    id: 'seed-convert',
+    origin: 'builtin',
+    domain: '*',
+    // Convert/calculate — guards the 4B's unreliable arithmetic by looking the value up.
+    requiredAny: ['convert', 'calculate', 'conversion', 'exchange', 'percent', 'percentage', 'much', 'many'],
+    goalKeywords: ['convert', 'calculate', 'conversion', 'exchange', 'rate', 'percent', 'percentage', 'much', 'many', 'dollars', 'euros', 'pounds', 'usd', 'eur', 'currency', 'miles', 'kilometers', 'celsius', 'fahrenheit'],
+    goalSample: 'convert or calculate a value by looking it up (currency, units, percentages)',
+    whenToUse: 'Converting or calculating a value (currency, units, percentages, math) — look it up, do not compute.',
+    steps: [
+      { instruction: 'Search the web for the conversion/calculation itself (e.g. "100 USD to EUR", "15 percent of 240", "5 miles in km").', toolHint: 'search' },
+      { instruction: 'Read the answer from the calculator/converter result in the snippet. Do NOT compute it yourself — small models get arithmetic, rates, and unit conversions wrong.' },
+      { instruction: 'Report the value; for currency, include the exchange rate and its date.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-contact',
+    origin: 'builtin',
+    domain: '*',
+    // Business contact info — guards fabricated phone/email/address/hours.
+    requiredAny: ['phone', 'email', 'address', 'hours', 'contact', 'number', 'directions'],
+    goalKeywords: ['phone', 'email', 'address', 'hours', 'contact', 'number', 'directions', 'location', 'reach', 'open'],
+    goalSample: "find a business's contact details from its official source",
+    whenToUse: "Finding a business's contact info (phone, email, address, hours).",
+    steps: [
+      { instruction: 'Search for the business, then open its OFFICIAL source (its own website, or a reputable directory).', toolHint: 'open_result' },
+      { instruction: 'Report only the contact fields that actually appear on the page. Mark any requested field that is not shown as "not listed".' },
+      { instruction: 'NEVER invent a phone number, email, address, or hours — report only what the page states.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-read-visual',
+    origin: 'builtin',
+    domain: '*',
+    // Read a chart/image the ARIA tree can't — surfaces the under-used vision.read capability.
+    requiredAny: ['chart', 'image', 'screenshot', 'graph', 'infographic', 'picture', 'diagram', 'visual', 'photo'],
+    goalKeywords: ['chart', 'image', 'screenshot', 'graph', 'infographic', 'picture', 'diagram', 'visual', 'photo', 'show', 'shows', 'depicts', 'read'],
+    goalSample: 'read a chart/image/screenshot the accessibility tree cannot',
+    whenToUse: 'Reading a chart, image, or canvas the accessibility tree cannot (uses vision).',
+    steps: [
+      { instruction: 'Read the page with aria.extract first.', toolHint: 'aria.extract' },
+      { instruction: 'If aria.extract returns almost nothing (a canvas, image, or chart with no text), call vision.read on that tab to read it from a screenshot.', toolHint: 'vision.read' },
+      { instruction: 'Report ONLY what is actually visible in the image — do not invent labels, numbers, or trends.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-translate',
+    origin: 'builtin',
+    domain: '*',
+    // Translate the current tab — distinct, on-device, current-tab.
+    requiredAny: ['translate', 'translation', 'english', 'spanish', 'french', 'german', 'japanese', 'chinese', 'language'],
+    goalKeywords: ['translate', 'translation', 'english', 'spanish', 'french', 'german', 'japanese', 'chinese', 'language', 'page', 'say', 'meaning'],
+    goalSample: 'translate the current page into a target language',
+    whenToUse: 'Translating the page the user is on into a target language.',
+    steps: [
+      { instruction: 'Read the page the USER is on with tab.read_active — their active tab, on-device. Do NOT open a new tab or web-search.', toolHint: 'tab.read_active' },
+      { instruction: "Translate ONLY the page's actual text into the requested language; do not add commentary or summarize unless asked.", toolHint: 'finish' },
+    ],
+  },
 ];
 
 // ---- Phase 2: persistence + auto-record successful runs --------------------
