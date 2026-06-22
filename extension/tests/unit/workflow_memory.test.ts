@@ -393,3 +393,37 @@ describe('user recipe CRUD + trust/quarantine', () => {
     expect(await quarantineWorkflow('auto:whatever')).toBe('ignored');
   });
 });
+
+describe('built-in recipe routing matrix (review guard: realistic goals route to the right capability)', () => {
+  // Empirically derived from a 24-goal probe. Locks routing so a future recipe can't silently
+  // hijack an existing one as the set widens. Every built-in must be reachable by a natural goal.
+  const cases: Array<[string, string]> = [
+    ['compare the population of Tokyo, Delhi and Shanghai', 'seed-compare'],
+    ['which budget laptop has the best screen', 'seed-compare'],
+    ['research the history of the internet', 'seed-research'],
+    ['find information about climate change effects', 'seed-research'], // recall fix: was NONE (topic words diluted score)
+    ['report the price and rating of the Quiet Keyboard', 'seed-extract'],
+    ['go to amazon.com, search for a usb cable in the box and click the first product', 'seed-onpage-site-search'],
+    ['apply to the software engineer job and fill the application form', 'seed-job-application'],
+    ['summarize this page', 'seed-ask-page'],
+    ['what does this page say about pricing', 'seed-ask-page'],
+    ['fact check the claim that the great wall is visible from space', 'seed-verify'],
+    ['what is the current weather in London', 'seed-live-value'],
+    ['current price of an ounce of gold', 'seed-live-value'],
+    ['how do I install python on windows', 'seed-howto'],
+    ['list all the planets in the solar system', 'seed-collect-list'],
+    ['convert 50 miles to kilometers', 'seed-convert'],
+    ['how much is 100 dollars in euros', 'seed-convert'],
+    ['find the phone number of the British Museum', 'seed-contact'],
+    ['what does the graph in this image show', 'seed-read-visual'],
+    ['translate this page into spanish', 'seed-translate'],
+  ];
+  it.each(cases)('routes "%s" -> %s', (goal, expected) => {
+    expect(matchWorkflow(goal, SEED_WORKFLOWS)?.id).toBe(expected);
+  });
+
+  it('still returns null for a goal that matches no capability (gate stays tight)', () => {
+    // 'about' is a scorer-only keyword on research, never a gate token — this must NOT match.
+    expect(matchWorkflow('tell me a joke about cats', SEED_WORKFLOWS)).toBeNull();
+  });
+});
