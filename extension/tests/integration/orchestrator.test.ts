@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
 import { loadHot, clearHot, _setHot } from '@/background/state_store';
+import { loadWorkflows } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
 function buildRegistry(): ToolRegistry {
@@ -1051,6 +1052,65 @@ describe('orchestrator — salvages an answer from what it read instead of givin
     expect(result.verdict).toBe('partial'); // salvaged — NOT 'aborted' with no answer
     expect(result.summary).toContain('Austin');
     expect(result.summary).toContain('975000');
+  });
+});
+
+describe('orchestrator — clean-run recipe gate (only a frictionless success is taught back)', () => {
+  const seedCount = async () => (await loadWorkflows()).length;
+  // search + finish both map to recipe steps (≥2), so what's tested is the GATE, not triviality.
+  const withSearch = () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'search',
+      description: 'web search',
+      argsSchema: z.object({ query: z.string() }),
+      async dispatch() {
+        return { ok: true, content: '1. Austin — pop 961,855', data: { results: [{ url: 'https://x/' }] } };
+      },
+    });
+    return reg;
+  };
+
+  it('saves a recipe from a CLEAN success (no friction)', async () => {
+    const before = await seedCount();
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'find it and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'search', args: { query: 'Austin population' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Austin 961,855' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: withSearch(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const r = await orch.runUntilTerminal(await orch.start('do a clean thing'));
+    expect(r.verdict).toBe('success');
+    expect(await seedCount()).toBe(before + 1); // a clean run is recorded
+  });
+
+  it('does NOT save a recipe from a MESSY success (a tier denial happened en route)', async () => {
+    const before = await seedCount();
+    const reg = withSearch();
+    reg.register({
+      name: 'act',
+      description: 'a tier-gated action that is denied',
+      argsSchema: z.object({ n: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: false, fatal: true, content: 'Cannot click-only on en.wikipedia.org (current tier: read-only).' };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'find it and report', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'search', args: { query: 'Austin population' } }] }),
+        rawResponse({ toolCalls: [{ name: 'act', args: { n: 1 } }] }), // tier denial → run is dirty
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Austin 961,855 anyway' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const r = await orch.runUntilTerminal(await orch.start('do a messy thing'));
+    expect(r.verdict).toBe('success'); // still answers
+    expect(await seedCount()).toBe(before); // …but the messy path is NOT taught back
   });
 });
 

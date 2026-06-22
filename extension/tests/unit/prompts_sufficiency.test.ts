@@ -99,3 +99,12 @@ describe('per-item search queries (avoid the combined-query list-page trap)', ()
     expect(sys).toMatch(/list|ranking/i);
   });
 });
+
+describe('planner: fewest-but-complete steps (fewer accurate steps = faster, fewer derail points)', () => {
+  it('tells the planner to use the fewest steps and combine find+read per item', () => {
+    const sys = buildPlannerMessages(ctx)[0].content;
+    expect(sys).toMatch(/fewest steps/i);
+    expect(sys).toMatch(/never pad|fewer is better|fewer .*steps/i);
+    expect(sys).toMatch(/one step per item|finds? and reads/i);
+  });
+});
