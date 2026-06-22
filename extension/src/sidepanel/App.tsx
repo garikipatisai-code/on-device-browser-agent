@@ -257,6 +257,7 @@ export function App() {
               send({ type: 'profile.extract', resumeText });
             }}
             onStoreResume={(payload) => send({ type: 'resume.store', ...payload })}
+            onClearRecipes={() => send({ type: 'recipes.clear' })}
           />
         )}
 

@@ -152,6 +152,46 @@ function jaccard(a: string[], b: string[]): number {
   return inter / uni;
 }
 
+/** True if a trace repeated work — searched the same query twice, opened the same URL twice, or
+ *  re-opened the same result within one search context. Such a run still answered, but its path is
+ *  redundant and must NOT be distilled into a recipe (it would teach the bloat back). open_result
+ *  indices are only meaningful relative to their preceding search ("#1" is a different page each
+ *  time), so the open-index set resets on every search; only a repeat WITHIN a search counts. */
+export function traceHasRedundancy(trace: Array<{ tool: string; args: Record<string, unknown> }>): boolean {
+  const seenQueries = new Set<string>();
+  const seenUrls = new Set<string>();
+  let openIndicesThisSearch = new Set<number>();
+  for (const t of trace) {
+    if (t.tool === 'search') {
+      const q = String((t.args as { query?: unknown }).query ?? '').trim().toLowerCase();
+      if (q) {
+        if (seenQueries.has(q)) return true;
+        seenQueries.add(q);
+      }
+      openIndicesThisSearch = new Set(); // a fresh search → indices mean something new
+    } else if (t.tool === 'open_result') {
+      const idx = Number((t.args as { index?: unknown }).index);
+      if (Number.isFinite(idx)) {
+        if (openIndicesThisSearch.has(idx)) return true;
+        openIndicesThisSearch.add(idx);
+      }
+    } else if (t.tool === 'tab.open') {
+      const url = String((t.args as { url?: unknown }).url ?? '').trim().toLowerCase();
+      if (url) {
+        if (seenUrls.has(url)) return true;
+        seenUrls.add(url);
+      }
+    }
+  }
+  return false;
+}
+
+/** Forget all auto-recorded recipes (the seeds always come back via loadWorkflows). Lets the user
+ *  reset a store that accumulated bloated/poisoned recipes so the lean planner rebuilds it clean. */
+export async function clearLearnedWorkflows(): Promise<void> {
+  await memorySet(STORE_KEY, []);
+}
+
 export async function saveWorkflow(wf: Workflow): Promise<void> {
   let stored: Workflow[] = [];
   try {
