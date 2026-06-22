@@ -607,7 +607,7 @@ export class Orchestrator {
     );
     if (this.facts.length > before) {
       const f = this.facts[this.facts.length - 1];
-      void addFinding({ taskId: this.taskId, kind: 'fact', ts: Date.now(), stepId: step.id, data: f });
+      void addFinding({ taskId: this.taskId, kind: 'fact', ts: Date.now(), stepId: step.id, data: redactDeep(f) });
     }
   }
 
