@@ -25,11 +25,15 @@ export function addGroundedFact(facts: Fact[], candidate: Fact, observed: string
 export function renderFacts(facts: Fact[], maxChars = 4_000): string | undefined {
   if (!facts.length) return undefined;
   const block = facts.map((f) => `- ${f.text}${f.url ? ` [${f.url}]` : ''}`).join('\n');
-  return block.length > maxChars ? block.slice(block.length - maxChars) : block;
+  if (block.length <= maxChars) return block;
+  // Tail-bound to the most recent, but snap to a line boundary so the top bullet isn't garbled.
+  const cut = block.slice(block.length - maxChars);
+  const nl = cut.indexOf('\n');
+  return nl >= 0 ? cut.slice(nl + 1) : cut;
 }
 
 /** Grounding corpus = raw observed text PLUS the durable fact texts, so a fact whose source page
  *  has been evicted from the 60K observed-text FIFO still grounds the final answer. */
 export function groundingCorpus(observed: string, facts: Fact[]): string {
-  return facts.length ? `${observed}\n${facts.map((f) => f.text).join('\n')}` : observed;
+  return [observed, ...facts.map((f) => f.text)].filter(Boolean).join('\n');
 }
