@@ -174,7 +174,7 @@ export function buildEvaluatorMessages(
 Your job: Judge whether the active step's success criteria are met by the CURRENT state. Be fair, not pedantic. Provide concrete evidence.
 
 Output: ONLY a JSON object of the form:
-{"verdict":"PASS"|"FAIL","reason":"specific evidence","shouldReplan":true|false,"finishVerdict":"success"|"blocked"|"failed"|null,"finishSummary":string|null}
+{"verdict":"PASS"|"FAIL","reason":"specific evidence","shouldReplan":true|false,"finishVerdict":"success"|"blocked"|"failed"|null,"finishSummary":string|null,"fact":string|null}
 
 - Judge the RESULT, not the path. The Executor often does MORE than the active step in one turn (it may already have searched, clicked, or reached a later stage) — that is GOOD. If the step's criteria are met OR already surpassed, verdict PASS. NEVER FAIL or replan just because extra actions were taken, the step was "overshot", or the agent is ahead of the plan.
 - The agent gathers a step's data and then MOVES ON to later steps. CHECK THE SCRATCHPAD + ACTIONS below — they log what was gathered on earlier turns. A step is DONE (PASS) if its objective appears anywhere there, even if CURRENT PAGE CONTENT is now a different/later page (e.g. the step wanted Austin's population, the scratchpad shows it was extracted, and the agent has since moved on to Denver → PASS, not FAIL). Do NOT FAIL a step just because the current page moved on; FAIL only if its data was NEVER gathered this task.
@@ -184,7 +184,8 @@ Output: ONLY a JSON object of the form:
 - finishVerdict MUST be null in almost every case. Set it ONLY when the TASK IS OVER:
     • "success" — the ENTIRE user goal is verified complete (not just this step).
     • "blocked"/"failed" — the goal is impossible or hard-blocked (captcha, login wall, dead end).
-  If this step passed but more of the goal remains, finishVerdict is null — do NOT end the task early just because one step succeeded.`;
+  If this step passed but more of the goal remains, finishVerdict is null — do NOT end the task early just because one step succeeded.
+- fact: if this step established a concrete datum the GOAL needs (a value, price, count, name), set it to ONE short line copied verbatim from the page — e.g. "Austin population: 961,855". Copy numbers EXACTLY; never round or invent. If the step established no such datum (navigation, a click), set fact to null.`;
   const user = [
     `GOAL: ${ctx.goal}`,
     preferencesBlock(ctx.preferences),
