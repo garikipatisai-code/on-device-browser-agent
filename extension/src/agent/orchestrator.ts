@@ -2,7 +2,7 @@
 // IDLE → PLANNING → EXECUTING → EVALUATING → EXECUTING (next step) → ... → DONE | ABORTED.
 
 import type { OllamaClient } from '@/background/ollama';
-import type { Plan, Settings, TimelineEvent } from '@/shared/messages';
+import type { Plan, Settings, Step, TimelineEvent } from '@/shared/messages';
 import {
   type AgentStateHot,
   _setHot,
@@ -19,7 +19,8 @@ import type { ToolRegistry } from './tools/registry';
 import type { ToolContext, ToolResult } from './tools/registry';
 import { runPlanner } from './roles/planner';
 import { runExecutor } from './roles/executor';
-import { runEvaluator } from './roles/evaluator';
+import { runEvaluator, type Verdict } from './roles/evaluator';
+import { addGroundedFact, renderFacts, type Fact } from './facts';
 import { runCompactor } from './roles/compactor';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, NUM_CTX } from './budget';
@@ -93,6 +94,7 @@ export class Orchestrator {
   private lastRead: { tool: string; url?: string; content: string } | null = null;
   // Everything read this task (capped) — the corpus the finish-verifier grounds against.
   private observedText = '';
+  private facts: Fact[] = [];
   // How many times a success finish failed verification this task (bounds self-correction).
   private verifyAttempts = 0;
   // Real executor-turn count this task (for RunResult.turns; recentActions is capped at 5).
@@ -135,6 +137,7 @@ export class Orchestrator {
     this.recentActions = [];
     this.lastRead = null;
     this.observedText = '';
+    this.facts = [];
     this.verifyAttempts = 0;
     this.turns = 0;
     this.consecutiveFatal = 0;
@@ -223,6 +226,7 @@ export class Orchestrator {
       }
       if (execOut.result.advanceStep) {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
+        this.captureFact(step, ev);
         if (ev.verdict !== 'PASS') this.markDirty('evaluator FAIL on a step');
         const next = walkPlan(hot.plan!, step.id, ev.verdict === 'PASS' ? 'done' : 'fail');
         hot = await this.applyPlan(hot, next.plan);
@@ -573,6 +577,22 @@ export class Orchestrator {
     return ev;
   }
 
+  /** Promote the evaluator's grounded datum into the durable ledger (in-memory + persisted).
+   *  No-ops on a null/ungrounded/duplicate fact — purely additive. */
+  private captureFact(step: Step, ev: Verdict): void {
+    if (!ev.fact) return;
+    const before = this.facts.length;
+    this.facts = addGroundedFact(
+      this.facts,
+      { step: step.description, text: ev.fact, url: this.lastRead?.url },
+      this.observedText,
+    );
+    if (this.facts.length > before) {
+      const f = this.facts[this.facts.length - 1];
+      void addFinding({ taskId: this.taskId, kind: 'fact', ts: Date.now(), stepId: step.id, data: f });
+    }
+  }
+
   private async compact(hotState: AgentStateHot, scratch: string) {
     await patchHot({ phase: 'COMPACTING' });
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'compactor' });
@@ -640,6 +660,7 @@ export class Orchestrator {
             `- ${a.ok ? '✓' : '✗'} ${a.tool}(${redact(JSON.stringify(a.args).slice(0, 80))}) → ${redact(a.content.slice(0, 200))}`,
         )
         .join('\n'),
+      findingsBlock: renderFacts(this.facts),
     };
   }
 
