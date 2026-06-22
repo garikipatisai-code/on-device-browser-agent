@@ -5,11 +5,14 @@ A goal-anchored autonomous browser agent that runs **entirely on your device** �
 ## What it does
 
 - **Goal → multi-step execution.** A `Planner → Executor → Evaluator → Compactor` loop decomposes a goal, acts one tool at a time, and judges progress.
-- **Reads pages via the accessibility tree** (indexed, compact) — not brittle screenshots — and falls back to a vision read only when a page exposes no a11y tree.
+- **Reads pages via the accessibility tree** (indexed, compact) — not brittle screenshots — and falls back to a vision read only when the a11y tree is too thin (e.g. a chart or image).
+- **Grounded memory.** As it works it keeps a compact **facts ledger** — the key value each step established, copied verbatim from the page — and carries it into every later step, so long multi-step tasks don't forget what they found early. Final answers are **verified against what was actually read**: a number that never appeared on a page is flagged, not asserted.
 - **Acts:** open tabs, search the web, open a result, click elements, type into fields, submit forms, scroll, attach a file to an upload field.
-- **Self-improving:** records successful task flows ("workflow memory") and replays them as recipes on similar tasks.
+- **Capability recipes (skills).** Broad **built-in recipes** guide the model around its known weak spots — compare-and-rank, research-with-sources, verify-a-claim, live-value lookup, how-to, collect-a-list, convert/calculate, find-contact, price-across-sellers, read-visual, fill-form-without-submit, and more. **Browse, author, and edit** them in the **Recipes** tab; the agent also learns new ones from clean, successful runs (and rolls back ones that later misbehave).
+- **Ask the current page.** Point it at a tab and ask a question — it answers from that page, on-device, with sources, no web search.
+- **Steerable.** Redirect a run mid-flight without restarting it, and set **standing preferences** that apply to every task.
 - **Job-apply (v1):** upload a résumé (`.pdf`/`.docx`/`.txt`); the model extracts your profile to fill application form fields, and **attaches the résumé file itself** to the form. Use the **"Apply to a job"** box with a Greenhouse/Lever URL — the agent fills + attaches, then **stops before submit** for your review (it never auto-submits). See Caveats for ATS coverage.
-- **Safety by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only`/`full-action` before the agent can interact. PII is redacted from logs.
+- **Safety & privacy by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only`/`full-action` before the agent can interact. PII is redacted before anything is logged or persisted, and nothing ever leaves your machine.
 
 ## Requirements
 
@@ -44,11 +47,18 @@ Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → 
    - `go to amazon.com, search for "wireless mouse", open the first product, and report its title, price, and rating`
 5. **Job-apply:** after uploading your résumé (step 3), grant the ATS host `click-only` (step 2 — e.g. `boards.greenhouse.io`, `jobs.lever.co`), then use the **"Apply to a job"** box on the Agent tab: paste the posting URL → **Apply**. The agent fills the form from your profile, attaches your résumé, and stops for you to review and submit.
 
+**Also worth knowing:**
+
+- **Ask about the page you're on.** With a tab open, ask a question about it — the agent reads that tab and answers with sources instead of web-searching.
+- **Recipes tab.** Browse the built-in capability recipes, or author your own (name, when-to-use, steps — with a live preview); edit or delete your recipes anytime.
+- **Steer a running task.** Type a correction while it's running to redirect it without restarting; set durable **standing preferences** in Settings to guide every task.
+- **Settings → Context window (`num_ctx`).** Defaults to **32768**. For very long tasks you can raise it (`65536` → `131072`), but check `ollama ps` after each step to confirm the model still loads fully on GPU (no CPU spill) — if a task won't start or slows sharply, lower it back. A bigger window grows the agent's **cross-turn memory** (what it carries across steps); single-page reads stay focused by design.
+
 ## Architecture
 
 - **Service worker** (`src/background`) — owns the orchestrator and the Ollama client; kept alive across long runs (20s keepalive + a detached run loop).
 - **Side panel** (`src/sidepanel`, React) — goal input, live timeline, settings, and résumé parsing (`mammoth`/`pdfjs`).
-- **Agent** (`src/agent`) — roles (`planner`/`executor`/`evaluator`/`compactor`), the tool registry + browser tools (CDP-based, with command timeouts), the ARIA simplifier, workflow memory, profile, and the safety layer (domain tiers, redaction, circuit breaker).
+- **Agent** (`src/agent`) — roles (`planner`/`executor`/`evaluator`/`compactor`), the tool registry + browser tools (CDP-based, with command timeouts), the ARIA simplifier, the grounded **facts ledger** + answer grounding-verifier (`facts.ts`), **workflow-memory recipes**, the profile, the configurable context window (`budget.ts`), and the safety layer (domain tiers, redaction, circuit breaker).
 
 ## Development
 
