@@ -291,6 +291,7 @@ export class Orchestrator {
 
       if (turn % 3 === 0) {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
+        this.captureFact(step, ev); // periodic evals can also surface a grounded fact — dedups by text
         if (ev.finishVerdict && ev.finishSummary) {
           const g = this.gateFinishSummary(ev.finishVerdict, ev.finishSummary);
           return this.finishOk(hot, g.verdict, g.summary);
