@@ -10,6 +10,7 @@
 
 import { memoryGet, memorySet } from '@/background/state_store';
 import { redact } from './safety/redact';
+import { ulid } from './util';
 
 export interface WorkflowStep {
   instruction: string;
@@ -272,6 +273,118 @@ export function traceHasRedundancy(trace: Array<{ tool: string; args: Record<str
  *  reset a store that accumulated bloated/poisoned recipes so the lean planner rebuilds it clean. */
 export async function clearLearnedWorkflows(): Promise<void> {
   await memorySet(STORE_KEY, []);
+}
+
+// ---- user recipe authoring + trust/quarantine -----------------------------
+
+/** Parse a known toolHint off the end of a step line: "Do the thing  [tool: search]". */
+function parseStepLine(line: string): WorkflowStep | null {
+  const text = line.trim();
+  if (!text) return null;
+  const m = text.match(/\[tool:\s*([^\]]+)\]\s*$/i);
+  if (!m) return { instruction: text };
+  const instruction = text.slice(0, m.index).trim();
+  const toolHint = m[1].trim();
+  return instruction ? { instruction, toolHint } : { instruction: text };
+}
+
+export interface UserRecipeInput {
+  id?: string;
+  name: string;
+  whenToUse: string;
+  site?: string;
+  stepsText: string;
+}
+
+/** Turn the guided authoring form into a validated user Workflow (origin 'user', untrusted).
+ *  Keywords are derived from name + whenToUse so the author never hand-writes a keyword list. */
+export function parseUserRecipe(input: UserRecipeInput): { workflow: Workflow | null; errors: string[] } {
+  const errors: string[] = [];
+  const name = input.name.trim();
+  const whenToUse = input.whenToUse.trim();
+  const steps = input.stepsText.split('\n').map(parseStepLine).filter((s): s is WorkflowStep => s !== null);
+  if (!name) errors.push('Name is required.');
+  if (!whenToUse) errors.push('"When to use" is required — one sentence describing when this recipe applies.');
+  if (steps.length < 2) errors.push('Add at least 2 steps (one per line).');
+  if (errors.length) return { workflow: null, errors };
+  const site = (input.site ?? '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '') || '*';
+  const workflow: Workflow = {
+    id: input.id ?? `user:${ulid()}`,
+    origin: 'user',
+    domain: site,
+    goalKeywords: tokenize(`${name} ${whenToUse}`),
+    goalSample: whenToUse,
+    whenToUse,
+    steps,
+    trusted: false,
+  };
+  return { workflow, errors: [] };
+}
+
+/** Read just the stored (non-seed) recipes. */
+async function loadStored(): Promise<Workflow[]> {
+  try {
+    const raw = await memoryGet(STORE_KEY);
+    return Array.isArray(raw) ? (raw as Workflow[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Insert or update a USER recipe. Editing a currently-TRUSTED recipe snapshots it as last-good and
+ *  marks the edit untrusted (it must re-prove itself); a brand-new recipe starts untrusted. */
+export async function upsertUserWorkflow(wf: Workflow): Promise<void> {
+  const stored = await loadStored();
+  const prev = stored.find((s) => s.id === wf.id);
+  const next: Workflow = { ...wf, origin: 'user' };
+  if (prev && prev.trusted) {
+    // editing a proven recipe → keep a rollback target, demote to untrusted
+    next.lastGood = { whenToUse: prev.whenToUse, domain: prev.domain, steps: prev.steps, goalKeywords: prev.goalKeywords, requiredAny: prev.requiredAny };
+    next.trusted = false;
+  } else if (prev && prev.lastGood) {
+    next.lastGood = prev.lastGood; // preserve an existing rollback target across further edits
+    next.trusted = false;
+  }
+  const others = stored.filter((s) => s.id !== wf.id);
+  others.push(next);
+  await memorySet(STORE_KEY, others);
+}
+
+/** Mark a stored recipe trusted (called after a clean run that used it) + refresh its last-good. */
+export async function markWorkflowTrusted(id: string): Promise<void> {
+  const stored = await loadStored();
+  const wf = stored.find((s) => s.id === id);
+  if (!wf || wf.trusted) return;
+  wf.trusted = true;
+  wf.lastGood = { whenToUse: wf.whenToUse, domain: wf.domain, steps: wf.steps, goalKeywords: wf.goalKeywords, requiredAny: wf.requiredAny };
+  await memorySet(STORE_KEY, stored);
+}
+
+export type QuarantineResult = 'deleted' | 'rolledback' | 'ignored';
+
+/** A run that USED a user recipe failed/was messy → make the bad version unusable. A recipe with a
+ *  last-good snapshot rolls back to it (a bad edit is undone); one without (brand new, unproven) is
+ *  deleted. Builtin/auto recipes are left alone (they're gated elsewhere). */
+export async function quarantineWorkflow(id: string): Promise<QuarantineResult> {
+  if (!id.startsWith('user:')) return 'ignored';
+  const stored = await loadStored();
+  const wf = stored.find((s) => s.id === id);
+  if (!wf) return 'ignored';
+  if (wf.lastGood) {
+    const restored: Workflow = {
+      ...wf,
+      whenToUse: wf.lastGood.whenToUse,
+      domain: wf.lastGood.domain,
+      steps: wf.lastGood.steps,
+      goalKeywords: wf.lastGood.goalKeywords,
+      requiredAny: wf.lastGood.requiredAny,
+      trusted: true, // last-good was a proven version
+    };
+    await memorySet(STORE_KEY, stored.map((s) => (s.id === id ? restored : s)));
+    return 'rolledback';
+  }
+  await memorySet(STORE_KEY, stored.filter((s) => s.id !== id));
+  return 'deleted';
 }
 
 export async function saveWorkflow(wf: Workflow): Promise<void> {
