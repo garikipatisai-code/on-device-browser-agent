@@ -427,7 +427,7 @@ describe('orchestrator — workflow memory', () => {
       settings: { ...DEFAULT_SETTINGS },
       emit: () => undefined,
     });
-    const initial = await orch.start('summarize this article');
+    const initial = await orch.start('tell me a joke about cats');
     await orch.runUntilTerminal(initial);
     expect(plannerMsgs[0]).not.toContain('known-good sequence');
   });
