@@ -117,6 +117,11 @@ export class Orchestrator {
   // Mid-run user corrections ("steer"): surfaced as high-priority guidance to the planner/executor
   // on the next turn, so the user can redirect a live task without aborting it.
   private steerNotes: string[] = [];
+  // A run is "clean" only if it had NO friction (no replan, evaluator FAIL, tier/fatal denial,
+  // breaker trip, or finish rejection). We auto-record a recipe ONLY from a clean run, so a messy
+  // success (e.g. combined-query → list page → denial → recover) can't poison the recipe store.
+  private runDirty = false;
+  private dirtyReason = '';
 
   constructor(private opts: OrchestratorOpts) {
     this.signal = opts.signal ?? new AbortController().signal;
@@ -140,6 +145,8 @@ export class Orchestrator {
     this.trace = [];
     this.sourceUrls = new Set();
     this.steerNotes = [];
+    this.runDirty = false;
+    this.dirtyReason = '';
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
     this.taskId = ulid();
     const hot = await _setHot(trimmed);
@@ -201,6 +208,7 @@ export class Orchestrator {
           return this.finishOk(hot, 'success', fin.summary);
         }
         this.verifyAttempts += 1;
+        this.markDirty('finish rejected (ungrounded)');
         this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `finish rejected (attempt ${this.verifyAttempts}): ${v.reason}` });
         if (this.verifyAttempts >= 2) {
           return this.finishOk(hot, 'partial', `${fin.summary}\n\n[unverified against page: ${v.reason}]`);
@@ -215,6 +223,7 @@ export class Orchestrator {
       }
       if (execOut.result.advanceStep) {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
+        if (ev.verdict !== 'PASS') this.markDirty('evaluator FAIL on a step');
         const next = walkPlan(hot.plan!, step.id, ev.verdict === 'PASS' ? 'done' : 'fail');
         hot = await this.applyPlan(hot, next.plan);
         this.breaker = resetForNewStep(this.breaker);
@@ -252,6 +261,7 @@ export class Orchestrator {
       // executor keeps hitting one, stop promptly rather than burning turns to no-progress.
       if (execOut.result.fatal) {
         this.sawActionDenial = true; // remember it, so a later give-up salvages from what was read
+        this.markDirty('tool/tier denial');
         this.consecutiveFatal += 1;
         if (this.consecutiveFatal >= 2) {
           // Salvage first: the facts may already be in observedText (e.g. read before the denials).
@@ -266,6 +276,7 @@ export class Orchestrator {
 
       const verdict = checkBreaker(this.breaker);
       if (verdict.trip) {
+        this.markDirty('circuit breaker trip');
         this.emit({ kind: 'breaker.trip', ts: Date.now(), reason: `${verdict.reason}: ${verdict.detail ?? ''}` });
         if (hot.replanCount >= (this.opts.maxReplans ?? 3) - 1) {
           return this.giveUp(hot, `Circuit breaker tripped (${verdict.reason}) and max replans reached.`);
@@ -327,6 +338,7 @@ export class Orchestrator {
   }
 
   private async replan(hot: AgentStateHot, reason: string): Promise<AgentStateHot> {
+    this.markDirty('replan');
     hot = await patchHot({ phase: 'PLANNING', replanCount: hot.replanCount + 1 });
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'planner' });
     const t0 = performance.now();
@@ -682,6 +694,15 @@ export class Orchestrator {
     return { verdict: 'partial', summary: `${summary}\n\n[unverified against page: ${v.reason}]` };
   }
 
+  /** Mark this run as "messy" so it won't be distilled into a recipe. Called on any friction —
+   *  replan, evaluator FAIL, tier/fatal denial, breaker trip, finish rejection. First reason wins. */
+  private markDirty(reason: string): void {
+    if (!this.runDirty) {
+      this.runDirty = true;
+      this.dirtyReason = reason;
+    }
+  }
+
   private async finishOk(
     hot: AgentStateHot,
     verdict: string,
@@ -689,14 +710,19 @@ export class Orchestrator {
   ): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
-    // Auto-record: a successful run becomes a reusable recipe (AWM Phase 2).
-    if (verdict === 'success') {
+    // Auto-record a reusable recipe (AWM Phase 2) ONLY from a CLEAN success — no replan, no
+    // evaluator FAIL, no tier/fatal denial, no breaker trip, no finish rejection, and a tight
+    // step count. A messy success (combined-query → list page → denial → recover) still answers
+    // correctly but must NOT be taught back as a recipe — that's what kept poisoning the planner.
+    if (verdict === 'success' && !this.runDirty) {
       try {
         const wf = traceToWorkflow(`auto:${ulid()}`, hot.goal, deriveDomain(this.trace, hot.goal), this.trace);
         if (wf) await saveWorkflow(wf);
       } catch {
         /* recording is best-effort, never fatal */
       }
+    } else if (verdict === 'success' && this.runDirty) {
+      this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe not saved (run not clean: ${this.dirtyReason})` });
     }
     this.emit({ kind: 'finish', ts: Date.now(), verdict, summary, sources: [...this.sourceUrls].slice(0, 5) });
     return { phase: 'DONE', summary, verdict, turns: this.turns, replans: hot.replanCount };
