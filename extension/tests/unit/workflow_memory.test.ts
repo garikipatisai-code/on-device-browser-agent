@@ -5,12 +5,16 @@ import {
   deriveDomain,
   hostFromGoal,
   loadWorkflows,
+  markWorkflowTrusted,
   matchWorkflow,
+  parseUserRecipe,
+  quarantineWorkflow,
   renderRecipe,
   saveWorkflow,
   tokenize,
   traceHasRedundancy,
   traceToWorkflow,
+  upsertUserWorkflow,
   type Workflow,
 } from '@/agent/workflow_memory';
 import { resetStorage } from '../helpers';
@@ -207,5 +211,80 @@ describe('persistence round-trip', () => {
     expect(all.length).toBe(SEED_WORKFLOWS.length + 1);
     const matched = matchWorkflow('check my order status on shopsite.com', all);
     expect(matched?.id).toBe('auto:99');
+  });
+});
+
+describe('user recipe authoring (parse guided form + validate)', () => {
+  it('parses name / whenToUse / steps (with [tool: x]) into a Workflow and derives keywords', () => {
+    const { workflow, errors } = parseUserRecipe({
+      name: 'Compare anything',
+      whenToUse: 'compare several named things on one metric',
+      site: '*',
+      stepsText: 'Search one query per item   [tool: search]\nRead the value from the snippet\nReport which wins   [tool: finish]',
+    });
+    expect(errors).toEqual([]);
+    expect(workflow!.origin).toBe('user');
+    expect(workflow!.trusted).toBe(false); // new = untrusted until proven
+    expect(workflow!.steps).toEqual([
+      { instruction: 'Search one query per item', toolHint: 'search' },
+      { instruction: 'Read the value from the snippet' },
+      { instruction: 'Report which wins', toolHint: 'finish' },
+    ]);
+    expect(workflow!.goalKeywords).toContain('compare');
+    expect(workflow!.whenToUse).toContain('compare');
+  });
+
+  it('reports validation errors for an empty name / when-to-use / steps', () => {
+    const { workflow, errors } = parseUserRecipe({ name: '', whenToUse: '', site: '', stepsText: '' });
+    expect(workflow).toBeNull();
+    expect(errors.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('user recipe CRUD + trust/quarantine', () => {
+  beforeEach(async () => {
+    await resetStorage();
+  });
+  const mk = (over: Partial<Workflow> = {}): Workflow => ({
+    id: 'user:1', origin: 'user', domain: '*', goalKeywords: ['compare', 'cities'], goalSample: 'compare cities',
+    whenToUse: 'compare cities', steps: [{ instruction: 'a' }, { instruction: 'b' }], trusted: false, ...over,
+  });
+
+  it('upsertUserWorkflow saves a new user recipe (untrusted) and editing a trusted one snapshots last-good', async () => {
+    await upsertUserWorkflow(mk());
+    let loaded = (await loadWorkflows()).find((w) => w.id === 'user:1')!;
+    expect(loaded.origin).toBe('user');
+    expect(loaded.trusted).toBe(false);
+
+    // promote to trusted (simulate a clean run), then edit → must snapshot last-good + go untrusted
+    await markWorkflowTrusted('user:1');
+    await upsertUserWorkflow(mk({ steps: [{ instruction: 'a' }, { instruction: 'b' }, { instruction: 'c-new' }] }));
+    loaded = (await loadWorkflows()).find((w) => w.id === 'user:1')!;
+    expect(loaded.trusted).toBe(false); // an edit is unproven again
+    expect(loaded.lastGood?.steps.length).toBe(2); // the previous good version is snapshotted
+    expect(loaded.steps.length).toBe(3);
+  });
+
+  it('quarantineWorkflow DELETES a brand-new (no last-good) user recipe on failure', async () => {
+    await upsertUserWorkflow(mk());
+    const res = await quarantineWorkflow('user:1');
+    expect(res).toBe('deleted');
+    expect((await loadWorkflows()).some((w) => w.id === 'user:1')).toBe(false);
+  });
+
+  it('quarantineWorkflow ROLLS BACK an edited user recipe to its last-good version on failure', async () => {
+    await upsertUserWorkflow(mk());
+    await markWorkflowTrusted('user:1');
+    await upsertUserWorkflow(mk({ steps: [{ instruction: 'a' }, { instruction: 'b' }, { instruction: 'bad-edit' }] }));
+    const res = await quarantineWorkflow('user:1');
+    expect(res).toBe('rolledback');
+    const loaded = (await loadWorkflows()).find((w) => w.id === 'user:1')!;
+    expect(loaded.steps.map((s) => s.instruction)).toEqual(['a', 'b']); // back to last-good
+    expect(loaded.trusted).toBe(true); // last-good was a proven version
+  });
+
+  it('quarantineWorkflow leaves builtin/auto recipes untouched', async () => {
+    expect(await quarantineWorkflow('seed-compare')).toBe('ignored');
+    expect(await quarantineWorkflow('auto:whatever')).toBe('ignored');
   });
 });
