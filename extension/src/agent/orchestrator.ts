@@ -866,7 +866,7 @@ export class Orchestrator {
           },
         ],
         thinking: false,
-        numCtx: NUM_CTX,
+        numCtx: this.numCtx,
         timeoutMs: 120_000,
         signal: this.signal,
       });
