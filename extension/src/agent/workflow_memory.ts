@@ -16,8 +16,14 @@ export interface WorkflowStep {
   toolHint?: string;
 }
 
+/** Where a recipe came from. 'builtin' = bundled archetype (read-only); 'user' = author-edited
+ *  (editable, trust-gated); 'auto' = learned from a clean run (fallback only, demoted in matching). */
+export type WorkflowOrigin = 'builtin' | 'user' | 'auto';
+
 export interface Workflow {
   id: string;
+  /** Provenance. Defaults to 'auto' for legacy stored recipes that predate this field. */
+  origin?: WorkflowOrigin;
   /** Host this recipe is for (e.g. 'amazon.com'), or '*' for any site. */
   domain: string;
   /** Tokens that indicate this recipe is relevant. */
@@ -26,7 +32,18 @@ export interface Workflow {
    *  discriminating tokens — keeps it from hijacking unrelated tasks. */
   requiredAny?: string[];
   goalSample: string;
+  /** One plain sentence: when this recipe applies (user-authored; tokenized into goalKeywords). */
+  whenToUse?: string;
   steps: WorkflowStep[];
+  /** Trust/quarantine (user recipes): false until a clean run proves it. */
+  trusted?: boolean;
+  /** Snapshot of the last KNOWN-GOOD version (for rollback on a failed edit). */
+  lastGood?: { whenToUse?: string; domain: string; steps: WorkflowStep[]; goalKeywords: string[]; requiredAny?: string[] };
+}
+
+/** Curated recipes (builtin + user) outrank a learned (auto) one — auto is a fallback only. */
+function originRank(o?: WorkflowOrigin): number {
+  return o === 'auto' ? 0 : 1;
 }
 
 const STOPWORDS = new Set([
@@ -68,14 +85,19 @@ export function matchWorkflow(goal: string, workflows: Workflow[], threshold = 0
   const host = hostFromGoal(goal);
   let best: Workflow | null = null;
   let bestScore = 0;
+  let bestRank = -1;
   for (const wf of workflows) {
     const s = scoreWorkflow(tokens, host, wf);
-    if (s > bestScore) {
+    if (s < threshold) continue;
+    const rank = originRank(wf.origin);
+    // Curated (builtin/user) beats learned (auto). Within the same rank, higher score wins.
+    if (rank > bestRank || (rank === bestRank && s > bestScore)) {
+      bestRank = rank;
       bestScore = s;
       best = wf;
     }
   }
-  return bestScore >= threshold ? best : null;
+  return best;
 }
 
 export function renderRecipe(wf: Workflow): string {
@@ -86,7 +108,66 @@ export function renderRecipe(wf: Workflow): string {
 
 export const SEED_WORKFLOWS: Workflow[] = [
   {
+    id: 'seed-compare',
+    origin: 'builtin',
+    domain: '*',
+    // BROAD: any comparison of several named things (cities, products, countries, specs…).
+    requiredAny: ['compare', 'comparison', 'vs', 'versus', 'largest', 'biggest', 'smallest', 'highest', 'lowest', 'best', 'which'],
+    goalKeywords: ['compare', 'comparison', 'versus', 'vs', 'largest', 'biggest', 'smallest', 'highest', 'lowest', 'which', 'population', 'gdp', 'price', 'size', 'cities', 'countries', 'products'],
+    goalSample: 'compare several named things on one metric and say which wins',
+    whenToUse: 'Comparing several named things (cities, products, countries) on a single metric.',
+    steps: [
+      { instruction: 'For EACH item, run ONE web search of the form "<item> <metric>" (one item per query — never a combined query, which returns an un-readable ranking page).', toolHint: 'search' },
+      { instruction: "Read that item's value straight from the result snippet; open its page only if the snippet lacks the value.", toolHint: 'open_result' },
+      { instruction: 'Use the SAME basis for every item (e.g. all city-proper, all 2020 census) — never mix bases.' },
+      { instruction: 'Report all items with their values and state which one wins.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-research',
+    origin: 'builtin',
+    domain: '*',
+    requiredAny: ['research', 'deep', 'investigate', 'sources'],
+    goalKeywords: ['research', 'deep', 'investigate', 'report', 'findings', 'sources', 'topic', 'overview'],
+    goalSample: 'research a topic across a few sources and summarize with citations',
+    whenToUse: 'Researching a topic and summarizing it from a few sources.',
+    steps: [
+      { instruction: 'Break the topic into 2–4 concrete sub-questions.' },
+      { instruction: 'For each sub-question, run ONE focused web search and read the best result(s) snippet (open a page only when the snippet is thin).', toolHint: 'search' },
+      { instruction: 'Synthesize a concise answer from what you actually read; cite the sources.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-shopping',
+    origin: 'builtin',
+    domain: '*',
+    requiredAny: ['buy', 'cheap', 'cheapest', 'price', 'deal', 'under', 'shopping', 'product', 'best'],
+    goalKeywords: ['buy', 'cheap', 'cheapest', 'price', 'deal', 'under', 'shop', 'shopping', 'product', 'best', 'budget', 'dollars', 'top'],
+    goalSample: 'find products matching a category + constraint and report the best few with prices',
+    whenToUse: 'Finding products by category and a constraint (e.g. cheapest, under $X).',
+    steps: [
+      { instruction: 'Search the web for the category plus the constraint (e.g. "mechanical keyboard under $100").', toolHint: 'search' },
+      { instruction: 'Read the result snippets / a results page; extract candidate names and prices.', toolHint: 'open_result' },
+      { instruction: 'Filter to the constraint and report the top 2–3 with names and prices.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-local',
+    origin: 'builtin',
+    domain: '*',
+    requiredAny: ['restaurant', 'restaurants', 'near', 'nearby', 'cafe', 'coffee', 'bar', 'hotel', 'local', 'around'],
+    goalKeywords: ['restaurant', 'restaurants', 'near', 'nearby', 'cafe', 'coffee', 'bar', 'hotel', 'local', 'around', 'food', 'place', 'places', 'best'],
+    goalSample: 'find local places of a kind near a location and report a few with one detail each',
+    whenToUse: 'Finding local places (restaurants, cafes, hotels) near a place.',
+    steps: [
+      { instruction: 'Search the web for "<kind of place> in <location>".', toolHint: 'search' },
+      { instruction: 'Read the result snippets; extract a few place names and one detail each (rating or cuisine). Do NOT invent hours, menus, or addresses.', toolHint: 'open_result' },
+      { instruction: 'Report 3–5 places with the detail you actually found.', toolHint: 'finish' },
+    ],
+  },
+  {
     id: 'seed-onpage-site-search',
+    origin: 'builtin',
     domain: '*',
     // Triggered by tasks that use a site's OWN search box and drill into a product,
     // e.g. "go to amazon.com, search ... in the search box, click the first product".
@@ -108,6 +189,7 @@ export const SEED_WORKFLOWS: Workflow[] = [
   },
   {
     id: 'seed-job-application',
+    origin: 'builtin',
     domain: '*',
     // Filling + submitting a job application form (an ATS like Greenhouse/Lever).
     requiredAny: ['apply', 'application', 'job'],
@@ -250,7 +332,7 @@ export function traceToWorkflow(
   // Redact PII from the goal before it's persisted to durable memory and re-injected
   // into future planner prompts (job-apply goals routinely carry email/phone/name).
   const safeGoal = redact(goal);
-  return { id, domain, goalKeywords: tokenize(safeGoal), goalSample: safeGoal, steps };
+  return { id, origin: 'auto', domain, goalKeywords: tokenize(safeGoal), goalSample: safeGoal, steps };
 }
 
 /** Best-effort site host for a trace (first opened URL → host), else from the goal. */
