@@ -3,6 +3,7 @@ import type {
   AgentStatus,
   MetricsSnapshot,
   PanelCommand,
+  RecipeView,
   Settings,
   SwUpdate,
   TimelineEvent,
@@ -23,6 +24,7 @@ import { ConnectionCard } from './components/ConnectionCard';
 import { Icon } from './components/Icon';
 import { SettingsPanel } from './components/SettingsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
+import { RecipesPanel } from './components/RecipesPanel';
 
 export function App() {
   const [tab, setTab] = useState<TabId>('agent');
@@ -39,6 +41,7 @@ export function App() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+  const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [notice, setNotice] = useState<{ msg: string; kind: 'warn' | 'error' } | null>(null);
   const [installedModels, setInstalledModels] = useState<string[]>([]);
   const [extractingProfile, setExtractingProfile] = useState(false);
@@ -71,6 +74,9 @@ export function App() {
           break;
         case 'metrics':
           setMetrics(msg.metrics);
+          break;
+        case 'recipes':
+          setRecipes(msg.recipes);
           break;
         case 'models':
           if (msg.ok) {
@@ -258,6 +264,15 @@ export function App() {
             }}
             onStoreResume={(payload) => send({ type: 'resume.store', ...payload })}
             onClearRecipes={() => send({ type: 'recipes.clear' })}
+          />
+        )}
+
+        {tab === 'recipes' && (
+          <RecipesPanel
+            recipes={recipes}
+            onRefresh={() => send({ type: 'recipes.list' })}
+            onSave={(input) => send({ type: 'recipes.save', input })}
+            onDelete={(id) => send({ type: 'recipes.delete', id })}
           />
         )}
 

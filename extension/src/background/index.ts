@@ -24,7 +24,7 @@ import { buildProfileExtractionMessages, normalizeExtractedProfile } from '@/age
 import { NUM_CTX } from '@/agent/budget';
 import { metricsSnapshot } from '@/agent/metrics';
 import { persistTimeline, loadTimeline, clearPersistedTimeline } from './timeline_store';
-import { clearLearnedWorkflows } from '@/agent/workflow_memory';
+import { clearLearnedWorkflows, listRecipeViews, parseUserRecipe, upsertUserWorkflow, deleteUserWorkflow } from '@/agent/workflow_memory';
 
 let _orch: Orchestrator | null = null;
 // Synchronous start-guard: handleStart awaits ping/listModels before _orch is set, so two
@@ -102,6 +102,10 @@ async function pushStatus() {
 
 async function pushMetrics() {
   broadcast({ type: 'metrics', metrics: metricsSnapshot() });
+}
+
+async function pushRecipes() {
+  broadcast({ type: 'recipes', recipes: await listRecipeViews() });
 }
 
 if (typeof chrome !== 'undefined' && chrome.sidePanel?.setPanelBehavior) {
@@ -419,7 +423,25 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
             break;
           case 'recipes.clear':
             await clearLearnedWorkflows();
+            await pushRecipes();
             broadcast({ type: 'error', message: 'Learned recipes cleared — the planner will rebuild them from clean runs.' });
+            break;
+          case 'recipes.list':
+            await pushRecipes();
+            break;
+          case 'recipes.save': {
+            const { workflow, errors } = parseUserRecipe(cmd.input);
+            if (!workflow) {
+              broadcast({ type: 'error', message: `Recipe not saved: ${errors.join(' ')}` });
+            } else {
+              await upsertUserWorkflow(workflow);
+              await pushRecipes();
+            }
+            break;
+          }
+          case 'recipes.delete':
+            await deleteUserWorkflow(cmd.id);
+            await pushRecipes();
             break;
           case 'preflight':
             await handlePreflight();

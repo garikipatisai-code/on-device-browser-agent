@@ -107,6 +107,47 @@ export function renderRecipe(wf: Workflow): string {
     .join('\n');
 }
 
+/** Map a stored Workflow to the UI-facing RecipeView (friendly fields + the live planner preview).
+ *  Imported shape kept local to avoid a messages.ts ↔ workflow_memory.ts import cycle. */
+export interface RecipeViewShape {
+  id: string;
+  origin: WorkflowOrigin;
+  name: string;
+  whenToUse: string;
+  site: string;
+  steps: WorkflowStep[];
+  trusted?: boolean;
+  preview: string;
+}
+export function toRecipeView(wf: Workflow): RecipeViewShape {
+  return {
+    id: wf.id,
+    origin: wf.origin ?? 'auto',
+    name: wf.whenToUse ? wf.id.replace(/^(user:|auto:|seed-)/, '').replace(/[-_]/g, ' ') : wf.goalSample,
+    whenToUse: wf.whenToUse ?? wf.goalSample,
+    site: wf.domain,
+    steps: wf.steps,
+    trusted: wf.trusted,
+    preview: renderRecipe(wf),
+  };
+}
+
+/** All recipes (seeds + stored) as UI views, curated first then learned. */
+export async function listRecipeViews(): Promise<RecipeViewShape[]> {
+  const all = await loadWorkflows();
+  return all.map(toRecipeView).sort((a, b) => {
+    const rank = (o: WorkflowOrigin) => (o === 'builtin' ? 0 : o === 'user' ? 1 : 2);
+    return rank(a.origin) - rank(b.origin);
+  });
+}
+
+/** Delete a user recipe by id (builtin/auto are not user-deletable here). */
+export async function deleteUserWorkflow(id: string): Promise<void> {
+  if (!id.startsWith('user:')) return;
+  const stored = await loadStored();
+  await memorySet(STORE_KEY, stored.filter((s) => s.id !== id));
+}
+
 export const SEED_WORKFLOWS: Workflow[] = [
   {
     id: 'seed-compare',

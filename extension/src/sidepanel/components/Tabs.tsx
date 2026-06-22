@@ -1,9 +1,10 @@
 import { Icon, type IconName } from './Icon';
 
-export type TabId = 'agent' | 'settings' | 'metrics';
+export type TabId = 'agent' | 'recipes' | 'settings' | 'metrics';
 
 const TABS: { id: TabId; label: string; icon: IconName }[] = [
   { id: 'agent', label: 'Agent', icon: 'spark' },
+  { id: 'recipes', label: 'Recipes', icon: 'plan' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
   { id: 'metrics', label: 'Metrics', icon: 'gauge' },
 ];
