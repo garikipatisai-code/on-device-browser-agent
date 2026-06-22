@@ -14,6 +14,8 @@ import { ResultCard } from '@/sidepanel/components/ResultCard';
 import { Timeline } from '@/sidepanel/components/Timeline';
 import { SettingsPanel } from '@/sidepanel/components/SettingsPanel';
 import { MetricsPanel } from '@/sidepanel/components/MetricsPanel';
+import { RecipesPanel } from '@/sidepanel/components/RecipesPanel';
+import type { RecipeView } from '@/shared/messages';
 
 const noop = () => undefined;
 const plan: Plan = {
@@ -145,5 +147,18 @@ describe('redesigned components render across states', () => {
     );
     expect(html).toContain('planner');
     expect(html).toContain('calls');
+  });
+
+  it('RecipesPanel lists recipes, shows the selected one with its planner preview + origin', () => {
+    const recipes: RecipeView[] = [
+      { id: 'seed-compare', origin: 'builtin', name: 'Compare anything', whenToUse: 'compare several things', site: '*', steps: [{ instruction: 'search each', toolHint: 'search' }], preview: '1. search each  [tool: search]' },
+      { id: 'user:1', origin: 'user', name: 'My flow', whenToUse: 'do my thing', site: '*', trusted: false, steps: [{ instruction: 'step a' }], preview: '1. step a' },
+    ];
+    const html = renderToStaticMarkup(<RecipesPanel recipes={recipes} onRefresh={noop} onSave={noop} onDelete={noop} />);
+    expect(html).toContain('Recipes');
+    expect(html).toContain('Compare anything'); // first recipe selected by default
+    expect(html).toContain('[tool: search]'); // the live planner preview is shown
+    expect(html).toMatch(/Built-in/); // origin label
+    expect(html).toMatch(/New/); // the author-new affordance
   });
 });

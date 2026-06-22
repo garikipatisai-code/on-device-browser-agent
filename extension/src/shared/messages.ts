@@ -102,8 +102,33 @@ export type PanelCommand =
   | { type: 'profile.extract'; resumeText: string }
   | { type: 'resume.store'; name: string; mime: string; base64: string }
   | { type: 'recipes.clear' }
+  | { type: 'recipes.list' }
+  | { type: 'recipes.save'; input: UserRecipeDraft }
+  | { type: 'recipes.delete'; id: string }
   | { type: 'models.list' }
   | { type: 'preflight' };
+
+/** A recipe as shown/edited in the Recipes tab (UI mirror of the agent's Workflow). */
+export interface RecipeView {
+  id: string;
+  origin: 'builtin' | 'user' | 'auto';
+  name: string;
+  whenToUse: string;
+  site: string;
+  steps: Array<{ instruction: string; toolHint?: string }>;
+  trusted?: boolean;
+  /** Rendered exactly as the planner receives it (the live preview). */
+  preview: string;
+}
+
+/** What the guided editor submits (id present = edit; absent = new). */
+export interface UserRecipeDraft {
+  id?: string;
+  name: string;
+  whenToUse: string;
+  site?: string;
+  stepsText: string;
+}
 
 // ---- SW → panel updates ----
 
@@ -125,6 +150,7 @@ export type SwUpdate =
   | { type: 'models'; ok: boolean; models: string[]; error?: string }
   | { type: 'profileExtracted'; ok: boolean; profileJson?: string; error?: string }
   | { type: 'resumeStored'; ok: boolean; name?: string; error?: string }
+  | { type: 'recipes'; recipes: RecipeView[] }
   | { type: 'metrics'; metrics: MetricsSnapshot }
   | { type: 'error'; message: string };
 
