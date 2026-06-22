@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
 import { loadHot, clearHot, _setHot } from '@/background/state_store';
-import { loadWorkflows } from '@/agent/workflow_memory';
+import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, type Workflow } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
 function buildRegistry(): ToolRegistry {
@@ -1052,6 +1052,67 @@ describe('orchestrator — salvages an answer from what it read instead of givin
     expect(result.verdict).toBe('partial'); // salvaged — NOT 'aborted' with no answer
     expect(result.summary).toContain('Austin');
     expect(result.summary).toContain('975000');
+  });
+});
+
+describe('orchestrator — user recipe trust/quarantine (the authored-recipe safety net)', () => {
+  const userRecipe = (over: Partial<Workflow> = {}): Workflow => ({
+    id: 'user:r1', origin: 'user', domain: '*', goalKeywords: ['knit', 'scarf'], goalSample: 'knit a scarf',
+    whenToUse: 'knit a scarf', steps: [{ instruction: 'step one' }, { instruction: 'step two' }], trusted: false, ...over,
+  });
+  const isTrusted = async () => (await loadWorkflows()).find((w) => w.id === 'user:r1')?.trusted;
+  const exists = async () => (await loadWorkflows()).some((w) => w.id === 'user:r1');
+
+  it('a clean success CONFIRMS (trusts) the user recipe that drove it', async () => {
+    await upsertUserWorkflow(userRecipe());
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'do it', successCriteria: 'done' }] }) })],
+      executor: [rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'knitted' } }] })],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const r = await orch.runUntilTerminal(await orch.start('knit a scarf for me'));
+    expect(r.verdict).toBe('success');
+    expect(await isTrusted()).toBe(true); // proven by a clean run
+  });
+
+  it('a failed run DELETES a brand-new (unproven) user recipe that drove it', async () => {
+    await upsertUserWorkflow(userRecipe());
+    // multi-step plan (no thin-plan retry); executor never calls a tool → unknown-tool storm → ABORTED
+    const multiStep = rawResponse({ content: JSON.stringify({ steps: [{ description: 'a', successCriteria: 'x' }, { description: 'b', successCriteria: 'y' }] }) });
+    const ollama = makeFakeOllama({
+      planner: [multiStep, multiStep, multiStep],
+      executor: [
+        rawResponse({ content: 'no tool' }), rawResponse({ content: 'still none' }),
+        rawResponse({ content: 'a' }), rawResponse({ content: 'b' }), rawResponse({ content: 'c' }), rawResponse({ content: 'd' }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxReplans: 2, maxStepTurns: 4 });
+    const r = await orch.runUntilTerminal(await orch.start('knit a scarf for me'));
+    expect(r.phase).toBe('ABORTED');
+    expect(await exists()).toBe(false); // unproven + failed → removed
+  });
+
+  it('a failed run ROLLS BACK an edited (trusted→edited) user recipe to its last-good version', async () => {
+    // proven v1, then a bad edit (untrusted, has lastGood)
+    await upsertUserWorkflow(userRecipe());
+    await markWorkflowTrusted('user:r1');
+    await upsertUserWorkflow(userRecipe({ steps: [{ instruction: 'step one' }, { instruction: 'bad edit' }] }));
+    const multiStep = rawResponse({ content: JSON.stringify({ steps: [{ description: 'a', successCriteria: 'x' }, { description: 'b', successCriteria: 'y' }] }) });
+    const ollama = makeFakeOllama({
+      planner: [multiStep, multiStep, multiStep],
+      executor: [
+        rawResponse({ content: 'no tool' }), rawResponse({ content: 'still none' }),
+        rawResponse({ content: 'a' }), rawResponse({ content: 'b' }), rawResponse({ content: 'c' }), rawResponse({ content: 'd' }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxReplans: 2, maxStepTurns: 4 });
+    await orch.runUntilTerminal(await orch.start('knit a scarf for me'));
+    const wf = (await loadWorkflows()).find((w) => w.id === 'user:r1')!;
+    expect(wf.steps.map((s) => s.instruction)).toEqual(['step one', 'step two']); // rolled back
+    expect(wf.trusted).toBe(true);
   });
 });
 
