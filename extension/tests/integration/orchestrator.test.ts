@@ -75,7 +75,7 @@ describe('orchestrator — full plan completion', () => {
 
 describe('orchestrator — goal byte-survival across replan', () => {
   it('goal text is byte-identical after replan + compaction-ish path', async () => {
-    const goal = 'Find a wireless mouse under $30 ★';
+    const goal = 'Tidy up the kitchen drawer ★';
     const planJson = JSON.stringify({
       steps: [{ description: 'noop forever', successCriteria: 'never' }],
     });

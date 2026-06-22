@@ -11,6 +11,7 @@ import {
   tokenize,
   traceHasRedundancy,
   traceToWorkflow,
+  type Workflow,
 } from '@/agent/workflow_memory';
 import { resetStorage } from '../helpers';
 
@@ -32,6 +33,19 @@ describe('matchWorkflow', () => {
     expect(wf?.id).toBe('seed-onpage-site-search');
   });
 
+  it('prefers a curated (builtin/user) recipe over a learned (auto) one at equal-ish match', () => {
+    const builtin: Workflow = { id: 'b', origin: 'builtin', domain: '*', goalKeywords: ['compare', 'population', 'cities'], goalSample: 'compare cities', steps: [{ instruction: 's1' }, { instruction: 's2' }] };
+    const auto: Workflow = { id: 'auto:1', origin: 'auto', domain: '*', goalKeywords: ['compare', 'population', 'cities'], goalSample: 'compare cities', steps: [{ instruction: 's1' }, { instruction: 's2' }] };
+    const picked = matchWorkflow('compare the population of these cities', [auto, builtin]);
+    expect(picked?.id).toBe('b'); // curated wins even though auto scores the same
+  });
+
+  it('falls back to a learned (auto) recipe when no curated recipe matches', () => {
+    const auto: Workflow = { id: 'auto:2', origin: 'auto', domain: '*', goalKeywords: ['knit', 'scarf', 'pattern'], goalSample: 'knit a scarf', steps: [{ instruction: 's1' }, { instruction: 's2' }] };
+    const picked = matchWorkflow('find a knit scarf pattern', [auto]);
+    expect(picked?.id).toBe('auto:2');
+  });
+
   it('does NOT hijack the simpler "list top 3" flow (no box/click/product)', () => {
     const goal = 'search amazon for a wireless mouse and list the first 3 results';
     expect(matchWorkflow(goal, SEED_WORKFLOWS)).toBeNull();
@@ -46,6 +60,17 @@ describe('matchWorkflow', () => {
     expect(wf?.id).toBe('seed-job-application');
   });
 
+  it('every seed recipe is a read-only builtin', () => {
+    expect(SEED_WORKFLOWS.every((w) => w.origin === 'builtin')).toBe(true);
+  });
+
+  it('has broad+concrete archetypes that match generic goals (not just one phrasing)', () => {
+    expect(matchWorkflow('compare the gdp of france, germany and italy', SEED_WORKFLOWS)?.id).toBe('seed-compare');
+    expect(matchWorkflow('do deep research on fusion startups and summarize', SEED_WORKFLOWS)?.id).toBe('seed-research');
+    expect(matchWorkflow('find a cheap mechanical keyboard under 100 dollars', SEED_WORKFLOWS)?.id).toBe('seed-shopping');
+    expect(matchWorkflow('find good italian restaurants near boston', SEED_WORKFLOWS)?.id).toBe('seed-local');
+  });
+
   it('the job recipe attaches the résumé via tab.upload_file and never submits', () => {
     const wf = SEED_WORKFLOWS.find((w) => w.id === 'seed-job-application')!;
     const hints = wf.steps.map((s) => s.toolHint ?? '');
@@ -57,7 +82,7 @@ describe('matchWorkflow', () => {
 
 describe('renderRecipe', () => {
   it('renders numbered steps with tool hints', () => {
-    const text = renderRecipe(SEED_WORKFLOWS[0]);
+    const text = renderRecipe(SEED_WORKFLOWS.find((w) => w.id === 'seed-onpage-site-search')!);
     expect(text).toMatch(/^1\. /);
     expect(text).toContain('[tool: tab.type submit:true]');
     expect(text).toContain('[tool: finish]');
