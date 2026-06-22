@@ -40,7 +40,7 @@ import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domai
 import { sleep } from '@/background/signal';
 import { waitForTabSettled } from './tools/browser/tab';
 import { clearSearchResults } from './tools/browser/search';
-import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, deriveDomain, type Workflow } from './workflow_memory';
+import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, markWorkflowTrusted, quarantineWorkflow, deriveDomain, type Workflow } from './workflow_memory';
 import { renderProfileBlock } from './profile';
 
 // Tools whose output IS page content. The orchestrator carries the most recent
@@ -703,6 +703,31 @@ export class Orchestrator {
     }
   }
 
+  /** Settle the USER recipe (if one drove this run): a CLEAN, non-redundant success proves it
+   *  (trust + snapshot); any failure/messy/redundant run quarantines it (rollback to last-good, or
+   *  delete if brand-new). Builtin/auto recipes are untouched. This is the user-recipe "catch":
+   *  a bad authored recipe can't keep being used. */
+  private async settleUserRecipe(verdict: string): Promise<void> {
+    const wf = this.matchedWorkflow;
+    if (!wf || wf.origin !== 'user') return;
+    const cleanSuccess = verdict === 'success' && !this.runDirty && !traceHasRedundancy(this.trace);
+    try {
+      if (cleanSuccess) {
+        await markWorkflowTrusted(wf.id);
+        this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe "${wf.id}" confirmed (clean run).` });
+      } else {
+        const res = await quarantineWorkflow(wf.id);
+        if (res === 'rolledback') {
+          this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `Recipe "${wf.id}" didn't work — rolled back to its last good version.` });
+        } else if (res === 'deleted') {
+          this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `Recipe "${wf.id}" didn't work and wasn't proven — removed it.` });
+        }
+      }
+    } catch {
+      /* settling is best-effort, never fatal */
+    }
+  }
+
   private async finishOk(
     hot: AgentStateHot,
     verdict: string,
@@ -710,6 +735,7 @@ export class Orchestrator {
   ): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
+    await this.settleUserRecipe(verdict);
     // Auto-record a reusable recipe (AWM Phase 2) ONLY from a CLEAN success — no replan, no
     // evaluator FAIL, no tier/fatal denial, no breaker trip, no finish rejection, and a tight
     // step count. A messy success (combined-query → list page → denial → recover) still answers
@@ -737,6 +763,7 @@ export class Orchestrator {
   private async abortNow(hot: AgentStateHot, reason: string): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'ABORTED' });
+    await this.settleUserRecipe('aborted'); // a failed run quarantines the user recipe that drove it
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
     return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };
   }
