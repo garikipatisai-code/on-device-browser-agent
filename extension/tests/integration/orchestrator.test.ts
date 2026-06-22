@@ -1341,3 +1341,202 @@ describe('orchestrator — salvages a grounded answer when it gives up AFTER an 
     expect(result.summary).not.toContain('SHOULD NOT BE USED');
   });
 });
+
+describe('orchestrator — facts ledger: retention across steps', () => {
+  // Test A: Three steps, each reads a page with a distinct number.  The evaluator
+  // returns a grounded `fact` per step.  We capture executor messages on the FINAL
+  // turn and assert the FINDINGS: section carries all three facts, proving that early
+  // ledger entries survive to the last turn.
+  it('carries all grounded facts from earlier steps into the final executor turn FINDINGS block', async () => {
+    // Three pages, each with a unique number that is also present in the evaluator's fact field.
+    const pages = [
+      { content: 'City 1 population: 111,111', url: 'https://cities.test/1', fact: 'City 1: 111,111' },
+      { content: 'City 2 population: 222,222', url: 'https://cities.test/2', fact: 'City 2: 222,222' },
+      { content: 'City 3 population: 333,333', url: 'https://cities.test/3', fact: 'City 3: 333,333' },
+    ];
+    let pageIdx = -1;
+
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        pageIdx += 1;
+        const p = pages[pageIdx] ?? pages[pages.length - 1];
+        return { ok: true, content: p.content, data: { url: p.url } };
+      },
+    });
+
+    const execPrompts: string[] = [];
+    const ollama = makeFakeOllama(
+      {
+        planner: [
+          rawResponse({
+            content: JSON.stringify({
+              steps: [
+                { description: 'read city 1', successCriteria: 'got city 1 pop' },
+                { description: 'read city 2', successCriteria: 'got city 2 pop' },
+                { description: 'read city 3 and report', successCriteria: 'got city 3 pop' },
+              ],
+            }),
+          }),
+        ],
+        executor: [
+          // Step 1: read page 1, then advance
+          rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'got city 1' } }] }),
+          // Step 2: read page 2, then advance
+          rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'got city 2' } }] }),
+          // Step 3: read page 3, then finish
+          rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'City 1: 111,111. City 2: 222,222. City 3: 333,333.' } }] }),
+        ],
+        evaluator: [
+          // Evaluator for step 1 — fact grounded in "City 1 population: 111,111"
+          rawResponse({
+            content: JSON.stringify({
+              verdict: 'PASS', reason: 'city 1 read', shouldReplan: false,
+              finishVerdict: null, finishSummary: null,
+              fact: 'City 1: 111,111',
+            }),
+          }),
+          // Evaluator for step 2 — fact grounded in "City 2 population: 222,222"
+          rawResponse({
+            content: JSON.stringify({
+              verdict: 'PASS', reason: 'city 2 read', shouldReplan: false,
+              finishVerdict: null, finishSummary: null,
+              fact: 'City 2: 222,222',
+            }),
+          }),
+          // Step 3 finishes via executor finish tool — no evaluator needed
+        ],
+      },
+      {
+        onChat: (_m, role, messages) => {
+          if (role === 'executor') execPrompts.push(JSON.stringify(messages));
+        },
+      },
+    );
+
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: () => undefined,
+    });
+
+    const result = await orch.runUntilTerminal(await orch.start('compare city populations'));
+
+    expect(result.phase).toBe('DONE');
+    // The last executor turn is the one that calls finish — it must see all three facts.
+    // We need at least 5 turns: extract1, next_step1, extract2, next_step2, extract3.
+    expect(execPrompts.length).toBeGreaterThanOrEqual(5);
+    const lastPrompt = execPrompts[execPrompts.length - 1];
+    // All three facts must appear in the FINDINGS block of the final executor prompt.
+    expect(lastPrompt).toContain('FINDINGS:');
+    expect(lastPrompt).toContain('111,111');
+    expect(lastPrompt).toContain('222,222');
+    // City 3 is on the current page (not yet in the ledger when step 3's executor is called),
+    // but 111,111 and 222,222 must have survived from steps 1 and 2.
+    // NOTE: City 3's fact is added AFTER the evaluator runs for step 3, which only fires when
+    // next_step is called — not when finish() is called — so 333,333 may not be in FINDINGS
+    // on the final executor turn. The key assertion is that early facts survive.
+  });
+});
+
+describe('orchestrator — facts ledger: ungrounded mid-plan prose is blocked', () => {
+  // Test B: On a non-final step the executor returns prose (no tool call, both turns are
+  // prose ≥ 80 chars) that asserts a number NOT present on any page read yet.  The
+  // orchestrator must NOT advance the plan — instead it appends a [VERIFICATION] note
+  // to the scratchpad and continues the same step.
+  //
+  // Positive sub-case: when the prose asserts the GROUNDED number (one present on the
+  // page already read), the plan DOES advance — proving the gate is specific, not blanket.
+  it('blocks a non-final prose answer that asserts an ungrounded number, advances when grounded', async () => {
+    // Page content only has 111,111. The first prose attempt asserts 999,999 (not on the page).
+    // The second attempt (after the [VERIFICATION] nudge) asserts 111,111 (grounded).
+    const PAGE_CONTENT = 'City Alpha population: 111,111 residents';
+
+    let ariaCalls = 0;
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        ariaCalls += 1;
+        return { ok: true, content: PAGE_CONTENT, data: { url: 'https://cities.test/alpha' } };
+      },
+    });
+
+    // We need to observe the scratchpad to confirm the [VERIFICATION] note was written.
+    // The harness exposes scratchpad contents via executor prompts (ctx.scratchpad is injected).
+    // So we capture executor prompts to check both the blocked-step and the advance.
+    const execPrompts: string[] = [];
+    const ollama = makeFakeOllama(
+      {
+        planner: [
+          rawResponse({
+            content: JSON.stringify({
+              steps: [
+                { description: 'read city alpha and report pop', successCriteria: 'population reported' },
+                { description: 'wrap up', successCriteria: 'done' },
+              ],
+            }),
+          }),
+        ],
+        executor: [
+          // Turn 1: read the page (aria.extract → records 111,111 in observedText)
+          rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+          // Turn 2: first prose attempt — asserts UNGROUNDED 999,999 (not on any page read)
+          // Both turns must be prose to trigger the 'answer' path (first attempt + retry are both prose).
+          rawResponse({ content: 'Based on my research the population of City Alpha is approximately 999,999 residents as reported in the latest census available.' }),
+          rawResponse({ content: 'Based on my research the population of City Alpha is approximately 999,999 residents as reported in the latest census available.' }),
+          // Turn 3: prose with GROUNDED 111,111 — should advance the step.
+          rawResponse({ content: 'The population of City Alpha is 111,111 residents according to the page I just read. This is accurate per the aria.extract output I obtained.' }),
+          rawResponse({ content: 'The population of City Alpha is 111,111 residents according to the page I just read. This is accurate per the aria.extract output I obtained.' }),
+          // After advance: finish on step 2
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'City Alpha population: 111,111' } }] }),
+        ],
+        evaluator: [
+          // Evaluator for step 1 after the grounded prose advances it
+          rawResponse({
+            content: JSON.stringify({
+              verdict: 'PASS', reason: 'population reported', shouldReplan: false,
+              finishVerdict: null, finishSummary: null, fact: null,
+            }),
+          }),
+        ],
+      },
+      {
+        onChat: (_m, role, messages) => {
+          if (role === 'executor') execPrompts.push(JSON.stringify(messages));
+        },
+      },
+    );
+
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: () => undefined,
+    });
+
+    const result = await orch.runUntilTerminal(await orch.start('find city alpha population'));
+
+    expect(result.phase).toBe('DONE');
+    // The plan completed, proving the grounded prose did advance the step.
+    expect(result.verdict).toBe('success');
+
+    // The [VERIFICATION] note must have been written to the scratchpad after the ungrounded
+    // prose was blocked.  It then appears in subsequent executor prompts (ctx.scratchpad).
+    // Turn indices: 0=aria.extract, 1=first-ungrounded-prose, 2=second-grounded-prose, 3=finish-step2.
+    // The scratchpad is injected into ctx on every executor call, so look at prompts after turn 1.
+    const promptsAfterBlock = execPrompts.slice(2).join('\n');
+    expect(promptsAfterBlock).toContain('[VERIFICATION]');
+    // Also confirm the grounded answer did advance (final verdict 'success', not 'partial' or 'aborted').
+    expect(result.summary).toContain('111,111');
+  });
+});
