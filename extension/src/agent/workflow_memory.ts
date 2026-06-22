@@ -192,8 +192,11 @@ export const SEED_WORKFLOWS: Workflow[] = [
     origin: 'builtin',
     domain: '*',
     // Research/explain/find-info on a topic — guards hallucination + missing citations + over-opening.
+    // requiredAny stays a TIGHT gate; goalKeywords is enriched so a gated-in goal scores above the
+    // threshold even when it carries extra topic words (recall) — 'about'/'tell' are scorer-only,
+    // NOT gate tokens, so "tell me a joke about cats" still doesn't match.
     requiredAny: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'why', 'causes', 'where'],
-    goalKeywords: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'topic', 'sources', 'why', 'causes', 'where', 'inflation'],
+    goalKeywords: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'topic', 'sources', 'why', 'causes', 'where', 'inflation', 'information', 'about', 'tell', 'history', 'effects', 'difference', 'understand', 'meaning'],
     goalSample: 'research / explain / find information on a topic and answer with sources',
     whenToUse: 'Researching, explaining, or finding information on a topic from the web.',
     steps: [
