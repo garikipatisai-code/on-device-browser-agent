@@ -417,6 +417,13 @@ describe('built-in recipe routing matrix (review guard: realistic goals route to
     ['find the phone number of the British Museum', 'seed-contact'],
     ['what does the graph in this image show', 'seed-read-visual'],
     ['translate this page into spanish', 'seed-translate'],
+    // widening batch (must not disturb the routes above):
+    ['find the cheapest place to buy a PS5', 'seed-price-compare'],
+    ['which budget laptop is cheapest', 'seed-compare'], // 'cheapest' alone stays with compare (different items)
+    ['add a usb cable to my cart and go to checkout', 'seed-cart-stop'],
+    ['what are the pros and cons of an electric car', 'seed-pros-cons'],
+    ['should I switch to a standing desk', 'seed-pros-cons'],
+    ['find the section about refunds on this page', 'seed-find-on-page'],
   ];
   it.each(cases)('routes "%s" -> %s', (goal, expected) => {
     expect(matchWorkflow(goal, SEED_WORKFLOWS)?.id).toBe(expected);

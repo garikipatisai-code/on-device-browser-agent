@@ -399,6 +399,73 @@ export const SEED_WORKFLOWS: Workflow[] = [
       { instruction: "Translate ONLY the page's actual text into the requested language; do not add commentary or summarize unless asked.", toolHint: 'finish' },
     ],
   },
+  {
+    id: 'seed-price-compare',
+    origin: 'builtin',
+    domain: '*',
+    // Cheapest place to buy ONE product across sellers — guards list-price-only + variant mismatch.
+    // Gate on BUY/shop verbs (not bare 'cheapest', which seed-compare owns) so "which X is cheapest"
+    // (different items) still routes to compare, while "where to buy X cheapest" (one item) lands here.
+    requiredAny: ['buy', 'purchase', 'sellers', 'seller', 'retailer', 'retailers', 'shop', 'store', 'stores', 'shopping'],
+    goalKeywords: ['buy', 'purchase', 'cheapest', 'price', 'prices', 'deal', 'deals', 'sellers', 'seller', 'retailer', 'retailers', 'shop', 'store', 'stores', 'online', 'shipping', 'order', 'where', 'best', 'cost', 'product'],
+    goalSample: 'find the cheapest place to buy one specific product across several sellers (compare total incl. shipping)',
+    whenToUse: 'Finding the cheapest place to buy ONE specific product across multiple sellers.',
+    steps: [
+      { instruction: 'Search the EXACT product name (with model/size/variant) on the web.', toolHint: 'search' },
+      { instruction: 'Open 2–3 different retailer results for the SAME product variant/condition (open only what you need).', toolHint: 'open_result' },
+      { instruction: 'For each seller, read the price AND the shipping cost — compare the TOTAL (price + shipping), never the list price alone, and confirm it is the same variant (size/colour/condition).' },
+      { instruction: 'Report each seller with its total and name the cheapest, stating which variant you compared.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-cart-stop',
+    origin: 'builtin',
+    domain: '*',
+    // Add to cart / start checkout, STOP before paying — guards auto-purchase (spends real money).
+    requiredAny: ['cart', 'checkout', 'basket'],
+    goalKeywords: ['cart', 'checkout', 'basket', 'add', 'buy', 'purchase', 'order', 'shop', 'pay', 'payment', 'product', 'item'],
+    goalSample: 'add a product to the cart and go to checkout but stop before paying',
+    whenToUse: 'Adding items to a cart / starting checkout, stopping before payment.',
+    steps: [
+      { instruction: 'Open the shopping site / product page (from the goal, or open_result of a search).', toolHint: 'tab.open / open_result' },
+      { instruction: 'Read the page, find the product, and add it to the cart.', toolHint: 'tab.click' },
+      { instruction: 'Go to the cart / checkout page.', toolHint: 'tab.click' },
+      { instruction: 'STOP before any payment, "place order", or purchase-confirm step. Do NOT enter payment details or confirm the order.' },
+      { instruction: "Report what's in the cart and that it's ready for the user to review and pay.", toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-pros-cons',
+    origin: 'builtin',
+    domain: '*',
+    // Weigh a decision — guards one-sided / ungrounded opinion. Distinct from verify (true/false).
+    requiredAny: ['pros', 'cons', 'advantages', 'disadvantages', 'worth', 'should', 'downside', 'downsides', 'benefits', 'drawbacks', 'tradeoffs'],
+    goalKeywords: ['pros', 'cons', 'advantages', 'disadvantages', 'worth', 'should', 'downside', 'downsides', 'benefits', 'drawbacks', 'tradeoffs', 'decision', 'decide', 'buy', 'choose', 'better', 'good', 'bad'],
+    goalSample: 'weigh the pros and cons of a decision, grounded in sources, both sides',
+    whenToUse: 'Weighing a decision — pros and cons, is it worth it, should I.',
+    steps: [
+      { instruction: 'Search for BOTH supportive and critical views (e.g. "<topic> benefits" and "<topic> problems / criticism").', toolHint: 'search' },
+      { instruction: 'Read a few sources from each side; open a page only if a snippet is too thin.', toolHint: 'open_result' },
+      { instruction: 'List the PROS and the CONS separately — each point grounded in something you actually read. Never invent a point and never give only one side.' },
+      { instruction: "End with a brief, balanced takeaway (say if it depends on the user's situation) and cite the sources.", toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-find-on-page',
+    origin: 'builtin',
+    domain: '*',
+    // Locate a specific section/mention in the CURRENT tab — guards re-web-searching + whole-page summary.
+    // Gate on locate-words (section/mention/part), NOT bare 'find'/'where' (those belong to research).
+    requiredAny: ['section', 'sections', 'mention', 'mentions', 'locate', 'paragraph', 'part', 'highlight'],
+    goalKeywords: ['section', 'sections', 'mention', 'mentions', 'locate', 'paragraph', 'part', 'highlight', 'page', 'this', 'where', 'find', 'about', 'quote'],
+    goalSample: 'find where the current page mentions a specific thing and quote that part',
+    whenToUse: 'Locating a specific section / mention within the page the user is on.',
+    steps: [
+      { instruction: 'Read the page the USER is on with tab.read_active — do NOT web-search or open a new tab.', toolHint: 'tab.read_active' },
+      { instruction: 'Scan it for the specific section / term asked about; if the page is long, scroll to load more and read again.', toolHint: 'tab.scroll' },
+      { instruction: "Quote or describe the exact part that matches; if it isn't on the page, say so plainly.", toolHint: 'finish' },
+    ],
+  },
 ];
 
 // ---- Phase 2: persistence + auto-record successful runs --------------------
