@@ -61,9 +61,11 @@ describe('matchWorkflow', () => {
     expect(picked?.origin).toBe('builtin'); // the clean archetype, NOT the legacy poison
   });
 
-  it('does NOT hijack the simpler "list top 3" flow (no box/click/product)', () => {
+  it('does NOT hijack a simple "list results" task into the interactive site-search drilldown', () => {
     const goal = 'search amazon for a wireless mouse and list the first 3 results';
-    expect(matchWorkflow(goal, SEED_WORKFLOWS)).toBeNull();
+    const wf = matchWorkflow(goal, SEED_WORKFLOWS);
+    expect(wf?.id).not.toBe('seed-onpage-site-search'); // not the click-into-a-product flow
+    expect(wf?.id).toBe('seed-collect-list'); // it's a list task → collect-a-list handles it
   });
 
   it('does NOT match an unrelated goal', () => {
@@ -85,6 +87,13 @@ describe('matchWorkflow', () => {
     expect(matchWorkflow('research what causes inflation and explain it', SEED_WORKFLOWS)?.id).toBe('seed-research');
     expect(matchWorkflow('report the price, rating and stock of the Studio headphones', SEED_WORKFLOWS)?.id).toBe('seed-extract');
     expect(matchWorkflow('summarize this page for me', SEED_WORKFLOWS)?.id).toBe('seed-ask-page');
+  });
+
+  it('the new capability archetypes match their task kinds', () => {
+    expect(matchWorkflow('fact-check whether the earth is flat', SEED_WORKFLOWS)?.id).toBe('seed-verify');
+    expect(matchWorkflow('what is the current price of bitcoin', SEED_WORKFLOWS)?.id).toBe('seed-live-value');
+    expect(matchWorkflow('how do I install node on macos', SEED_WORKFLOWS)?.id).toBe('seed-howto');
+    expect(matchWorkflow('list every country in the european union', SEED_WORKFLOWS)?.id).toBe('seed-collect-list');
   });
 
   it('the job recipe attaches the résumé via tab.upload_file and never submits', () => {
