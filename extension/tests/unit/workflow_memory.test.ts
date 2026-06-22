@@ -50,6 +50,14 @@ describe('matchWorkflow', () => {
     expect(picked?.id).toBe('auto:2');
   });
 
+  it('treats a LEGACY stored recipe (no origin field) as learned, so a builtin archetype still wins', () => {
+    // The actual poison in users' stores predates the origin field. It must be demoted, not ranked
+    // as curated — otherwise a stale bloated recipe keeps outranking the clean archetype.
+    const legacy: Workflow = { id: 'auto:legacy', domain: '*', goalKeywords: ['compare', 'population', 'cities', 'largest'], goalSample: 'compare', steps: [{ instruction: 'bloated a' }, { instruction: 'bloated b' }] };
+    const picked = matchWorkflow('compare the population of these cities and tell me which is largest', [...SEED_WORKFLOWS, legacy]);
+    expect(picked?.origin).toBe('builtin'); // the clean archetype, NOT the legacy poison
+  });
+
   it('does NOT hijack the simpler "list top 3" flow (no box/click/product)', () => {
     const goal = 'search amazon for a wireless mouse and list the first 3 results';
     expect(matchWorkflow(goal, SEED_WORKFLOWS)).toBeNull();

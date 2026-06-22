@@ -42,9 +42,11 @@ export interface Workflow {
   lastGood?: { whenToUse?: string; domain: string; steps: WorkflowStep[]; goalKeywords: string[]; requiredAny?: string[] };
 }
 
-/** Curated recipes (builtin + user) outrank a learned (auto) one — auto is a fallback only. */
+/** Curated recipes (builtin + user) outrank a learned (auto) one — auto is a fallback only.
+ *  Builtins and user recipes ALWAYS set origin, so an undefined origin = a legacy stored recipe
+ *  (saved before this field) = learned → ranked as fallback, never as curated. */
 function originRank(o?: WorkflowOrigin): number {
-  return o === 'auto' ? 0 : 1;
+  return o === 'builtin' || o === 'user' ? 1 : 0;
 }
 
 const STOPWORDS = new Set([
