@@ -67,7 +67,7 @@ describe('matchWorkflow', () => {
   });
 
   it('does NOT match an unrelated goal', () => {
-    expect(matchWorkflow('summarize this news article for me', SEED_WORKFLOWS)).toBeNull();
+    expect(matchWorkflow('tell me a joke about cats', SEED_WORKFLOWS)).toBeNull();
   });
 
   it('matches a job-application goal to the ATS recipe', () => {
@@ -79,11 +79,12 @@ describe('matchWorkflow', () => {
     expect(SEED_WORKFLOWS.every((w) => w.origin === 'builtin')).toBe(true);
   });
 
-  it('has broad+concrete archetypes that match generic goals (not just one phrasing)', () => {
+  it('each capability archetype matches its task kind (and they are distinct)', () => {
     expect(matchWorkflow('compare the gdp of france, germany and italy', SEED_WORKFLOWS)?.id).toBe('seed-compare');
-    expect(matchWorkflow('do deep research on fusion startups and summarize', SEED_WORKFLOWS)?.id).toBe('seed-research');
-    expect(matchWorkflow('find a cheap mechanical keyboard under 100 dollars', SEED_WORKFLOWS)?.id).toBe('seed-shopping');
-    expect(matchWorkflow('find good italian restaurants near boston', SEED_WORKFLOWS)?.id).toBe('seed-local');
+    expect(matchWorkflow('which laptop has the best battery life', SEED_WORKFLOWS)?.id).toBe('seed-compare'); // ranking/shopping folds in
+    expect(matchWorkflow('research what causes inflation and explain it', SEED_WORKFLOWS)?.id).toBe('seed-research');
+    expect(matchWorkflow('report the price, rating and stock of the Studio headphones', SEED_WORKFLOWS)?.id).toBe('seed-extract');
+    expect(matchWorkflow('summarize this page for me', SEED_WORKFLOWS)?.id).toBe('seed-ask-page');
   });
 
   it('the job recipe attaches the résumé via tab.upload_file and never submits', () => {

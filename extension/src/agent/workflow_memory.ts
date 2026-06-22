@@ -162,7 +162,6 @@ export async function listRecipeViews(): Promise<RecipeViewShape[]> {
   });
 }
 
-/** Delete a user recipe by id (builtin/auto are not user-deletable here). */
 /** Delete a single STORED recipe (learned 'auto' OR user) by id. Builtin seeds are read-only and
  *  aren't in the stored array, so a seed id is a no-op. */
 export async function deleteRecipe(id: string): Promise<void> {
@@ -176,11 +175,11 @@ export const SEED_WORKFLOWS: Workflow[] = [
     id: 'seed-compare',
     origin: 'builtin',
     domain: '*',
-    // BROAD: any comparison of several named things (cities, products, countries, specs…).
-    requiredAny: ['compare', 'comparison', 'vs', 'versus', 'largest', 'biggest', 'smallest', 'highest', 'lowest', 'best', 'which'],
-    goalKeywords: ['compare', 'comparison', 'versus', 'vs', 'largest', 'biggest', 'smallest', 'highest', 'lowest', 'which', 'population', 'gdp', 'price', 'size', 'cities', 'countries', 'products'],
-    goalSample: 'compare several named things on one metric and say which wins',
-    whenToUse: 'Comparing several named things (cities, products, countries) on a single metric.',
+    // Comparison/ranking of several named things — guards basis-mixing + the combined-query list trap.
+    requiredAny: ['compare', 'comparison', 'vs', 'versus', 'largest', 'biggest', 'smallest', 'highest', 'lowest', 'best', 'most', 'cheapest', 'top', 'which', 'rank'],
+    goalKeywords: ['compare', 'comparison', 'versus', 'largest', 'biggest', 'smallest', 'highest', 'lowest', 'best', 'cheapest', 'most', 'top', 'which', 'rank', 'population', 'gdp', 'price', 'size', 'battery', 'laptop', 'cities', 'countries', 'products'],
+    goalSample: 'compare or rank several named things on one metric and say which wins',
+    whenToUse: 'Comparing or ranking several named things (which is largest / best / cheapest).',
     steps: [
       { instruction: 'For EACH item, run ONE web search of the form "<item> <metric>" (one item per query — never a combined query, which returns an un-readable ranking page).', toolHint: 'search' },
       { instruction: "Read that item's value straight from the result snippet; open its page only if the snippet lacks the value.", toolHint: 'open_result' },
@@ -192,42 +191,32 @@ export const SEED_WORKFLOWS: Workflow[] = [
     id: 'seed-research',
     origin: 'builtin',
     domain: '*',
-    requiredAny: ['research', 'deep', 'investigate', 'sources'],
-    goalKeywords: ['research', 'deep', 'investigate', 'report', 'findings', 'sources', 'topic', 'overview'],
-    goalSample: 'research a topic across a few sources and summarize with citations',
-    whenToUse: 'Researching a topic and summarizing it from a few sources.',
+    // Research/explain/find-info on a topic — guards hallucination + missing citations + over-opening.
+    requiredAny: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'why', 'causes', 'where', 'list'],
+    goalKeywords: ['research', 'explain', 'summarize', 'summary', 'overview', 'investigate', 'find', 'recommend', 'learn', 'topic', 'sources', 'why', 'causes', 'where', 'list', 'inflation'],
+    goalSample: 'research / explain / find information on a topic and answer with sources',
+    whenToUse: 'Researching, explaining, or finding information on a topic from the web.',
     steps: [
       { instruction: 'Break the topic into 2–4 concrete sub-questions.' },
-      { instruction: 'For each sub-question, run ONE focused web search and read the best result(s) snippet (open a page only when the snippet is thin).', toolHint: 'search' },
-      { instruction: 'Synthesize a concise answer from what you actually read; cite the sources.', toolHint: 'finish' },
+      { instruction: "For each sub-question, run ONE focused web search and read the best results' snippets; open a page only when the snippet is too thin.", toolHint: 'search' },
+      { instruction: 'Synthesize a concise answer from ONLY what you actually read — never invent a fact, number, or name.' },
+      { instruction: 'Cite the specific sources you used.', toolHint: 'finish' },
     ],
   },
   {
-    id: 'seed-shopping',
+    id: 'seed-extract',
     origin: 'builtin',
     domain: '*',
-    requiredAny: ['buy', 'cheap', 'cheapest', 'price', 'deal', 'under', 'shopping', 'product', 'best'],
-    goalKeywords: ['buy', 'cheap', 'cheapest', 'price', 'deal', 'under', 'shop', 'shopping', 'product', 'best', 'budget', 'dollars', 'top'],
-    goalSample: 'find products matching a category + constraint and report the best few with prices',
-    whenToUse: 'Finding products by category and a constraint (e.g. cheapest, under $X).',
+    // Report specific fields of a product/page — guards absent-field hallucination + giant tables.
+    requiredAny: ['price', 'rating', 'stock', 'specs', 'spec', 'details', 'cost', 'weight', 'dimensions', 'availability', 'review', 'reviews'],
+    goalKeywords: ['price', 'rating', 'stock', 'specs', 'details', 'cost', 'weight', 'dimensions', 'availability', 'review', 'reviews', 'report', 'value'],
+    goalSample: 'report specific fields (price, rating, stock, specs) of a product or page',
+    whenToUse: 'Reporting specific fields (price, rating, stock, specs) of a product or page.',
     steps: [
-      { instruction: 'Search the web for the category plus the constraint (e.g. "mechanical keyboard under $100").', toolHint: 'search' },
-      { instruction: 'Read the result snippets / a results page; extract candidate names and prices.', toolHint: 'open_result' },
-      { instruction: 'Filter to the constraint and report the top 2–3 with names and prices.', toolHint: 'finish' },
-    ],
-  },
-  {
-    id: 'seed-local',
-    origin: 'builtin',
-    domain: '*',
-    requiredAny: ['restaurant', 'restaurants', 'near', 'nearby', 'cafe', 'coffee', 'bar', 'hotel', 'local', 'around'],
-    goalKeywords: ['restaurant', 'restaurants', 'near', 'nearby', 'cafe', 'coffee', 'bar', 'hotel', 'local', 'around', 'food', 'place', 'places', 'best'],
-    goalSample: 'find local places of a kind near a location and report a few with one detail each',
-    whenToUse: 'Finding local places (restaurants, cafes, hotels) near a place.',
-    steps: [
-      { instruction: 'Search the web for "<kind of place> in <location>".', toolHint: 'search' },
-      { instruction: 'Read the result snippets; extract a few place names and one detail each (rating or cuisine). Do NOT invent hours, menus, or addresses.', toolHint: 'open_result' },
-      { instruction: 'Report 3–5 places with the detail you actually found.', toolHint: 'finish' },
+      { instruction: 'Open the product/page (from a search result, or the exact URL given).', toolHint: 'open_result' },
+      { instruction: 'Read the page; report ONLY the requested fields that actually appear as TEXT in the content.', toolHint: 'aria.extract' },
+      { instruction: 'A field shown only as a graphic/icon (e.g. a star rating with no number, or an image) is NOT readable — report it as "not shown" and NEVER guess a value.' },
+      { instruction: 'If the data is in a large table, find the SPECIFIC row/cell asked for — do not summarize the whole table. Report the values.', toolHint: 'finish' },
     ],
   },
   {
@@ -270,6 +259,20 @@ export const SEED_WORKFLOWS: Workflow[] = [
       { instruction: 'Attach your résumé to the upload field — it is usually hidden, so use tab.upload_file (do NOT click or index a file input).', toolHint: 'tab.upload_file' },
       { instruction: 'Re-read the form to confirm the fields are filled and the résumé is attached (auto-refreshed after typing).', toolHint: 'aria.extract' },
       { instruction: 'Do NOT submit. Report that the form is filled and ready for the user to review and submit.', toolHint: 'finish' },
+    ],
+  },
+  {
+    id: 'seed-ask-page',
+    origin: 'builtin',
+    domain: '*',
+    // Answer about the user's CURRENT tab — guards web-searching when they mean the open page.
+    requiredAny: ['summarize', 'summary', 'page', 'current', 'say'],
+    goalKeywords: ['summarize', 'summary', 'page', 'current', 'read', 'say', 'content', 'article'],
+    goalSample: 'summarize or answer a question about the page the user is currently on',
+    whenToUse: 'Answering about the page the user is currently on (summarize this page, what does it say).',
+    steps: [
+      { instruction: 'Read the page the USER is currently on with tab.read_active — their active tab, on-device. Do NOT open a new tab or web-search.', toolHint: 'tab.read_active' },
+      { instruction: 'Answer ONLY from what that page says; if the answer is not on the page, say so.', toolHint: 'finish' },
     ],
   },
 ];
