@@ -225,6 +225,23 @@ export class Orchestrator {
         continue;
       }
       if (execOut.result.advanceStep) {
+        // A mid-plan PROSE answer (no tool call) is ungrounded by construction. Gate it through the
+        // SAME grounding corpus as finish so the plan can't advance on a fabricated number; a
+        // tool-produced advance is already page-grounded. The circuit breaker stops a model that
+        // loops on bad prose.
+        if (execOut.tool === 'answer') {
+          const ung = ungroundedNumbers(execOut.result.content ?? '', groundingCorpus(this.observedText, this.facts));
+          if (ung.length) {
+            this.markDirty('mid-plan prose answer ungrounded');
+            this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `prose answer rejected (ungrounded: ${ung.join(', ')})` });
+            const sp = await getScratchpad(this.taskId);
+            await setScratchpad(
+              this.taskId,
+              `${sp}\n[VERIFICATION] Your answer asserted ${ung.join(', ')}, not found on any page read. Re-read the page (aria.extract) and use only on-page values, or report them as unavailable.`.slice(-12_000),
+            );
+            continue;
+          }
+        }
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
         this.captureFact(step, ev);
         if (ev.verdict !== 'PASS') this.markDirty('evaluator FAIL on a step');
