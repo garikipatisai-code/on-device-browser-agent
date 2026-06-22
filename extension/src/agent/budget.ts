@@ -6,21 +6,46 @@ import type { Role } from '@/shared/messages';
 // roles share one large context window. gemma4's sliding-window attention (512-tok
 // local windows on e4b, per the model card) keeps the KV-cache cost of this far
 // below a naive transformer. Verify the real footprint on the target box with
-// `ollama ps`; this can be raised toward 131072 (e4b's 128K max) once VRAM
-// headroom is confirmed. Do NOT max it blindly — if KV alloc exceeds VRAM, e4b
+// `ollama ps`; num_ctx is user-configurable up to MAX_NUM_CTX (e4b's 128K max) once
+// VRAM headroom is confirmed. Do NOT max it blindly — if KV alloc exceeds VRAM, e4b
 // fails to load and every task breaks.
-export const NUM_CTX = 32_768;
+export const DEFAULT_NUM_CTX = 32_768;
+export const MIN_NUM_CTX = 8_192;
+export const MAX_NUM_CTX = 131_072; // e4b's 128K ceiling
+/** Back-compat default for callers that don't thread the setting. */
+export const NUM_CTX = DEFAULT_NUM_CTX;
 
-// Per-role token budgets sit just under NUM_CTX, leaving headroom for generation.
-// Kept differentiated (Planner needs the most) but all large now that the 6s
-// Executor cap is lifted. Compaction/retrieval still curate the window — a big
-// window holding RELEVANT state beats a big window of raw dump (lost-in-the-middle).
-export const BUDGETS: Record<Role, number> = {
-  planner: 30_000,
-  executor: 26_000,
-  evaluator: 28_000,
-  compactor: 26_000,
-};
+/** Clamp a user-supplied window to a safe range; falls back to the proven default. */
+export function clampNumCtx(n: number | undefined): number {
+  if (!n || !Number.isFinite(n)) return DEFAULT_NUM_CTX;
+  return Math.max(MIN_NUM_CTX, Math.min(MAX_NUM_CTX, Math.round(n)));
+}
+
+// Per-role token budgets sit just under num_ctx, leaving headroom for generation.
+// Kept differentiated (Planner needs the most). Budgets scale with the window so a
+// bigger num_ctx coherently widens the curated state (a big window holding RELEVANT
+// state beats a big window of raw dump — lost-in-the-middle).
+export function budgetsFor(numCtx: number): Record<Role, number> {
+  const scale = numCtx / DEFAULT_NUM_CTX;
+  return {
+    planner: Math.round(30_000 * scale),
+    executor: Math.round(26_000 * scale),
+    evaluator: Math.round(28_000 * scale),
+    compactor: Math.round(26_000 * scale),
+  };
+}
+/** Budgets at the default window — back-compat for direct importers. */
+export const BUDGETS: Record<Role, number> = budgetsFor(DEFAULT_NUM_CTX);
+
+/** Raw working-memory caps (chars), scaled with the window. */
+export function capsFor(numCtx: number): { page: number; scratch: number; observed: number } {
+  const scale = numCtx / DEFAULT_NUM_CTX;
+  return {
+    page: Math.round(12_000 * scale),
+    scratch: Math.round(12_000 * scale),
+    observed: Math.round(60_000 * scale),
+  };
+}
 
 export const COMPACT_TRIGGER_FRAC = 0.8;
 
@@ -33,9 +58,14 @@ export interface BudgetCheck {
   shouldCompact: boolean;
 }
 
-export function checkBudget(role: Role, prompt: string, est: TokenRatioEstimator): BudgetCheck {
+export function checkBudget(
+  role: Role,
+  prompt: string,
+  est: TokenRatioEstimator,
+  numCtx: number = DEFAULT_NUM_CTX,
+): BudgetCheck {
   const tokens = est.approxTokens(prompt);
-  const budget = BUDGETS[role];
+  const budget = budgetsFor(numCtx)[role];
   return {
     tokens,
     budget,
