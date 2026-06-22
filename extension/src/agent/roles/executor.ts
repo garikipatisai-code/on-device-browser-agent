@@ -16,6 +16,7 @@ export interface ExecutorInput {
   toolFilter?: (name: string) => boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
+  numCtx?: number;
 }
 
 export interface ExecutorOutput {
@@ -45,7 +46,7 @@ export async function runExecutor(input: ExecutorInput): Promise<ExecutorOutput>
     thinking: true,
     timeoutMs: input.timeoutMs ?? 120_000,
     signal: input.signal,
-    numCtx: NUM_CTX,
+    numCtx: input.numCtx ?? NUM_CTX,
   });
   const firstPick = pickToolCall(firstCall.toolCalls, firstCall.rawText, input.registry);
   if (firstPick && allowed(firstPick.name)) {
@@ -71,7 +72,7 @@ export async function runExecutor(input: ExecutorInput): Promise<ExecutorOutput>
     thinking: true,
     timeoutMs: input.timeoutMs ?? 120_000,
     signal: input.signal,
-    numCtx: NUM_CTX,
+    numCtx: input.numCtx ?? NUM_CTX,
   });
   const retryPick = pickToolCall(retry.toolCalls, retry.rawText, input.registry);
   if (retryPick && allowed(retryPick.name)) {

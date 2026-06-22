@@ -14,6 +14,7 @@ export interface PlannerInput {
   workflowRecipe?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  numCtx?: number;
 }
 
 export interface PlannerOutput {
@@ -47,7 +48,7 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
     thinking: true,
     timeoutMs: input.timeoutMs ?? 300_000,
     signal: input.signal,
-    numCtx: NUM_CTX,
+    numCtx: input.numCtx ?? NUM_CTX,
   });
   let raw = resp.message.content ?? '';
   let steps = extractSteps(raw);
@@ -70,7 +71,7 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
       thinking: true,
       timeoutMs: input.timeoutMs ?? 300_000,
       signal: input.signal,
-      numCtx: NUM_CTX,
+      numCtx: input.numCtx ?? NUM_CTX,
     });
     raw = resp.message.content ?? '';
     steps = extractSteps(raw);
@@ -99,7 +100,7 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
       thinking: true,
       timeoutMs: input.timeoutMs ?? 300_000,
       signal: input.signal,
-      numCtx: NUM_CTX,
+      numCtx: input.numCtx ?? NUM_CTX,
     });
     const s2 = extractSteps(r2.message.content ?? '');
     if (s2.length > steps.length) {

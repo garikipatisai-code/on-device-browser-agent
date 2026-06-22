@@ -12,6 +12,7 @@ export interface CompactorInput {
   ollama: OllamaClient;
   signal?: AbortSignal;
   timeoutMs?: number;
+  numCtx?: number;
 }
 
 export interface CompactorOutput {
@@ -30,7 +31,7 @@ export async function runCompactor(input: CompactorInput): Promise<CompactorOutp
     thinking: false,
     timeoutMs: input.timeoutMs ?? 60_000,
     signal: input.signal,
-    numCtx: NUM_CTX,
+    numCtx: input.numCtx ?? NUM_CTX,
   });
   const raw = resp.message.content ?? '';
   const parsed = parseJSONPermissive<{ summary?: string }>(raw);

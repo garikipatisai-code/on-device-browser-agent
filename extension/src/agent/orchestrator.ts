@@ -23,7 +23,7 @@ import { runEvaluator, type Verdict } from './roles/evaluator';
 import { addGroundedFact, groundingCorpus, renderFacts, type Fact } from './facts';
 import { runCompactor } from './roles/compactor';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
-import { checkBudget, NUM_CTX } from './budget';
+import { checkBudget, clampNumCtx, NUM_CTX } from './budget';
 import {
   type BreakerState,
   checkBreaker,
@@ -89,6 +89,7 @@ export class Orchestrator {
   private breaker: BreakerState = newBreakerState();
   private recentActions: Array<{ tool: string; args: unknown; ok: boolean; content: string; ts: number }> = [];
   private taskId = ulid();
+  private numCtx = NUM_CTX;
   // Full content of the most recent page read (aria.extract / vision.read / search).
   // Re-injected into every executor turn so synthesis/report steps can see the data.
   private lastRead: { tool: string; url?: string; content: string } | null = null;
@@ -152,6 +153,7 @@ export class Orchestrator {
     this.dirtyReason = '';
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
     this.taskId = ulid();
+    this.numCtx = clampNumCtx(this.opts.settings.numCtx);
     const hot = await _setHot(trimmed);
     await setScratchpad(this.taskId, '');
     this.log('info', `Task started: ${trimmed}`);
@@ -348,6 +350,7 @@ export class Orchestrator {
         ollama: this.opts.ollama,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         signal: this.signal,
+        numCtx: this.numCtx,
       }),
     );
     if (out.promptEvalCount && out.evalCount) {
@@ -372,6 +375,7 @@ export class Orchestrator {
         replanContext: reason,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         signal: this.signal,
+        numCtx: this.numCtx,
       }),
     );
     hot = await this.applyPlan(hot, out.plan);
@@ -391,7 +395,7 @@ export class Orchestrator {
 
     let scratch = await getScratchpad(this.taskId);
     let ctx = this.commonCtx(hot, scratch);
-    const budgetCheck = checkBudget('executor', JSON.stringify(ctx), this.est);
+    const budgetCheck = checkBudget('executor', JSON.stringify(ctx), this.est, this.numCtx);
     if (budgetCheck.shouldCompact && scratch.length > 1_000) {
       const compacted = await this.compact(hot, scratch);
       scratch = compacted.summary;
@@ -420,6 +424,7 @@ export class Orchestrator {
         toolCtx,
         toolFilter,
         signal: this.signal,
+        numCtx: this.numCtx,
       }),
     );
 
@@ -588,6 +593,7 @@ export class Orchestrator {
         lastExecutorResult: lastResult,
         step,
         signal: this.signal,
+        numCtx: this.numCtx,
       }),
     );
     this.emit({ kind: 'evaluator.verdict', ts: Date.now(), verdict: ev.verdict, reason: ev.reason });
@@ -623,6 +629,7 @@ export class Orchestrator {
         model: this.opts.settings.compactorModel,
         ollama: this.opts.ollama,
         signal: this.signal,
+        numCtx: this.numCtx,
       }),
     );
     this.emit({ kind: 'compaction', ts: Date.now(), before: out.charsBefore, after: out.charsAfter });
