@@ -23,7 +23,7 @@ import { runEvaluator, type Verdict } from './roles/evaluator';
 import { addGroundedFact, groundingCorpus, renderFacts, type Fact } from './facts';
 import { runCompactor } from './roles/compactor';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
-import { checkBudget, clampNumCtx, NUM_CTX } from './budget';
+import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
 import {
   type BreakerState,
   checkBreaker,
@@ -90,6 +90,7 @@ export class Orchestrator {
   private recentActions: Array<{ tool: string; args: unknown; ok: boolean; content: string; ts: number }> = [];
   private taskId = ulid();
   private numCtx = NUM_CTX;
+  private caps = capsFor(NUM_CTX);
   // Full content of the most recent page read (aria.extract / vision.read / search).
   // Re-injected into every executor turn so synthesis/report steps can see the data.
   private lastRead: { tool: string; url?: string; content: string } | null = null;
@@ -154,6 +155,7 @@ export class Orchestrator {
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
     this.taskId = ulid();
     this.numCtx = clampNumCtx(this.opts.settings.numCtx);
+    this.caps = capsFor(this.numCtx);
     const hot = await _setHot(trimmed);
     await setScratchpad(this.taskId, '');
     this.log('info', `Task started: ${trimmed}`);
@@ -222,7 +224,7 @@ export class Orchestrator {
         const sp = await getScratchpad(this.taskId);
         await setScratchpad(
           this.taskId,
-          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Re-read the page (aria.extract / vision.read) and correct the answer, or report those value(s) as not available on the page. Do NOT repeat the unsupported claim.`.slice(-12_000),
+          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Re-read the page (aria.extract / vision.read) and correct the answer, or report those value(s) as not available on the page. Do NOT repeat the unsupported claim.`.slice(-this.caps.scratch),
         );
         continue;
       }
@@ -239,7 +241,7 @@ export class Orchestrator {
             const sp = await getScratchpad(this.taskId);
             await setScratchpad(
               this.taskId,
-              `${sp}\n[VERIFICATION] Your answer asserted ${ung.join(', ')}, not found on any page read. Re-read the page (aria.extract) and use only on-page values, or report them as unavailable.`.slice(-12_000),
+              `${sp}\n[VERIFICATION] Your answer asserted ${ung.join(', ')}, not found on any page read. Re-read the page (aria.extract) and use only on-page values, or report them as unavailable.`.slice(-this.caps.scratch),
             );
             continue;
           }
@@ -516,7 +518,7 @@ export class Orchestrator {
       return;
     }
     const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
-    this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, 12_000) };
+    this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, this.caps.page) };
     this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
     this.recordObserved(obs.content, obsUrl);
     this.emit({
@@ -541,7 +543,7 @@ export class Orchestrator {
     const after = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
     if (after && after.ok && after.content) {
       const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
-      this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, 12_000) };
+      this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, this.caps.page) };
       this.recordObserved(after.content, afterUrl);
     }
   }
@@ -560,7 +562,7 @@ export class Orchestrator {
     if (READING_TOOLS.has(out.tool) && out.result.ok && (out.result.content?.length ?? 0) > 0) {
       const data = out.result.data;
       const url = data && typeof data.url === 'string' ? data.url : undefined;
-      this.lastRead = { tool: out.tool, url, content: (out.result.content ?? '').slice(0, 12_000) };
+      this.lastRead = { tool: out.tool, url, content: (out.result.content ?? '').slice(0, this.caps.page) };
       this.recordObserved(out.result.content ?? '', url);
     }
 
@@ -569,7 +571,7 @@ export class Orchestrator {
     const turnNote = redact(
       `[${new Date().toISOString()}] ${out.tool}(${JSON.stringify(out.args).slice(0, 200)}) -> ${(out.result.content ?? '').slice(0, 800)}`,
     );
-    await setScratchpad(this.taskId, `${scratch}\n${turnNote}`.slice(-12_000));
+    await setScratchpad(this.taskId, `${scratch}\n${turnNote}`.slice(-this.caps.scratch));
 
     this.recentActions.push({ tool: out.tool, args: out.args, ok: out.result.ok, content: out.result.content ?? '', ts: Date.now() });
     if (this.recentActions.length > 5) this.recentActions.shift();
@@ -640,7 +642,7 @@ export class Orchestrator {
   private recordObserved(content: string, url?: string): void {
     if (url && /^https?:\/\//i.test(url)) this.sourceUrls.add(url);
     if (!content) return;
-    this.observedText = `${this.observedText}\n${content}`.slice(-60_000);
+    this.observedText = `${this.observedText}\n${content}`.slice(-this.caps.observed);
   }
 
   /** Apply a pre-built plan without calling the planner LLM (fast path). */

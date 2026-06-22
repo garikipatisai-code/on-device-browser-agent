@@ -107,6 +107,25 @@ export function SettingsPanel({
         {modelField('compactorModel', 'Compactor')}
         {modelField('visionModel', 'Vision (multimodal)')}
         {modelField('embeddingModel', 'Embeddings')}
+        <div className="field">
+          <span className="field-label">Context window (num_ctx)</span>
+          <input
+            type="number"
+            value={local.numCtx ?? 32768}
+            min={8192}
+            max={131072}
+            step={8192}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              update('numCtx', Number.isFinite(n) ? n : 32768);
+            }}
+          />
+          <div className="field-hint">
+            Larger = better long-task memory but more VRAM. On a 16 GB box, raise in steps (32768 → 65536 → 131072)
+            and check <code>ollama ps</code> shows the model at ~100% GPU with no CPU spill after each change. If a
+            task fails to start or slows sharply, lower it back.
+          </div>
+        </div>
       </div>
 
       {/* Profile */}
