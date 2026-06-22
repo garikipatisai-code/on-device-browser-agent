@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { DomainTier, Settings } from '@/shared/messages';
 import { sameModel } from '@/shared/messages';
+import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
 import { extractResumeText } from '../resume';
 import { fileToBase64 } from '../file_bytes';
 import { Icon } from './Icon';
@@ -111,14 +112,15 @@ export function SettingsPanel({
           <span className="field-label">Context window (num_ctx)</span>
           <input
             type="number"
-            value={local.numCtx ?? 32768}
-            min={8192}
-            max={131072}
+            value={local.numCtx ?? DEFAULT_NUM_CTX}
+            min={MIN_NUM_CTX}
+            max={MAX_NUM_CTX}
             step={8192}
             onChange={(e) => {
               const n = parseInt(e.target.value, 10);
-              update('numCtx', Number.isFinite(n) ? n : 32768);
+              update('numCtx', Number.isFinite(n) ? n : DEFAULT_NUM_CTX);
             }}
+            onBlur={() => update('numCtx', clampNumCtx(local.numCtx))}
           />
           <div className="field-hint">
             Larger = better long-task memory but more VRAM. On a 16 GB box, raise in steps (32768 → 65536 → 131072)
