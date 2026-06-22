@@ -96,6 +96,13 @@ describe('matchWorkflow', () => {
     expect(matchWorkflow('list every country in the european union', SEED_WORKFLOWS)?.id).toBe('seed-collect-list');
   });
 
+  it('the additional capability archetypes match their task kinds', () => {
+    expect(matchWorkflow('convert 100 US dollars to euros', SEED_WORKFLOWS)?.id).toBe('seed-convert');
+    expect(matchWorkflow('find the phone number and address of the Seattle Public Library', SEED_WORKFLOWS)?.id).toBe('seed-contact');
+    expect(matchWorkflow('what does this chart show', SEED_WORKFLOWS)?.id).toBe('seed-read-visual');
+    expect(matchWorkflow('translate this page to english', SEED_WORKFLOWS)?.id).toBe('seed-translate');
+  });
+
   it('the job recipe attaches the résumé via tab.upload_file and never submits', () => {
     const wf = SEED_WORKFLOWS.find((w) => w.id === 'seed-job-application')!;
     const hints = wf.steps.map((s) => s.toolHint ?? '');
