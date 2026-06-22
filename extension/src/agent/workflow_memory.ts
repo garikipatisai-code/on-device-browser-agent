@@ -144,8 +144,10 @@ export async function listRecipeViews(): Promise<RecipeViewShape[]> {
 }
 
 /** Delete a user recipe by id (builtin/auto are not user-deletable here). */
-export async function deleteUserWorkflow(id: string): Promise<void> {
-  if (!id.startsWith('user:')) return;
+/** Delete a single STORED recipe (learned 'auto' OR user) by id. Builtin seeds are read-only and
+ *  aren't in the stored array, so a seed id is a no-op. */
+export async function deleteRecipe(id: string): Promise<void> {
+  if (id.startsWith('seed-')) return; // builtins are read-only
   const stored = await loadStored();
   await memorySet(STORE_KEY, stored.filter((s) => s.id !== id));
 }

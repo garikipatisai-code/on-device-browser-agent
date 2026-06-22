@@ -165,10 +165,17 @@ export function RecipesPanel({ recipes, onRefresh, onSave, onDelete }: Props) {
                 <Icon name="x" size={12} /> Delete
               </button>
             </div>
+          ) : selected.origin === 'auto' ? (
+            <>
+              <div className="field-hint">Learned automatically from a clean run — delete it to make the agent re-derive (or rebuild it).</div>
+              <div className="recipe-actions">
+                <button className="btn btn-sm btn-danger" onClick={() => onDelete(selected.id)}>
+                  <Icon name="x" size={12} /> Delete
+                </button>
+              </div>
+            </>
           ) : (
-            <div className="field-hint">
-              {selected.origin === 'builtin' ? 'Built-in recipe (read-only). Use “New” to make your own version.' : 'Learned automatically from a clean run.'}
-            </div>
+            <div className="field-hint">Built-in recipe (read-only). Use “New” to make your own version.</div>
           )}
         </div>
       )}
