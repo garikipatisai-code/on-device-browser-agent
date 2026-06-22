@@ -299,6 +299,16 @@ function jaccard(a: string[], b: string[]): number {
   return inter / uni;
 }
 
+// Tools that mean the run did real browser WORK (navigated/interacted) — not just a lookup.
+const LEARNABLE_TOOLS = new Set(['open_result', 'tab.open', 'tab.click', 'tab.type', 'tab.select', 'tab.upload_file']);
+
+/** Worth distilling into a recipe? Only a run that NAVIGATED or INTERACTED with a page — a real
+ *  multi-step procedure. A pure search-and-report lookup ("capital of France") is trivial: the model
+ *  plans it fine unaided, so a learned recipe adds clutter with no benefit. */
+export function traceWorthLearning(trace: Array<{ tool: string; args: Record<string, unknown> }>): boolean {
+  return trace.some((t) => LEARNABLE_TOOLS.has(t.tool));
+}
+
 /** True if a trace repeated work — searched the same query twice, opened the same URL twice, or
  *  re-opened the same result within one search context. Such a run still answered, but its path is
  *  redundant and must NOT be distilled into a recipe (it would teach the bloat back). open_result

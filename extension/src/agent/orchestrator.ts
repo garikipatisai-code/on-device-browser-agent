@@ -40,7 +40,7 @@ import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domai
 import { sleep } from '@/background/signal';
 import { waitForTabSettled } from './tools/browser/tab';
 import { clearSearchResults } from './tools/browser/search';
-import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, markWorkflowTrusted, quarantineWorkflow, deriveDomain, type Workflow } from './workflow_memory';
+import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, traceWorthLearning, markWorkflowTrusted, quarantineWorkflow, deriveDomain, type Workflow } from './workflow_memory';
 import { renderProfileBlock } from './profile';
 
 // Tools whose output IS page content. The orchestrator carries the most recent
@@ -745,6 +745,8 @@ export class Orchestrator {
         this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe not saved (run not clean: ${this.dirtyReason})` });
       } else if (traceHasRedundancy(this.trace)) {
         this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: 'Recipe not saved (run had redundant steps)' });
+      } else if (!traceWorthLearning(this.trace)) {
+        this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: 'Recipe not saved (task was simple — answered without navigating a page)' });
       } else {
         try {
           const wf = traceToWorkflow(`auto:${ulid()}`, hot.goal, deriveDomain(this.trace, hot.goal), this.trace);
