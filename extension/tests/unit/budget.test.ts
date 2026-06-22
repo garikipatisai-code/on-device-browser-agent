@@ -57,10 +57,12 @@ describe('clampNumCtx', () => {
 });
 
 describe('budgetsFor / capsFor scale with the window', () => {
-  it('baseline at 32K, ~4x at 128K', () => {
+  it('baseline at 32K; cross-turn caps 4x at 128K, page fixed', () => {
     expect(budgetsFor(DEFAULT_NUM_CTX).executor).toBe(26_000);
     expect(budgetsFor(131_072).executor).toBe(104_000);
     expect(capsFor(DEFAULT_NUM_CTX).observed).toBe(60_000);
-    expect(capsFor(131_072).page).toBe(48_000);
+    expect(capsFor(131_072).observed).toBe(240_000); // cross-turn memory scales
+    expect(capsFor(131_072).scratch).toBe(48_000);   // scratch scales
+    expect(capsFor(131_072).page).toBe(12_000);      // per-read page is fixed by design
   });
 });
