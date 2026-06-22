@@ -24,7 +24,7 @@ import { buildProfileExtractionMessages, normalizeExtractedProfile } from '@/age
 import { NUM_CTX } from '@/agent/budget';
 import { metricsSnapshot } from '@/agent/metrics';
 import { persistTimeline, loadTimeline, clearPersistedTimeline } from './timeline_store';
-import { clearLearnedWorkflows, listRecipeViews, parseUserRecipe, upsertUserWorkflow, deleteUserWorkflow } from '@/agent/workflow_memory';
+import { clearLearnedWorkflows, listRecipeViews, parseUserRecipe, upsertUserWorkflow, deleteRecipe } from '@/agent/workflow_memory';
 
 let _orch: Orchestrator | null = null;
 // Synchronous start-guard: handleStart awaits ping/listModels before _orch is set, so two
@@ -440,7 +440,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
             break;
           }
           case 'recipes.delete':
-            await deleteUserWorkflow(cmd.id);
+            await deleteRecipe(cmd.id);
             await pushRecipes();
             break;
           case 'preflight':

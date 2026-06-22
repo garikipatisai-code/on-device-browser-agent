@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import {
   SEED_WORKFLOWS,
   clearLearnedWorkflows,
+  deleteRecipe,
   deriveDomain,
   hostFromGoal,
   loadWorkflows,
@@ -187,6 +188,31 @@ describe('traceHasRedundancy (a re-search / re-open run is not worth teaching ba
 });
 
 describe('clearLearnedWorkflows (forget poisoned auto-recipes; seeds remain)', () => {
+  beforeEach(async () => {
+    await resetStorage();
+  });
+  it('deleteRecipe removes a single learned (auto) recipe by id, leaving others + seeds', async () => {
+    const a = traceToWorkflow('auto:keep', 'find a knit scarf pattern online', '*', [
+      { tool: 'search', args: { query: 'knit scarf' } }, { tool: 'open_result', args: { index: 1 } },
+    ]);
+    const b = traceToWorkflow('auto:gone', 'check order status on shopsite.com', 'shopsite.com', [
+      { tool: 'tab.open', args: { url: 'https://shopsite.com' } }, { tool: 'aria.extract', args: { tabId: 1 } },
+    ]);
+    await saveWorkflow(a!);
+    await saveWorkflow(b!);
+    await deleteRecipe('auto:gone');
+    const ids = (await loadWorkflows()).map((w) => w.id);
+    expect(ids).toContain('auto:keep');
+    expect(ids).not.toContain('auto:gone');
+    expect(ids).toContain('seed-compare'); // builtin seeds untouched
+  });
+  it('deleteRecipe refuses to delete a builtin seed (no-op)', async () => {
+    await deleteRecipe('seed-compare');
+    expect((await loadWorkflows()).some((w) => w.id === 'seed-compare')).toBe(true);
+  });
+});
+
+describe('clearLearnedWorkflows (forget poisoned auto-recipes; seeds remain) — legacy alias', () => {
   beforeEach(async () => {
     await resetStorage();
   });
