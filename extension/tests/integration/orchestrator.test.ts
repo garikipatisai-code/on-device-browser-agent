@@ -1063,6 +1063,34 @@ describe('orchestrator — user recipe trust/quarantine (the authored-recipe saf
   const isTrusted = async () => (await loadWorkflows()).find((w) => w.id === 'user:r1')?.trusted;
   const exists = async () => (await loadWorkflows()).some((w) => w.id === 'user:r1');
 
+  it('does NOT auto-record a duplicate when a recipe already drove the run (user recipe survives + editable)', async () => {
+    await upsertUserWorkflow(userRecipe());
+    const reg = buildRegistry();
+    reg.register({
+      name: 'search',
+      description: 'web search',
+      argsSchema: z.object({ query: z.string() }),
+      async dispatch() {
+        return { ok: true, content: '1. how to knit a scarf, beginner guide', data: { results: [{ url: 'https://x/' }] } };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'do it', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'search', args: { query: 'knit a scarf' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Cast on, knit rows, bind off.' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    await orch.runUntilTerminal(await orch.start('knit a scarf for me'));
+    const all = await loadWorkflows();
+    expect(all.filter((w) => w.id.startsWith('auto:')).length).toBe(0); // no auto duplicate created
+    const u = all.find((w) => w.id === 'user:r1')!;
+    expect(u.origin).toBe('user'); // survived as a user recipe (still editable), not clobbered into auto
+    expect(u.trusted).toBe(true); // and was confirmed by the clean run
+  });
+
   it('a clean success CONFIRMS (trusts) the user recipe that drove it', async () => {
     await upsertUserWorkflow(userRecipe());
     const ollama = makeFakeOllama({

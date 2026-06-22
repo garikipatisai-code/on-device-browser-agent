@@ -229,6 +229,20 @@ describe('clearLearnedWorkflows (forget poisoned auto-recipes; seeds remain) —
   });
 });
 
+describe('saveWorkflow never clobbers a user recipe (auto dedup is auto-only)', () => {
+  beforeEach(async () => {
+    await resetStorage();
+  });
+  it('keeps a near-duplicate USER recipe when an auto recipe is saved', async () => {
+    await upsertUserWorkflow({ id: 'user:keep', origin: 'user', domain: '*', goalKeywords: ['compare', 'cities', 'population'], goalSample: 'compare cities', whenToUse: 'compare cities', steps: [{ instruction: 'a' }, { instruction: 'b' }], trusted: true });
+    const auto = traceToWorkflow('auto:dup', 'compare cities population', '*', [{ tool: 'search', args: {} }, { tool: 'open_result', args: { index: 1 } }]);
+    await saveWorkflow(auto!);
+    const ids = (await loadWorkflows()).map((w) => w.id);
+    expect(ids).toContain('user:keep'); // protected — an auto save must never remove a user recipe
+    expect(ids).toContain('auto:dup');
+  });
+});
+
 describe('persistence round-trip', () => {
   beforeEach(async () => {
     await resetStorage();

@@ -736,25 +736,23 @@ export class Orchestrator {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
     await this.settleUserRecipe(verdict);
-    // Auto-record a reusable recipe (AWM Phase 2) ONLY from a CLEAN success — no replan, no
-    // evaluator FAIL, no tier/fatal denial, no breaker trip, no finish rejection, and a tight
-    // step count. A messy success (combined-query → list page → denial → recover) still answers
-    // correctly but must NOT be taught back as a recipe — that's what kept poisoning the planner.
-    if (verdict === 'success' && !this.runDirty) {
-      try {
-        // A success with NO friction can still be redundant (re-searched/re-opened the same thing).
-        // Don't teach that bloat back either — only a tight, non-repeating run becomes a recipe.
-        if (traceHasRedundancy(this.trace)) {
-          this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: 'Recipe not saved (run had redundant steps)' });
-        } else {
+    // Auto-learn ONLY from a success that NO recipe guided — i.e. a genuinely new flow. If a recipe
+    // (user/builtin/auto) already drove the run, re-recording is redundant and worse: saveWorkflow's
+    // near-duplicate dedup would clobber the very user recipe that just succeeded. The gates below
+    // (clean + non-redundant) still apply to those unguided runs.
+    if (verdict === 'success' && !this.matchedWorkflow) {
+      if (this.runDirty) {
+        this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe not saved (run not clean: ${this.dirtyReason})` });
+      } else if (traceHasRedundancy(this.trace)) {
+        this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: 'Recipe not saved (run had redundant steps)' });
+      } else {
+        try {
           const wf = traceToWorkflow(`auto:${ulid()}`, hot.goal, deriveDomain(this.trace, hot.goal), this.trace);
           if (wf) await saveWorkflow(wf);
+        } catch {
+          /* recording is best-effort, never fatal */
         }
-      } catch {
-        /* recording is best-effort, never fatal */
       }
-    } else if (verdict === 'success' && this.runDirty) {
-      this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe not saved (run not clean: ${this.dirtyReason})` });
     }
     this.emit({ kind: 'finish', ts: Date.now(), verdict, summary, sources: [...this.sourceUrls].slice(0, 5) });
     return { phase: 'DONE', summary, verdict, turns: this.turns, replans: hot.replanCount };

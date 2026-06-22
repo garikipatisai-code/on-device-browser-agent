@@ -440,8 +440,12 @@ export async function saveWorkflow(wf: Workflow): Promise<void> {
   } catch {
     /* fresh store */
   }
-  // Replace a near-duplicate (same domain + very similar keywords) rather than pile up.
-  const deduped = stored.filter((s) => !(s.domain === wf.domain && jaccard(s.goalKeywords, wf.goalKeywords) > 0.6));
+  // Replace a near-duplicate LEARNED recipe (same domain + very similar keywords) rather than pile
+  // up — but NEVER remove a user recipe (saveWorkflow only ever stores auto recipes; a user recipe
+  // is curated and must not be clobbered by an auto near-duplicate).
+  const deduped = stored.filter(
+    (s) => !(s.origin !== 'user' && s.domain === wf.domain && jaccard(s.goalKeywords, wf.goalKeywords) > 0.6),
+  );
   deduped.push(wf);
   await memorySet(STORE_KEY, deduped.slice(-MAX_STORED));
 }
