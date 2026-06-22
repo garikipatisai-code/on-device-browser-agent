@@ -47,6 +47,8 @@ export interface Settings {
     apiKey?: string;
     enabledRoles?: Role[];
   };
+  /** Ollama context window; default 32768, raise only after verifying VRAM with `ollama ps`. */
+  numCtx?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: Settings = {
   domainTiers: {},
   profileJson: '',
   preferences: '',
+  numCtx: 32_768,
 };
 
 /** Treat a bare model name as equal to its `:latest` tag (Ollama's default). */

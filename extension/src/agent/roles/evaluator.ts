@@ -13,6 +13,7 @@ export interface EvaluatorInput {
   step: Step;
   signal?: AbortSignal;
   timeoutMs?: number;
+  numCtx?: number;
 }
 
 export interface Verdict {
@@ -62,7 +63,7 @@ export async function runEvaluator(input: EvaluatorInput): Promise<Verdict> {
     thinking: true,
     timeoutMs: input.timeoutMs ?? 120_000,
     signal: input.signal,
-    numCtx: NUM_CTX,
+    numCtx: input.numCtx ?? NUM_CTX,
   });
   const raw = resp.message.content ?? '';
   return parseVerdict(raw);
