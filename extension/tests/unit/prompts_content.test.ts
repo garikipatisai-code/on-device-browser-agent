@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildEvaluatorMessages, buildExecutorMessages } from '@/agent/prompts';
+import { buildEvaluatorMessages, buildExecutorMessages, buildPlannerMessages } from '@/agent/prompts';
 import type { Step } from '@/shared/messages';
 
 const ctx = {
@@ -27,6 +27,16 @@ describe('evaluator prompt: judges the active step’s specific datum', () => {
   });
   it('still protects earlier-gathered data (no re-fail)', () => {
     expect(sys.toLowerCase()).toContain('earlier turn');
+  });
+});
+
+describe('planner prompt: preserves a recipe’s guardrail steps (does not flatten to generic searches)', () => {
+  const sys = buildPlannerMessages(ctx)[0].content as string;
+  it('instructs to preserve the recipe’s constraints, not just adapt wording', () => {
+    expect(sys).toContain('PRESERVE every constraint');
+  });
+  it('forbids collapsing a guardrail step into a generic "search for X"', () => {
+    expect(sys).toMatch(/do NOT simplify a recipe step into a generic/i);
   });
 });
 
