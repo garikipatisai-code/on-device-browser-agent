@@ -448,4 +448,8 @@ describe('seed-compare encodes the anchor-on-one-source procedure (not just "sam
   it('requires the answer to state the source / basis used', () => {
     expect(stepsText).toMatch(/state the source|source you used|what its figure represents|per the same site/);
   });
+  it('requires a precise figure and rejects vague ranges', () => {
+    expect(stepsText).toMatch(/precise|exact/);
+    expect(stepsText).toMatch(/vague|over .*million|more than/);
+  });
 });
