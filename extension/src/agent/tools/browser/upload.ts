@@ -85,7 +85,7 @@ export const tabUploadFileTool: ToolDefDescriptor<{ tabId: number; labelContains
   }),
   async dispatch({ tabId, labelContains }, ctx) {
     const url = await tabUrl(tabId);
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers);
+    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const resume = await loadResumeFile();
     if (!resume) {
       return { ok: false, content: 'No résumé stored. Upload one in Settings → Profile first.' };

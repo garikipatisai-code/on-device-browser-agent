@@ -61,10 +61,14 @@ export function assertCanAct(
   url: string,
   required: DomainTier,
   tiers: Record<string, DomainTier>,
+  bypass = false,
 ): void {
   if (isBlockedUrl(url)) {
     throw new DomainTierError(`Blocked URL scheme: ${url}`, '', required, 'read-only');
   }
+  // The opt-in bypass relaxes only the site-access tiers (read-only/click-only/full-action) —
+  // the protocol blocklist above STILL applies (file:/chrome:/javascript: are security, not access).
+  if (bypass) return;
   const host = hostFor(url);
   const actual = getDomainTier(host, tiers);
   if (TIER_ORDER[actual] < TIER_ORDER[required]) {

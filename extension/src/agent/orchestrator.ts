@@ -659,9 +659,11 @@ export class Orchestrator {
   }
 
   /** True if this URL's domain is upgraded to click-only or higher — gates the
-   *  harness's consent auto-dismiss (auto-accepting/rejecting cookies has privacy weight). */
+   *  harness's consent auto-dismiss (auto-accepting/rejecting cookies has privacy weight).
+   *  The opt-in bypass un-gates it for any (non-blocked) site. */
   private canActUrl(url: string | undefined): boolean {
     if (!url || isBlockedUrl(url)) return false;
+    if (this.opts.settings.bypassDomainTiers) return true;
     return TIER_ORDER[getDomainTier(hostFor(url), this.opts.settings.domainTiers)] >= TIER_ORDER['click-only'];
   }
 

@@ -94,7 +94,7 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
   }),
   async dispatch({ tabId, elementIndex }, ctx) {
     const url = await tabUrl(tabId);
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers);
+    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
     const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
@@ -136,7 +136,7 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
   }),
   async dispatch({ tabId, elementIndex, text, clear, submit }, ctx) {
     const url = await tabUrl(tabId);
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers);
+    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
     let notEditable = false;
     const stale = await withCdp(tabId, async (send) => {
@@ -190,7 +190,7 @@ export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: num
   }),
   async dispatch({ tabId, elementIndex, value }, ctx) {
     const url = await tabUrl(tabId);
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers);
+    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
     const outcome = await withCdp(tabId, async (send) => {
       await send('DOM.enable');

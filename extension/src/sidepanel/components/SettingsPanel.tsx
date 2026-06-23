@@ -223,6 +223,18 @@ export function SettingsPanel({
         <div className="field-hint">
           Unknown hosts are <code>read-only</code>. The agent cannot click or type until you upgrade a host.
         </div>
+        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={!!local.bypassDomainTiers}
+            onChange={(e) => update('bypassDomainTiers', e.target.checked)}
+          />
+          <span>
+            <strong>Let the agent click, type, and submit on any site</strong> (skip per-site approval). With
+            this on, the agent acts on any page without asking — including forms and purchases. Reading is never
+            restricted; dangerous URL schemes (file:, chrome:, javascript:) stay blocked.
+          </span>
+        </label>
         {Object.entries(local.domainTiers).map(([host, tier]) => (
           <div className="domain-row" key={host}>
             <input value={host} readOnly />
