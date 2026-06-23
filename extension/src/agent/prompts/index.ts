@@ -139,7 +139,7 @@ ${SAFETY_RULES}`;
     ctx.recentActions ? `RECENT ACTIONS:\n${ctx.recentActions}` : '',
     ctx.profileBlock ?? '',
     ctx.pageContentBlock
-      ? `CURRENT PAGE CONTENT (your most recent page read — synthesize from this; re-extract only if you have navigated since):\n${ctx.pageContentBlock}`
+      ? `CURRENT PAGE CONTENT (your most recent page read — synthesize from this; re-extract ONLY after an in-place change you caused, never just after navigation):\n${ctx.pageContentBlock}`
       : '',
   ].filter(Boolean);
   return [
@@ -192,7 +192,7 @@ Output: ONLY a JSON object of the form:
     `ACTIVE STEP: ${step.description}`,
     `SUCCESS CRITERIA: ${step.successCriteria}`,
     ctx.recentActions ? `ACTIONS TAKEN THIS STEP (judge the whole sequence, not just the last):\n${ctx.recentActions}` : '',
-    ctx.scratchpad ? `SCRATCHPAD (everything gathered so far this task — earlier turns' reads + findings; the ACTIVE step counts as DONE only if THAT step's own datum appears here, not merely some other step's):\n${ctx.scratchpad}` : '',
+    ctx.scratchpad ? `SCRATCHPAD (everything gathered so far this task — earlier turns' reads + findings; the ACTIVE step counts as DONE only if THAT step's own datum appears here from any turn, not merely some other step's):\n${ctx.scratchpad}` : '',
     `MOST RECENT EXECUTOR OUTPUT:\n${lastResult.slice(0, 4_000)}`,
     ctx.pageContentBlock
       ? `CURRENT PAGE CONTENT (the actual page — verify the result's claims against THIS, not the executor's words):\n${ctx.pageContentBlock}`
