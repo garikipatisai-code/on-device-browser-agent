@@ -64,7 +64,7 @@ function preferencesBlock(preferences?: string): string {
 export function buildPlannerMessages(ctx: CommonContext, extra?: string, workflowRecipe?: string): ChatMessage[] {
   const system = `You are the PLANNER in a goal-anchored browser agent.
 
-Your job: Decompose the user's goal into a sequence of concrete, executable steps. Steps must be self-contained, observable, and have clear success criteria.
+Your job: Decompose the user's goal into a sequence of concrete, executable steps. Steps must be self-contained, observable, and have clear success criteria. Each step's successCriteria states what will be TRUE when the step is done (e.g. "the museum's facilities are listed on the page"), not the action performed.
 
 Output: Respond ONLY with a JSON object of the form:
 {"steps":[{"description":"...","successCriteria":"...","toolHint":"optional"}]}

@@ -12,6 +12,8 @@ export interface PlannerInput {
   ollama: OllamaClient;
   replanContext?: string;
   workflowRecipe?: string;
+  /** Step count of the matched recipe (if any). Used to detect an under-planned/collapsed plan. */
+  recipeStepCount?: number;
   signal?: AbortSignal;
   timeoutMs?: number;
   numCtx?: number;
@@ -79,23 +81,28 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
   if (steps.length === 0) {
     throw new Error(`Planner returned no usable steps. Raw: ${raw.slice(0, 200)}`);
   }
-  // A matched recipe can over-collapse a multi-part goal into a SINGLE step (observed live: a
-  // 3-city comparison planned as one "search for all three in sequence" step → one combined search
-  // → a giant list page → wrong answer). When a recipe was injected but the plan is a lone step,
-  // retry once WITHOUT the recipe, nudging the planner to decompose. Adopt it only if it is
-  // genuinely richer, so this can never make the plan worse (or empty).
-  if (steps.length === 1 && input.workflowRecipe) {
-    const decomposeMessages = [
-      ...buildPlannerMessages(input.ctx, input.replanContext), // no recipe this pass
+  // A matched recipe can over-collapse a task into too few steps (observed live: a 3-step contact
+  // recipe planned as ONE mis-scoped "search" step → garbled evaluation → stall; and a multi-city
+  // comparison planned as one combined search). When a recipe was injected but the plan has FEWER
+  // steps than the recipe (or is a lone step), retry once — KEEPING the recipe — nudging the planner
+  // to produce one step per recipe step (expanding any "for each item" step per named item). Adopt
+  // only if genuinely richer, so this can never make the plan worse (or empty).
+  const recipeCount = input.recipeStepCount;
+  const collapsed =
+    !!input.workflowRecipe && (steps.length === 1 || (recipeCount != null && steps.length < recipeCount));
+  if (collapsed) {
+    const m = recipeCount ?? steps.length;
+    const parityMessages = [
+      ...buildPlannerMessages(input.ctx, input.replanContext, input.workflowRecipe), // KEEP the recipe
       {
         role: 'user' as const,
         content:
-          'That plan has only ONE step, but this goal has several distinct parts. Break it into 3–5 concrete steps — one per item/part (e.g. one step per city or product), ending with a step that reports the answer. Respond with ONLY {"steps":[{"description":"...","successCriteria":"..."}]}.',
+          `Your plan has ${steps.length} step(s)${recipeCount ? `, but the recipe lists ${m}` : ''}. Produce ONE plan step per recipe step, in order — and expand any "for each item" step into one step per named item in the goal. Each step's successCriteria must state what is TRUE when that step is done (e.g. "the page shows the requested info"), not the action taken. Respond with ONLY {"steps":[{"description":"...","successCriteria":"..."}]}.`,
       },
     ];
     const r2 = await input.ollama.chatOnce({
       model: input.model,
-      messages: decomposeMessages,
+      messages: parityMessages,
       format: 'json',
       thinking: true,
       timeoutMs: input.timeoutMs ?? 300_000,

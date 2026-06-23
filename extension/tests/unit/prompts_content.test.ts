@@ -38,6 +38,10 @@ describe('planner prompt: preserves a recipe’s guardrail steps (does not flatt
   it('forbids collapsing a guardrail step into a generic "search for X"', () => {
     expect(sys).toMatch(/do NOT simplify a recipe step into a generic/i);
   });
+  it('tells the planner success criteria describe completion, not the action', () => {
+    expect(sys).toMatch(/TRUE when the step is done/i);
+    expect(sys).toMatch(/not the action/i);
+  });
 });
 
 describe('executor prompt: page is auto-read after navigation (no redundant re-read)', () => {
