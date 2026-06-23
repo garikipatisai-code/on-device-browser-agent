@@ -434,3 +434,18 @@ describe('built-in recipe routing matrix (review guard: realistic goals route to
     expect(matchWorkflow('tell me a joke about cats', SEED_WORKFLOWS)).toBeNull();
   });
 });
+
+describe('seed-compare encodes the anchor-on-one-source procedure (not just "same basis")', () => {
+  const stepsText = SEED_WORKFLOWS.find((w) => w.id === 'seed-compare')!
+    .steps.map((s) => s.instruction).join(' ').toLowerCase();
+  it('anchors on one source and reuses it for every item', () => {
+    expect(stepsText).toContain('anchor');
+    expect(stepsText).toMatch(/same (anchor-)?source|same website|same site/);
+  });
+  it('warns against taking a different site\'s number even if it ranks higher / looks bigger', () => {
+    expect(stepsText).toMatch(/different site|another site|ranks higher|looks bigger/);
+  });
+  it('requires the answer to state the source / basis used', () => {
+    expect(stepsText).toMatch(/state the source|source you used|what its figure represents|per the same site/);
+  });
+});
