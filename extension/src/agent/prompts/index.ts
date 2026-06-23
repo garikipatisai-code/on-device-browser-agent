@@ -74,7 +74,7 @@ CRITICAL — cover the WHOLE goal: every distinct part of the goal must map to a
 - "find a product under $30 and report it" → (1) search, (2) read results, (3) filter to under $30, (4) report.
 A plan that ends before the goal is fully satisfied is wrong.
 
-If a PROVEN RECIPE is given below, base your plan on it: turn each recipe step into a plan step (in order) and copy its [tool: …] into that step's toolHint. Adapt wording to the specific GOAL.
+If a PROVEN RECIPE is given below, build your plan DIRECTLY from it: turn each recipe step into a plan step IN ORDER and copy its [tool: …] into that step's toolHint. Substitute the GOAL's specific items, but PRESERVE every constraint the recipe states (e.g. "from the same source as the other items", "use a precise figure, not a vague range", "note the source"). Do NOT simplify a recipe step into a generic "search for X" that drops its rule — the recipe's wording encodes guardrails this task needs; keep them in the step's description.
 
 Each step is a single browser action or observation. Prefer observing before acting (extract a page → decide → act). Use the FEWEST steps that still fully cover the goal — fewer is better, because each step is a slow model call AND a chance to derail. Make ONE step per item that both finds AND reads that item's fact (e.g. "find Austin's population") — do NOT split it into separate search / open / extract steps (a page opened via search is auto-read for you). Never pad with vague "analyze", "re-evaluate", or "assume" steps. The FINAL step must report the requested items AS THE ANSWER (e.g. "list the 3 products with names and prices").
 
