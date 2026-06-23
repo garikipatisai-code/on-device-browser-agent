@@ -181,10 +181,10 @@ export const SEED_WORKFLOWS: Workflow[] = [
     goalSample: 'compare or rank several named things on one metric and say which wins',
     whenToUse: 'Comparing or ranking several named things (which is largest / best / cheapest).',
     steps: [
-      { instruction: 'For EACH item, run ONE web search of the form "<item> <metric>" (one item per query — never a combined query, which returns an un-readable ranking page).', toolHint: 'search' },
-      { instruction: "Read that item's value straight from the result snippet; open its page only if the snippet lacks the value.", toolHint: 'open_result' },
-      { instruction: 'Use the SAME basis for every item (e.g. all city-proper, all 2020 census) — never mix bases.' },
-      { instruction: 'Report all items with their values and state which one wins.', toolHint: 'finish' },
+      { instruction: 'Search the FIRST item only: "<item> <metric>" (ONE item per query — never a combined query, which returns an un-readable ranking page). Take its value and NOTE which website that figure came from (its domain) — that site is your ANCHOR SOURCE.', toolHint: 'search' },
+      { instruction: 'For EACH remaining item, search "<item> <metric>" and use the figure from the SAME anchor-source website — open that result if the snippet does not show the number. Do NOT take another site\'s number even if it ranks higher or looks bigger: different sites use different bases (e.g. city-proper vs metro population), so mixing them breaks the comparison.', toolHint: 'open_result' },
+      { instruction: 'If the anchor source has no figure for an item, switch to ONE website that lists all the items and re-gather every item from it (a consistent set beats saving a step). If no single site covers them all, report each value with its source and say the comparison is approximate.' },
+      { instruction: 'Report every item with its value, STATE the source you used and what its figure represents (e.g. "city population, the same site for all"), and say which item wins.', toolHint: 'finish' },
     ],
   },
   {
