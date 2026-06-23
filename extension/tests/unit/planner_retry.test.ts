@@ -48,22 +48,26 @@ describe('runPlanner — retry on an unusable plan (do not abort the task on a t
   });
 });
 
-describe('runPlanner — a recipe must not collapse a multi-part goal into a single step', () => {
-  // Live failure: a matched recipe seeded a 1-step plan ("search for all three in sequence") for a
-  // 3-city comparison → one combined search → a giant list page → wrong answer. When a recipe is
-  // injected but the plan comes back as a lone step, retry once WITHOUT the recipe so the planner
-  // decomposes the goal freely.
-  const onePlan = JSON.stringify({ steps: [{ description: 'search for all three in sequence', successCriteria: 'gathered' }] });
+describe('runPlanner — recipe-parity retry (a recipe task must not collapse below the recipe’s step count)', () => {
+  // Live failure: a "find facilities on the British Museum site" goal matched seed-contact (3 steps)
+  // but the planner emitted ONE mis-scoped step. The retry now KEEPS the recipe and nudges for one
+  // plan step per recipe step (expanding any "for each item" step per named item).
+  const onePlan = JSON.stringify({ steps: [{ description: 'search for everything at once', successCriteria: 'gathered' }] });
+  const twoPlan = JSON.stringify({
+    steps: [
+      { description: 'search', successCriteria: 'a' },
+      { description: 'report', successCriteria: 'b' },
+    ],
+  });
   const richPlan = JSON.stringify({
     steps: [
-      { description: 'find Austin population', successCriteria: 'a' },
-      { description: 'find Seattle population', successCriteria: 'b' },
-      { description: 'find Denver population', successCriteria: 'c' },
-      { description: 'compare and report', successCriteria: 'd' },
+      { description: 'open the official source', successCriteria: 'on the official page' },
+      { description: 'read the requested fields', successCriteria: 'fields found on the page' },
+      { description: 'report only what is shown', successCriteria: 'answer reported' },
     ],
   });
 
-  it('retries WITHOUT the recipe on a lone-step recipe plan, adopting the richer decomposition', async () => {
+  it('retries KEEPING the recipe on a collapsed plan, adopting the richer decomposition', async () => {
     const recipeSeen: boolean[] = [];
     let calls = 0;
     const ollama = makeFakeOllama(
@@ -76,20 +80,42 @@ describe('runPlanner — a recipe must not collapse a multi-part goal into a sin
         },
       },
     );
-    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1. Search\n2. Report' });
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1. Open\n2. Read\n3. Report', recipeStepCount: 3 });
     expect(out.plan.steps.length).toBeGreaterThanOrEqual(3);
     expect(calls).toBe(2);
     expect(recipeSeen[0]).toBe(true); // first attempt carried the recipe
-    expect(recipeSeen[1]).toBe(false); // retry dropped it
+    expect(recipeSeen[1]).toBe(true); // retry KEEPS the recipe now (it used to drop it)
   });
 
-  it('keeps the single step if the recipe-free retry is no richer (never makes the plan worse)', async () => {
+  it('fires when the plan is thinner than the recipe even if it is not a lone step (2 < 3)', async () => {
+    let calls = 0;
+    const ollama = makeFakeOllama(
+      { planner: [rawResponse({ content: twoPlan }), rawResponse({ content: richPlan })] },
+      { onChat: (_m, role) => { if (role === 'planner') calls++; } },
+    );
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1\n2\n3', recipeStepCount: 3 });
+    expect(calls).toBe(2);
+    expect(out.plan.steps.length).toBe(3);
+  });
+
+  it('keeps the original plan if the retry is no richer (never makes it worse)', async () => {
     const ollama = makeFakeOllama({ planner: [rawResponse({ content: onePlan }), rawResponse({ content: onePlan })] });
-    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1. Search' });
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1\n2\n3', recipeStepCount: 3 });
     expect(out.plan.steps.length).toBe(1);
   });
 
-  it('does NOT do the recipe-free retry when no recipe was used (a lone-step plan stands)', async () => {
+  it('does NOT retry when the plan already meets the recipe step count (single planner call)', async () => {
+    let calls = 0;
+    const ollama = makeFakeOllama(
+      { planner: [rawResponse({ content: richPlan })] },
+      { onChat: (_m, role) => { if (role === 'planner') calls++; } },
+    );
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1\n2\n3', recipeStepCount: 3 });
+    expect(calls).toBe(1);
+    expect(out.plan.steps.length).toBe(3);
+  });
+
+  it('does NOT do the parity retry when no recipe was used (a lone-step plan stands)', async () => {
     let calls = 0;
     const ollama = makeFakeOllama(
       { planner: [rawResponse({ content: onePlan })] },
