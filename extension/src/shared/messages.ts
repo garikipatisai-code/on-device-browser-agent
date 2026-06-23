@@ -36,6 +36,10 @@ export interface Settings {
   embeddingModel: string;
   visionModel: string;
   domainTiers: Record<string, DomainTier>;
+  /** Opt-in escape hatch: when true, the agent may click/type/submit on ANY site (the domain-tier
+   *  gate is skipped). The blocked-protocol list (file:/chrome:/javascript:/…) still applies.
+   *  Default false — safe by default. */
+  bypassDomainTiers?: boolean;
   /** JSON object of the user's data (name, email, etc.) used to fill application
    *  forms. Injected into the Executor context; never invented by the model. */
   profileJson?: string;
@@ -66,6 +70,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Multimodal model for vision.read (screenshot → text). Must support images.
   visionModel: 'gemma4:e4b',
   domainTiers: {},
+  bypassDomainTiers: false,
   profileJson: '',
   preferences: '',
   numCtx: 32_768,

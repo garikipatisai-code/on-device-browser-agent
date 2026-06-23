@@ -63,6 +63,20 @@ describe('assertCanAct', () => {
   });
 });
 
+describe('assertCanAct — bypass', () => {
+  it('skips the tier check on a read-only host when bypass is true', () => {
+    expect(() => assertCanAct('https://unknown.com/page', 'click-only', {}, true)).not.toThrow();
+  });
+  it('STILL blocks dangerous URL schemes even when bypass is true', () => {
+    expect(() => assertCanAct('javascript:alert(1)', 'click-only', {}, true)).toThrow(DomainTierError);
+    expect(() => assertCanAct('file:///etc/passwd', 'click-only', {}, true)).toThrow(DomainTierError);
+    expect(() => assertCanAct('chrome://extensions', 'click-only', {}, true)).toThrow(DomainTierError);
+  });
+  it('bypass defaults to false — read-only host still blocked', () => {
+    expect(() => assertCanAct('https://unknown.com/page', 'click-only', {})).toThrow(DomainTierError);
+  });
+});
+
 describe('isBlockedUrl / hostFor', () => {
   it('blocks dangerous protocols', () => {
     expect(isBlockedUrl('chrome://settings')).toBe(true);
