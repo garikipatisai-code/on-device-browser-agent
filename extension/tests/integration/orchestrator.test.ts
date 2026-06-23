@@ -1055,6 +1055,105 @@ describe('orchestrator — salvages an answer from what it read instead of givin
   });
 });
 
+describe('orchestrator — re-answers from the full corpus when a finish reports a field as missing', () => {
+  // Live failure (British Museum facilities): the answer was in the step-1 search snippets / an
+  // earlier page read (→ observedText), but the agent over-navigated into a narrow sub-page and
+  // finished "Café: not listed. Wi-Fi: not listed." A finish that claims a requested field is
+  // MISSING must be reconciled against everything gathered before it stands.
+  it('replaces a "not listed" finish with a corpus answer that fills the gap', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return {
+          ok: true,
+          content:
+            'British Museum facilities: Court Café open daily. Cloakroom available for bags and coats. Free Wi-Fi throughout the building.',
+          data: { url: 'https://www.britishmuseum.org/visit' },
+        };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [
+        rawResponse({
+          content: JSON.stringify({
+            steps: [
+              { description: 'open the official site and read facilities', successCriteria: 'facilities read' },
+              { description: 'report the facilities', successCriteria: 'reported' },
+            ],
+          }),
+        }),
+      ],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Cloakroom: available. Café: not listed. Wi-Fi: not listed.' } }] }),
+      ],
+      evaluator: [],
+      // The corpus re-answer (a non-role prompt → 'unknown') fills the gap from observedText.
+      unknown: [rawResponse({ content: 'The British Museum lists a Court Café (open daily), a cloakroom for bags and coats, and free Wi-Fi throughout.' })],
+    });
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: () => undefined,
+      maxStepTurns: 8,
+    });
+    const result = await orch.runUntilTerminal(
+      await orch.start('what facilities does the British Museum list — cloakroom, café, Wi-Fi?'),
+    );
+    expect(result.summary.toLowerCase()).not.toContain('not listed');
+    expect(result.summary).toContain('Wi-Fi');
+    expect(result.summary).toContain('Café');
+  });
+
+  it('leaves a clean positive finish untouched (no corpus re-answer when nothing is reported missing)', async () => {
+    const reg = buildRegistry();
+    let unknownCalls = 0;
+    const ollama = makeFakeOllama(
+      {
+        planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'answer', successCriteria: 'done' }] }) })],
+        executor: [rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The café is open daily and Wi-Fi is free.' } }] })],
+        evaluator: [],
+      },
+      { onChat: (_m, role) => { if (role === 'unknown') unknownCalls++; } },
+    );
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxStepTurns: 8 });
+    const result = await orch.runUntilTerminal(await orch.start('is the café open and is there Wi-Fi?'));
+    expect(result.summary).toBe('The café is open daily and Wi-Fi is free.');
+    expect(unknownCalls).toBe(0); // no missing-claim → no corpus re-answer call
+  });
+
+  it('keeps the honest "not shown" when the corpus genuinely lacks the field (no fabrication)', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'Product: Quiet Keyboard. Price: £29.99. In stock.', data: { url: 'https://shop.example/p/1' } };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read the product', successCriteria: 'read' }, { description: 'report', successCriteria: 'reported' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Price: £29.99. Star rating: not shown on the page.' } }] }),
+      ],
+      evaluator: [],
+      // The corpus genuinely has no rating, so the re-answer also can't supply one (still reports it missing).
+      unknown: [rawResponse({ content: 'The price is £29.99 and it is in stock; the star rating is not shown on the page.' })],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxStepTurns: 8 });
+    const result = await orch.runUntilTerminal(await orch.start('what is the price and star rating of the Quiet Keyboard?'));
+    // Honest gap preserved — must NOT fabricate a rating, and the corpus re-answer (which also lacks it) is not adopted blindly.
+    expect(result.summary.toLowerCase()).toContain('not shown');
+    expect(result.summary).toContain('29.99');
+  });
+});
+
 describe('orchestrator — user recipe trust/quarantine (the authored-recipe safety net)', () => {
   const userRecipe = (over: Partial<Workflow> = {}): Workflow => ({
     id: 'user:r1', origin: 'user', domain: '*', goalKeywords: ['knit', 'scarf'], goalSample: 'knit a scarf',

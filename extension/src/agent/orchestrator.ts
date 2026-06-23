@@ -35,7 +35,7 @@ import { currentStep, newPlan, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
 import { redact, redactDeep } from './safety/redact';
-import { ungroundedNumbers } from './verify/grounding';
+import { ungroundedNumbers, mentionsMissing } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
 import { sleep } from '@/background/signal';
@@ -212,7 +212,7 @@ export class Orchestrator {
         }
         const v = this.verifyFinish(fin.summary);
         if (v.ok) {
-          return this.finishOk(hot, 'success', fin.summary);
+          return this.finalizeFinish(hot, 'success', fin.summary);
         }
         this.verifyAttempts += 1;
         this.markDirty('finish rejected (ungrounded)');
@@ -258,8 +258,7 @@ export class Orchestrator {
         this.verifyAttempts = 0;
         this.consecutiveFatal = 0;
         if (ev.finishVerdict && ev.finishSummary) {
-          const g = this.gateFinishSummary(ev.finishVerdict, ev.finishSummary);
-          return this.finishOk(hot, g.verdict, g.summary);
+          return this.finalizeFinish(hot, ev.finishVerdict, ev.finishSummary);
         }
         if (next.terminal) {
           const ok = ev.verdict === 'PASS';
@@ -268,8 +267,7 @@ export class Orchestrator {
           // generic "Plan complete.".
           const answer = execOut.tool === 'answer' ? (execOut.result.content ?? '').trim() : '';
           if (ok && answer) {
-            const g = this.gateFinishSummary('success', answer);
-            return this.finishOk(hot, g.verdict, g.summary);
+            return this.finalizeFinish(hot, 'success', answer);
           }
           return this.finishOk(
             hot,
@@ -314,8 +312,7 @@ export class Orchestrator {
         const ev = await this.evaluate(hot, step.id, execOut.result.content);
         this.captureFact(step, ev); // periodic evals can also surface a grounded fact — dedups by text
         if (ev.finishVerdict && ev.finishSummary) {
-          const g = this.gateFinishSummary(ev.finishVerdict, ev.finishSummary);
-          return this.finishOk(hot, g.verdict, g.summary);
+          return this.finalizeFinish(hot, ev.finishVerdict, ev.finishSummary);
         }
         if (ev.verdict === 'FAIL' && ev.shouldReplan) {
           if (hot.replanCount >= (this.opts.maxReplans ?? 3) - 1) {
@@ -745,6 +742,41 @@ export class Orchestrator {
     const v = this.verifyFinish(summary);
     if (v.ok) return { verdict, summary };
     return { verdict: 'partial', summary: `${summary}\n\n[unverified against page: ${v.reason}]` };
+  }
+
+  /** Gate a data-bearing executor/evaluator finish, then reconcile a "field is missing" claim
+   *  against the FULL corpus. NOT used by the salvage paths (giveUp/preferSalvageOnDenial), which
+   *  already answer from the corpus. */
+  private async finalizeFinish(hot: AgentStateHot, verdict: string, summary: string): Promise<RunResult> {
+    const g = this.gateFinishSummary(verdict, summary);
+    const reconciled = g.verdict === 'success' ? await this.reconcileMissingFromCorpus(hot, g.summary) : g.summary;
+    return this.finishOk(hot, g.verdict, reconciled);
+  }
+
+  /** A finish that reports a requested field as ABSENT may have overlooked data the agent already
+   *  gathered — observedText holds EVERY read this task (incl. search-result snippets), but the
+   *  executor only ever sees the LAST page. So re-answer the goal from the full corpus and adopt
+   *  that answer ONLY if it fills the gap (no longer claims something missing) and is grounded.
+   *  Returns the original summary unchanged when there's no missing-claim or no better answer. */
+  private async reconcileMissingFromCorpus(hot: AgentStateHot, summary: string): Promise<string> {
+    if (!mentionsMissing(summary)) return summary;
+    const corpusAnswer = (await this.synthesizeFromObserved(hot))?.trim();
+    // Adopt the corpus answer ONLY if it is a substantive answer that no longer reports a gap.
+    // A short/junk answer (or one that still says "not shown") means the field is genuinely
+    // absent — keep the honest original (preserves absent-field honesty, e.g. an icon-only rating).
+    if (corpusAnswer && corpusAnswer.length >= 40 && !mentionsMissing(corpusAnswer)) {
+      const g = this.gateFinishSummary('success', corpusAnswer);
+      if (g.verdict === 'success') {
+        this.emit({
+          kind: 'log',
+          ts: Date.now(),
+          level: 'info',
+          message: 'finish re-answered from the full corpus (a field reported missing was found in an earlier read)',
+        });
+        return g.summary;
+      }
+    }
+    return summary;
   }
 
   /** Mark this run as "messy" so it won't be distilled into a recipe. Called on any friction —

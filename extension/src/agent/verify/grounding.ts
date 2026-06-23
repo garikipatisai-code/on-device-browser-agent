@@ -22,3 +22,13 @@ export function ungroundedNumbers(text: string, observed: string): string[] {
   const obs = new Set(dataNumbers(observed));
   return dataNumbers(text).filter((n) => !obs.has(n));
 }
+
+// A finish that claims a requested field is ABSENT. Used to trigger a re-answer from the full
+// observed corpus: the agent may have moved past the page/snippet that actually had the field.
+const MISSING_RE =
+  /\bnot (listed|shown|available|provided|mentioned|specified|found|displayed|stated)\b|\b(could ?n'?t|can ?not|could not|unable to) (find|locate)\b|\bno mention\b|\bdo(es)?(?: ?n'?t| not) (list|mention|show|include|provide|state)\b|\bunavailable\b/i;
+
+/** True if a finish summary claims a requested field is missing/absent. */
+export function mentionsMissing(text: string): boolean {
+  return MISSING_RE.test(text);
+}
