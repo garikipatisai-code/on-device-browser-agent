@@ -23,6 +23,11 @@ export interface AgentStateHot {
   ownedTabs: number[];
   lastTouch: number;
   startedAt: number;
+  // True once the planner's internal recipe-parity retry (roles/planner.ts) has fired once for
+  // this task. Bounds that retry to a single occurrence across the whole task, no matter how many
+  // times the orchestrator's outer replan() loop calls runPlanner again (each of those calls would
+  // otherwise re-trigger the same collapsed-plan retry, compounding up to ~6 planner calls).
+  recipeRetryUsed?: boolean;
 }
 
 const HOT_KEY = 'agent.hot';
@@ -128,6 +133,7 @@ export async function _setHot(goal: string): Promise<AgentStateHot> {
       ownedTabs: [],
       lastTouch: Date.now(),
       startedAt: Date.now(),
+      recipeRetryUsed: false,
     };
     await _storage.set(HOT_KEY, next);
     return next;

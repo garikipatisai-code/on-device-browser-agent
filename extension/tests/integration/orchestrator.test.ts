@@ -1749,3 +1749,76 @@ describe('orchestrator — facts ledger: ungrounded mid-plan prose is blocked', 
     expect(result.summary).toContain('111,111');
   });
 });
+
+describe('orchestrator — recipe-parity retry × outer replan loop does not compound', () => {
+  // The bug: roles/planner.ts's internal recipe-parity retry and the orchestrator's OUTER
+  // replan() loop both key off `matchedWorkflow` with no shared memory. Worst case, EVERY one
+  // of the outer loop's replan() calls could ALSO re-trigger the inner retry (up to 6 planner
+  // calls before giving up). The fix threads `hot.recipeRetryUsed` through both plan() and
+  // replan() call sites of runPlanner — this test drives the REAL orchestrator state machine
+  // (not a direct runPlanner call) through exactly that compounding scenario end-to-end.
+  it('the inner recipe-parity retry fires at most once across an initial plan() AND a later outer replan()', async () => {
+    await upsertUserWorkflow({
+      id: 'user:parity1',
+      origin: 'user',
+      domain: '*',
+      goalKeywords: ['facilities', 'museum'],
+      goalSample: 'find facilities on the museum site',
+      whenToUse: 'find facilities on a museum site',
+      // 3-step recipe — a 1-step plan is "collapsed" relative to this every time it's checked.
+      steps: [{ instruction: 'open the site' }, { instruction: 'read facilities' }, { instruction: 'report' }],
+      trusted: false,
+    });
+
+    let plannerCalls = 0;
+    const onePlan = JSON.stringify({ steps: [{ description: 'search for everything at once', successCriteria: 'gathered' }] });
+    // The retry's own richer response — still only 1 step is needed after this to prove the
+    // COUNT, not the content; what matters is how many times chatOnce is invoked as 'planner'.
+    const richPlan = JSON.stringify({
+      steps: [
+        { description: 'open the site', successCriteria: 'opened' },
+        { description: 'read facilities', successCriteria: 'read' },
+        { description: 'report', successCriteria: 'reported' },
+      ],
+    });
+    const ollama = makeFakeOllama(
+      {
+        planner: [
+          rawResponse({ content: onePlan }), // initial plan() attempt 1 → collapsed → inner retry fires
+          rawResponse({ content: richPlan }), // initial plan()'s inner retry (attempt 2)
+          rawResponse({ content: onePlan }), // outer replan() attempt 1 → collapsed again, but MUST be gated off
+        ],
+        executor: [
+          // Trip the circuit breaker with 3 identical noop actions (same mechanism as the
+          // existing "circuit breaker forces replan" test above) — the simplest deterministic
+          // way in this codebase to force the orchestrator's OUTER replan() to fire.
+          rawResponse({ toolCalls: [{ name: 'noop', args: { x: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'noop', args: { x: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'noop', args: { x: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+        ],
+        evaluator: [],
+      },
+      { onChat: (_m, role) => { if (role === 'planner') plannerCalls++; } },
+    );
+
+    const orch = new Orchestrator({
+      ollama,
+      registry: buildRegistry(),
+      settings: { ...DEFAULT_SETTINGS },
+      emit: () => undefined,
+      maxReplans: 3,
+    });
+    const initial = await orch.start('find facilities on the museum site');
+    await orch.runUntilTerminal(initial);
+
+    // Exactly 3 planner calls total: initial plan (1) + its inner retry (1) + the outer
+    // replan's single attempt (1, gated — no SECOND inner retry). Without the fix this would
+    // be 4 (the outer replan's collapsed plan re-triggering its own inner retry).
+    expect(plannerCalls).toBe(3);
+
+    const hot = await loadHot();
+    expect(hot?.recipeRetryUsed).toBe(true); // persisted for the rest of the task
+    expect(hot?.replanCount).toBeGreaterThanOrEqual(1); // the outer loop's own count is untouched/unbounded by this flag
+  });
+});

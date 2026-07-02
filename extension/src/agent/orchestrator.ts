@@ -349,6 +349,7 @@ export class Orchestrator {
         ollama: this.opts.ollama,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
+        recipeRetryUsed: hot.recipeRetryUsed,
         signal: this.signal,
         numCtx: this.numCtx,
       }),
@@ -357,6 +358,10 @@ export class Orchestrator {
       this.observeTokens(buildPlannerMessages(this.commonCtx(hot)), out.promptEvalCount);
     }
     hot = await this.applyPlan(hot, out.plan);
+    // The recipe-parity retry (inside runPlanner) is bounded to once per TASK, not once per
+    // runPlanner call — persist onto the shared hot state so a later outer replan() (which calls
+    // runPlanner again from scratch) does not re-trigger it.
+    if (out.retryFired) hot = await patchHot({ recipeRetryUsed: true });
     this.emit({ kind: 'planner.plan', ts: Date.now(), plan: out.plan });
     this.emit({ kind: 'role.end', ts: Date.now(), role: 'planner', ms: performance.now() - t0 });
     return hot;
@@ -375,11 +380,15 @@ export class Orchestrator {
         replanContext: reason,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
+        recipeRetryUsed: hot.recipeRetryUsed,
         signal: this.signal,
         numCtx: this.numCtx,
       }),
     );
     hot = await this.applyPlan(hot, out.plan);
+    // Same cross-call gate as plan() above — the outer replan loop itself may run up to
+    // maxReplans times, and each of THOSE calls must also respect (and can also set) the flag.
+    if (out.retryFired) hot = await patchHot({ recipeRetryUsed: true });
     this.emit({ kind: 'planner.plan', ts: Date.now(), plan: out.plan });
     this.emit({ kind: 'role.end', ts: Date.now(), role: 'planner', ms: performance.now() - t0 });
     this.breaker = resetForNewStep(this.breaker);
