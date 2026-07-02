@@ -109,6 +109,19 @@ describe('redesigned components render across states', () => {
     expect(renderToStaticMarkup(<Alert kind="warn">heads up</Alert>)).toContain('heads up');
   });
 
+  it('the connection-lost banner (Alert reused for a mid-run SW disconnect) renders honest, non-overpromising copy', () => {
+    // App.tsx renders exactly this when connectionLost is true — a mid-run SW death is otherwise
+    // invisible (the panel would just freeze at the last-received phase with no signal at all).
+    // Reconnect is purely reactive (the next send() revives the port) — no background polling — so
+    // the copy must not claim an active "reconnecting…" process that isn't actually happening.
+    const html = renderToStaticMarkup(
+      <Alert kind="warn">Connection to the agent was lost — it will reconnect on your next action.</Alert>,
+    );
+    expect(html).toMatch(/Connection to the agent was lost/i);
+    expect(html).toMatch(/reconnect/i);
+    expect(html).not.toMatch(/reconnecting…/i);
+  });
+
   it('ConnectionCard surfaces the down-state with the start command + retry', () => {
     const html = renderToStaticMarkup(<ConnectionCard baseUrl="http://localhost:11434" onRetry={noop} />);
     expect(html).toContain('Ollama');

@@ -125,4 +125,70 @@ describe('runPlanner — recipe-parity retry (a recipe task must not collapse be
     expect(out.plan.steps.length).toBe(1);
     expect(calls).toBe(1);
   });
+
+  it('reports retryFired=true when the parity retry actually fires', async () => {
+    const ollama = makeFakeOllama({ planner: [rawResponse({ content: onePlan }), rawResponse({ content: richPlan })] });
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1\n2\n3', recipeStepCount: 3 });
+    expect(out.retryFired).toBe(true);
+  });
+
+  it('reports retryFired=false (or undefined) when the plan already met recipe parity (no retry needed)', async () => {
+    const ollama = makeFakeOllama({ planner: [rawResponse({ content: richPlan })] });
+    const out = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1\n2\n3', recipeStepCount: 3 });
+    expect(out.retryFired).toBeFalsy();
+  });
+});
+
+describe('runPlanner — recipe-parity retry is bounded to once per task (cross-call gating via recipeRetryUsed)', () => {
+  // The bug this guards against: the planner's internal recipe-parity retry and the orchestrator's
+  // outer replan() loop both key off matchedWorkflow with no shared memory. In the worst case, EVERY
+  // outer replan call could ALSO trigger this inner retry (up to 6 planner calls total before giving
+  // up). The fix: a `recipeRetryUsed` flag, threaded in via PlannerInput, that once true suppresses
+  // the inner retry — regardless of how many times runPlanner itself gets called across the task.
+  const onePlan = JSON.stringify({ steps: [{ description: 'search for everything at once', successCriteria: 'gathered' }] });
+  const richPlan = JSON.stringify({
+    steps: [
+      { description: 'open the official source', successCriteria: 'on the official page' },
+      { description: 'read the requested fields', successCriteria: 'fields found on the page' },
+      { description: 'report only what is shown', successCriteria: 'answer reported' },
+    ],
+  });
+
+  it('retries on the FIRST call (recipeRetryUsed not yet set) but does NOT retry again on a SECOND call once the flag is true', async () => {
+    let calls = 0;
+    // Every response under-plans relative to the 3-step recipe, so the retry condition
+    // (collapsed plan) is true on BOTH the first and second call to runPlanner — the only thing
+    // that may stop the second call's retry is the recipeRetryUsed gate.
+    const ollama = makeFakeOllama(
+      {
+        planner: [
+          rawResponse({ content: onePlan }), // call 1, attempt 1 (collapsed → retry fires)
+          rawResponse({ content: richPlan }), // call 1, attempt 2 (the retry itself)
+          rawResponse({ content: onePlan }), // call 2, attempt 1 (collapsed again, but gated off)
+        ],
+      },
+      { onChat: (_m, role) => { if (role === 'planner') calls++; } },
+    );
+
+    // Call 1: simulates the very first planning call for a task. recipeRetryUsed starts unset.
+    const out1 = await runPlanner({ ctx, model: 'm', ollama, workflowRecipe: '1\n2\n3', recipeStepCount: 3 });
+    expect(calls).toBe(2); // the inner retry DID fire (1 initial + 1 retry)
+    expect(out1.retryFired).toBe(true);
+
+    // The orchestrator persists out1.retryFired onto the shared hot state as recipeRetryUsed=true,
+    // then calls runPlanner AGAIN from one of the outer replan() calls — same task, same flag.
+    const out2 = await runPlanner({
+      ctx,
+      model: 'm',
+      ollama,
+      workflowRecipe: '1\n2\n3',
+      recipeStepCount: 3,
+      recipeRetryUsed: true, // set from call 1's outcome
+    });
+    // Only ONE more model call happened (the second call's single attempt) — the retry did not
+    // fire again, so total calls across BOTH runPlanner invocations is 3, not 4.
+    expect(calls).toBe(3);
+    expect(out2.plan.steps.length).toBe(1); // the collapsed plan stands — no retry to enrich it
+    expect(out2.retryFired).toBeFalsy(); // this call did not itself fire a (new) retry
+  });
 });

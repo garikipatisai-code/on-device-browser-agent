@@ -3,9 +3,9 @@
 
 import { OllamaClient } from './ollama';
 import {
-  clearHot,
   loadHot,
   loadSettings,
+  patchHot,
   saveResumeFile,
   saveSettings,
   setDomainTier,
@@ -144,18 +144,26 @@ if (typeof chrome !== 'undefined' && chrome.alarms) {
   });
 }
 
-(async () => {
+// Runs once at SW startup. If the SW was killed/restarted while a task was in-flight (not IDLE,
+// DONE, or already ABORTED), the hot state is stale and no orchestrator is coming back for it.
+// Report it honestly as ABORTED (matching what a user would see from an explicit abort) instead of
+// silently deleting it to bare IDLE — a panel that connects between the crash and the next
+// `agent.start` should see the task really did stop, not that nothing ever happened. The next real
+// `agent.start` (`_setHot`, an unconditional overwrite) replaces this record regardless of phase,
+// so the ABORTED marker never lingers past the user's next action.
+async function crashResume(): Promise<void> {
   try {
     const hot = await loadHot();
     if (hot && hot.phase !== 'IDLE' && hot.phase !== 'DONE' && hot.phase !== 'ABORTED') {
       console.warn('[browser-agent] crash-resume: found in-flight task, marking ABORTED');
-      await clearHot();
+      await patchHot({ phase: 'ABORTED' });
     }
   } catch (err) {
     // Never let SW-startup state recovery become an unhandled rejection.
     console.warn('[browser-agent] crash-resume failed:', (err as Error)?.message);
   }
-})();
+}
+void crashResume();
 
 async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']) {
   log('handleStart goal=', JSON.stringify(goal));
@@ -462,6 +470,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
 export const _testing = {
   handleStart,
   handleAbort,
+  crashResume,
   setOrchestratorFactory(fn: ((opts: OrchestratorOpts) => Orchestrator) | null) {
     _makeOrchestrator = fn ?? ((opts) => new Orchestrator(opts));
   },

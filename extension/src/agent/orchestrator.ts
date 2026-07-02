@@ -34,7 +34,7 @@ import {
 import { currentStep, newPlan, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
-import { redact, redactDeep } from './safety/redact';
+import { redact, redactDeep, redactEvent } from './safety/redact';
 import { ungroundedNumbers, mentionsMissing } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
@@ -349,6 +349,7 @@ export class Orchestrator {
         ollama: this.opts.ollama,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
+        recipeRetryUsed: hot.recipeRetryUsed,
         signal: this.signal,
         numCtx: this.numCtx,
       }),
@@ -357,6 +358,10 @@ export class Orchestrator {
       this.observeTokens(buildPlannerMessages(this.commonCtx(hot)), out.promptEvalCount);
     }
     hot = await this.applyPlan(hot, out.plan);
+    // The recipe-parity retry (inside runPlanner) is bounded to once per TASK, not once per
+    // runPlanner call — persist onto the shared hot state so a later outer replan() (which calls
+    // runPlanner again from scratch) does not re-trigger it.
+    if (out.retryFired) hot = await patchHot({ recipeRetryUsed: true });
     this.emit({ kind: 'planner.plan', ts: Date.now(), plan: out.plan });
     this.emit({ kind: 'role.end', ts: Date.now(), role: 'planner', ms: performance.now() - t0 });
     return hot;
@@ -375,11 +380,15 @@ export class Orchestrator {
         replanContext: reason,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
+        recipeRetryUsed: hot.recipeRetryUsed,
         signal: this.signal,
         numCtx: this.numCtx,
       }),
     );
     hot = await this.applyPlan(hot, out.plan);
+    // Same cross-call gate as plan() above — the outer replan loop itself may run up to
+    // maxReplans times, and each of THOSE calls must also respect (and can also set) the flag.
+    if (out.retryFired) hot = await patchHot({ recipeRetryUsed: true });
     this.emit({ kind: 'planner.plan', ts: Date.now(), plan: out.plan });
     this.emit({ kind: 'role.end', ts: Date.now(), role: 'planner', ms: performance.now() - t0 });
     this.breaker = resetForNewStep(this.breaker);
@@ -443,7 +452,7 @@ export class Orchestrator {
       ts: Date.now(),
       tool: out.tool,
       ok: out.result.ok,
-      content: redact((out.result.content ?? '').slice(0, 2_000)),
+      content: (out.result.content ?? '').slice(0, 2_000),
     });
 
     await this.autoObserveAfterNavigation(out, toolCtx);
@@ -767,6 +776,7 @@ export class Orchestrator {
     if (corpusAnswer && corpusAnswer.length >= 40 && !mentionsMissing(corpusAnswer)) {
       const g = this.gateFinishSummary('success', corpusAnswer);
       if (g.verdict === 'success') {
+        this.markDirty('finish re-answered from corpus');
         this.emit({
           kind: 'log',
           ts: Date.now(),
@@ -788,18 +798,24 @@ export class Orchestrator {
     }
   }
 
-  /** Settle the USER recipe (if one drove this run): a CLEAN, non-redundant success proves it
-   *  (trust + snapshot); any failure/messy/redundant run quarantines it (rollback to last-good, or
-   *  delete if brand-new). Builtin/auto recipes are untouched. This is the user-recipe "catch":
-   *  a bad authored recipe can't keep being used. */
-  private async settleUserRecipe(verdict: string): Promise<void> {
+  /** Settle the recipe that drove this run (user OR auto — builtins are untouched, they're curated,
+   *  not learned). A CLEAN, non-redundant success proves a USER recipe (trust + snapshot); auto
+   *  recipes have no trust concept, so a clean run needs no bookkeeping here. ANY failure/messy/
+   *  redundant run quarantines whichever recipe drove it: a user recipe rolls back to last-good (or
+   *  deletes if brand-new); an auto recipe always deletes outright — it never has a last-good (it
+   *  wasn't hand-edited), so it gets exactly one chance and can be re-learned from a future clean
+   *  run. This is the recipe-safety "catch": a bad recipe (authored or learned) can't keep being used. */
+  private async settleRecipe(verdict: string): Promise<void> {
     const wf = this.matchedWorkflow;
-    if (!wf || wf.origin !== 'user') return;
+    if (!wf || (wf.origin !== 'user' && wf.origin !== 'auto')) return;
     const cleanSuccess = verdict === 'success' && !this.runDirty && !traceHasRedundancy(this.trace);
     try {
       if (cleanSuccess) {
-        await markWorkflowTrusted(wf.id);
-        this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe "${wf.id}" confirmed (clean run).` });
+        if (wf.origin === 'user') {
+          await markWorkflowTrusted(wf.id);
+          this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe "${wf.id}" confirmed (clean run).` });
+        }
+        // origin === 'auto': already proven once (that's how it got learned) — nothing to record.
       } else {
         const res = await quarantineWorkflow(wf.id);
         if (res === 'rolledback') {
@@ -820,7 +836,7 @@ export class Orchestrator {
   ): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
-    await this.settleUserRecipe(verdict);
+    await this.settleRecipe(verdict);
     // Auto-learn ONLY from a success that NO recipe guided — i.e. a genuinely new flow. If a recipe
     // (user/builtin/auto) already drove the run, re-recording is redundant and worse: saveWorkflow's
     // near-duplicate dedup would clobber the very user recipe that just succeeded. The gates below
@@ -848,7 +864,7 @@ export class Orchestrator {
   private async abortNow(hot: AgentStateHot, reason: string): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'ABORTED' });
-    await this.settleUserRecipe('aborted'); // a failed run quarantines the user recipe that drove it
+    await this.settleRecipe('aborted'); // a failed run quarantines whichever recipe drove it
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
     return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };
   }
@@ -948,8 +964,9 @@ export class Orchestrator {
   }
 
   private emit(ev: TimelineEvent) {
-    this.opts.emit(ev);
-    void appendEvent(this.taskId, ev);
+    const safe = redactEvent(ev);
+    this.opts.emit(safe);
+    void appendEvent(this.taskId, safe);
   }
 
   private assertNotAborted() {

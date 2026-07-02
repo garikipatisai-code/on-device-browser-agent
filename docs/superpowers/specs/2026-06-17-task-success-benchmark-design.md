@@ -115,7 +115,7 @@ Trials absorb the model's `temp=1.0` sampling variance; app-default sampling is 
 ## File layout
 
 - `extension/tests/bench/fixtures.ts` — fixture type + the 5 seed fixtures.
-- `extension/tests/bench/scripted_registry.ts` — `FixtureRegistry` (scripted browser).
+- `extension/tests/bench/scripted_browser.ts` — `FixtureRegistry` (scripted browser).
 - `extension/tests/bench/scorer.ts` — pure scorer (completed / correct / grounded).
 - `extension/tests/bench/scorer.test.ts` — unit tests for scorer + scripted registry (run in `npm test`, no model).
 - `extension/tests/bench/run.ts` — live runner (real Ollama, env-gated) + report printer.
@@ -123,7 +123,7 @@ Trials absorb the model's `temp=1.0` sampling variance; app-default sampling is 
 
 ## Testing strategy
 
-- **TDD the deterministic core** (`scorer.ts`, `scripted_registry.ts`): write
+- **TDD the deterministic core** (`scorer.ts`, `scripted_browser.ts`): write
   `scorer.test.ts` first — grounding catches a planted hallucinated price; assertion
   matching handles regex + ordered lists; the scripted registry advances state correctly
   on tool calls. These run in normal `npm test`.

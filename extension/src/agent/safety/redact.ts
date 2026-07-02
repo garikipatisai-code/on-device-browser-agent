@@ -44,16 +44,68 @@ export function redact(input: string): string {
   return out;
 }
 
-export function redactDeep<T>(v: T): T {
-  if (typeof v === 'string') return redact(v) as unknown as T;
-  if (Array.isArray(v)) return v.map(redactDeep) as unknown as T;
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(o)) out[redact(k)] = redactDeep(val);
-    return out as unknown as T;
+/**
+ * Shared recursive core behind redactEvent() and redactDeep(). Walks objects/arrays and calls
+ * redact() on every STRING VALUE at any depth — numbers/booleans/null/undefined are returned
+ * as-is and never touch the regex. This closes the bug class structurally (no per-field
+ * checklist to forget a field on — closed three rounds of "one more field missed":
+ * evaluator.verdict.reason / finish.summary, then finish.sources, a string[] that a
+ * `typeof === 'string'` guard could never catch).
+ *
+ * An earlier version of the redactEvent side stringified the WHOLE event (including numbers) to
+ * JSON text and ran redact() over that text, then re-parsed. That collided with CC_CANDIDATE_RE:
+ * every event's `ts` field is a 13-digit Date.now() value, and ~10% of any timestamp range passes
+ * the Luhn checksum by pure chance (measured over 100k consecutive real timestamps) — a false CC
+ * match replaces the numeric literal with an unquoted `[REDACTED: CC]` token, corrupting the JSON
+ * and losing the whole event to the parse-failure fallback. This walker fixes that at the actual
+ * root cause: a number is never coerced to a string in the first place, so the regex never sees
+ * it — zero collision risk, not a narrower one, and no change to redact()/CC_CANDIDATE_RE (so
+ * every other caller of redact() is unaffected). Since this walker never does whole-value
+ * stringification, that collision is structurally impossible regardless of the options below.
+ *
+ * `opts.keys` also redacts object KEYS (not just values) — redactDeep needs this because caller
+ * data (tool args, LLM extractions) can itself contain PII in a key, e.g. `{ 'contact a@b.com':
+ * 'note' }`; redactEvent doesn't need it, since TimelineEvent field NAMES are a fixed, known,
+ * PII-free schema (args/content/message/reason/summary/...), only their VALUES are free text.
+ *
+ * `opts.maxDepth`, when set, guards against unbounded recursion; when `undefined`, recursion is
+ * uncapped. Not a cycle detector — the data flowing through both callers (TimelineEvent payloads:
+ * tool args/results, LLM-generated strings; and finding/fact data: tool addFinding args, the flat
+ * 3-field grounded-fact ledger record) is plain JSON-shaped and never contains a live circular
+ * object reference in practice, so this is a depth guard against genuinely deep nesting, not a
+ * cycle guard — see the test file for why a circular-ref scenario isn't exercised here.
+ *
+ * Returns a new value; never mutates the input. Never throws.
+ */
+function redactAny(v: unknown, opts: { keys?: boolean; maxDepth?: number }, depth = 0): unknown {
+  if (opts.maxDepth !== undefined && depth > opts.maxDepth) return '[redacted: too deep]';
+  if (typeof v === 'string') return redact(v);
+  if (Array.isArray(v)) return v.map((x) => redactAny(x, opts, depth + 1));
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v).map(([k, val]) => [opts.keys ? redact(k) : k, redactAny(val, opts, depth + 1)]),
+    );
   }
-  return v;
+  return v; // number, boolean, null, undefined — never touched, never at risk of a regex collision
+}
+
+/**
+ * Redacts a TimelineEvent before it is persisted/emitted. This is the single chokepoint every
+ * event flows through (see orchestrator.ts's emit()) — so no individual call site needs its own
+ * redact() call, and no future TimelineEvent variant can reintroduce a PII leak. Depth-capped (8);
+ * see redactAny() above for why that's a guard against deep nesting, not a cycle detector.
+ */
+export function redactEvent<T>(ev: T): T {
+  return redactAny(ev, { keys: false, maxDepth: 8 }) as T;
+}
+
+/**
+ * Recursively redacts both object KEYS and string leaf VALUES, with no depth cap: its two call
+ * sites (a tool's addFinding data, the flat 3-field grounded-fact ledger record) only ever carry
+ * shallow, non-adversarial data in practice, so an unbounded walk poses no realistic stack risk.
+ */
+export function redactDeep<T>(v: T): T {
+  return redactAny(v, { keys: true }) as T;
 }
 
 export function luhnValid(num: string): boolean {

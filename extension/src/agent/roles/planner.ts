@@ -14,6 +14,12 @@ export interface PlannerInput {
   workflowRecipe?: string;
   /** Step count of the matched recipe (if any). Used to detect an under-planned/collapsed plan. */
   recipeStepCount?: number;
+  /** True once the recipe-parity retry (below) has already fired once for this task — from EITHER
+   *  a prior runPlanner call on this task or an earlier attempt within this same call. When true,
+   *  a collapsed plan is returned as-is rather than retried again. This is what bounds the retry to
+   *  once per task even though the orchestrator's outer replan() loop can call runPlanner up to
+   *  `maxReplans` times — each of those calls would otherwise re-trigger this same internal retry. */
+  recipeRetryUsed?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
   numCtx?: number;
@@ -24,6 +30,10 @@ export interface PlannerOutput {
   raw: string;
   promptEvalCount?: number;
   evalCount?: number;
+  /** True iff the recipe-parity retry actually fired on this call (regardless of whether the
+   *  richer plan was adopted). The caller (orchestrator) persists this onto the shared per-task
+   *  hot state (`recipeRetryUsed`) so it is never fired again for the same task. */
+  retryFired?: boolean;
 }
 
 interface RawPlan {
@@ -87,10 +97,19 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
   // steps than the recipe (or is a lone step), retry once — KEEPING the recipe — nudging the planner
   // to produce one step per recipe step (expanding any "for each item" step per named item). Adopt
   // only if genuinely richer, so this can never make the plan worse (or empty).
+  //
+  // Bounded to once per TASK (not once per runPlanner call): the orchestrator's outer replan() loop
+  // calls runPlanner again from scratch on evaluator FAIL, up to maxReplans times — each of those
+  // calls would otherwise re-trigger this same collapsed-plan condition. `recipeRetryUsed` is the
+  // orchestrator's shared per-task memory of "this retry already happened once"; skip it here if so.
   const recipeCount = input.recipeStepCount;
   const collapsed =
-    !!input.workflowRecipe && (steps.length === 1 || (recipeCount != null && steps.length < recipeCount));
+    !input.recipeRetryUsed &&
+    !!input.workflowRecipe &&
+    (steps.length === 1 || (recipeCount != null && steps.length < recipeCount));
+  let retryFired = false;
   if (collapsed) {
+    retryFired = true;
     const m = recipeCount ?? steps.length;
     const parityMessages = [
       ...buildPlannerMessages(input.ctx, input.replanContext, input.workflowRecipe), // KEEP the recipe
@@ -130,5 +149,6 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
     raw,
     promptEvalCount: resp.promptEvalCount,
     evalCount: resp.evalCount,
+    retryFired,
   };
 }

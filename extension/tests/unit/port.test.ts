@@ -66,4 +66,16 @@ describe('createPortClient', () => {
     expect(updates).toHaveLength(1);
     expect(updates[0].type).toBe('status');
   });
+
+  it('fires the registered onDisconnect callback exactly once when the SW port disconnects', () => {
+    const p = fakePort();
+    const client = createPortClient(() => undefined, () => p as unknown as chrome.runtime.Port);
+    const onDisconnect = vi.fn();
+    client.onDisconnect(onDisconnect);
+
+    client.send({ type: 'agent.status' }); // opens the port so there's a live listener to fire
+    p.emitDisconnect();
+
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
 });

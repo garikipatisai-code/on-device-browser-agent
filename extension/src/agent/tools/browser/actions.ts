@@ -225,7 +225,8 @@ export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: num
 
 export const tabScrollTool: ToolDefDescriptor<{ tabId: number; direction: 'up' | 'down'; pixels?: number }> = {
   name: 'tab.scroll',
-  description: 'Scroll the page up or down (default 600px) to read more of it. Allowed on any page you can read — scrolling changes nothing on the page.',
+  description:
+    'Scroll the page up or down (default 600px) to read more of it. Allowed on any page you can read. Scrolling itself performs no click/type/submit action, but on an infinite-scroll or lazy-load page it CAN change the DOM — if the content you need still looks incomplete after scrolling, re-read with aria.extract rather than trusting the last read.',
   argsSchema: z.object({
     tabId: z.number().int(),
     direction: z.enum(['up', 'down']),

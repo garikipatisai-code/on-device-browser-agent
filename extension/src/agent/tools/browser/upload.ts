@@ -19,8 +19,16 @@ import { loadResumeFile } from '@/background/state_store';
 
 // Runs IN THE PAGE. Returns the file input to use: the one whose label/name/aria
 // matches `label` if given, else the résumé/cv one, else the first. null if none.
+// Walks into open shadow roots (many ATS form widgets are web components) — closed
+// roots are unreachable by design and are silently skipped, not an error.
 export const LOCATE_FN = `function(label){
-  var inputs = Array.prototype.slice.call(document.querySelectorAll('input[type=file]'));
+  function findInputs(root){
+    var found = Array.prototype.slice.call(root.querySelectorAll('input[type=file]'));
+    var all = Array.prototype.slice.call(root.querySelectorAll('*'));
+    for(var k=0;k<all.length;k++){ if(all[k].shadowRoot){ found = found.concat(findInputs(all[k].shadowRoot)); } }
+    return found;
+  }
+  var inputs = findInputs(document);
   if(!inputs.length){ return null; }
   function text(el){
     var t='';
@@ -107,7 +115,8 @@ export const tabUploadFileTool: ToolDefDescriptor<{ tabId: number; labelContains
     if (data === null) {
       return {
         ok: false,
-        content: 'No <input type=file> found on this page (it may be inside an iframe, which is unsupported in v1).',
+        content:
+          'No <input type=file> found on this page (it may be inside an iframe or a closed shadow-DOM component, neither supported in v1).',
       };
     }
     return { ok: true, content: `Attached résumé "${resume.name}" to the upload field.`, data: data as Record<string, unknown> };

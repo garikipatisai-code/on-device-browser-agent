@@ -6,8 +6,8 @@ import { ToolRegistry } from '@/agent/tools/registry';
 import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
-import { loadHot, clearHot, _setHot } from '@/background/state_store';
-import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, type Workflow } from '@/agent/workflow_memory';
+import { loadHot, clearHot, _setHot, loadEvents } from '@/background/state_store';
+import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, saveWorkflow, type Workflow } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
 function buildRegistry(): ToolRegistry {
@@ -967,6 +967,39 @@ describe('orchestrator — PII in tool args is redacted (job-apply privacy)', ()
     expect(execPrompts.length).toBeGreaterThanOrEqual(2);
     expect(execPrompts.slice(1).join('\n')).not.toContain('john.doe@example.com');
   });
+
+  // emit() is the single chokepoint every TimelineEvent flows through before persistence
+  // (appendEvent → IndexedDB). This asserts redaction happens THERE, not per call site —
+  // reading back the persisted events directly, not just later prompts built from them.
+  it('persists a tool.call event with args redacted, not verbatim, in IndexedDB', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.type',
+      description: 'type into a field',
+      argsSchema: z.object({ tabId: z.number().int(), elementIndex: z.number().int(), text: z.string() }),
+      async dispatch() {
+        return { ok: true, content: 'Typed' };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'fill the form', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.type', args: { tabId: 1, elementIndex: 2, text: 'jane.doe@example.com' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Filled the email field.' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('fill in my email on the form'));
+    expect(result.phase).toBe('DONE');
+
+    const taskId = (orch as unknown as { taskId: string }).taskId;
+    const events = await loadEvents(taskId);
+    expect(events.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain('jane.doe@example.com');
+    expect(serialized).toContain('[REDACTED: EMAIL]');
+  });
 });
 
 describe('orchestrator — ask-page fast path (seeded plan skips the planner + cites the source)', () => {
@@ -1109,6 +1142,83 @@ describe('orchestrator — re-answers from the full corpus when a finish reports
     expect(result.summary).toContain('Café');
   });
 
+  // A corpus re-answer silently REPLACES the executor's own finish text — same category of
+  // self-correction as a rejected finish or an evaluator FAIL. Every other self-correction path
+  // calls markDirty() so the run is excluded from recipe-learning (see the "clean-run recipe
+  // gate" describe block below); this path must too, or a silently-corrected answer still counts
+  // as a "clean" run and gets taught back as a recipe.
+  it('marks the run dirty when a finish is re-answered from the corpus (excluded from recipe-learning)', async () => {
+    const before = (await loadWorkflows()).length;
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.open',
+      description: 'open a tab',
+      argsSchema: z.object({ url: z.string() }),
+      async dispatch({ url }) {
+        return { ok: true, content: `Opened ${url}`, data: { tabId: 42, url } };
+      },
+    });
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return {
+          ok: true,
+          content: 'Gallery visitor amenities: Terrace Café open daily. Cloakroom available. Free Wi-Fi throughout the building.',
+          data: { url: 'https://gallery.example/visit' },
+        };
+      },
+    });
+    const events: TimelineEvent[] = [];
+    const ollama = makeFakeOllama({
+      planner: [
+        rawResponse({
+          content: JSON.stringify({
+            steps: [
+              { description: 'open the gallery site and read amenities', successCriteria: 'amenities read' },
+              { description: 'report the amenities', successCriteria: 'reported' },
+            ],
+          }),
+        }),
+      ],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://gallery.example/visit' } }] }),
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 42 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Cloakroom: available. Café: not listed. Wi-Fi: not listed.' } }] }),
+      ],
+      evaluator: [],
+      // The corpus re-answer (a non-role prompt → 'unknown') fills the gap from observedText.
+      unknown: [rawResponse({ content: 'The gallery lists a Terrace Café (open daily), a cloakroom for bags and coats, and free Wi-Fi throughout.' })],
+    });
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: (e) => events.push(e),
+      maxStepTurns: 8,
+    });
+    const result = await orch.runUntilTerminal(
+      await orch.start('open the gallery site and list its visitor amenities — cloakroom, café, Wi-Fi'),
+    );
+
+    // Sanity: the reconciliation itself still worked (same as the sibling test above).
+    expect(result.verdict).toBe('success');
+    expect(result.summary.toLowerCase()).not.toContain('not listed');
+
+    // The dirty flag surfaces via the SAME observable path used for every other self-correction
+    // (finish rejected / evaluator FAIL / tier denial / breaker trip): the auto-learn gate in
+    // finishOk() skips saving a recipe and logs the reason. If this run were wrongly treated as
+    // clean, a NEW recipe would be auto-recorded (trace has tab.open → traceWorthLearning, no
+    // redundancy, no prior matchedWorkflow → nothing else would block it).
+    const dirtyLog = events.find(
+      (e) => e.kind === 'log' && /Recipe not saved \(run not clean/i.test(e.message),
+    ) as Extract<TimelineEvent, { kind: 'log' }> | undefined;
+    expect(dirtyLog).toBeTruthy();
+    expect(dirtyLog!.message).toContain('finish re-answered from corpus');
+    expect((await loadWorkflows()).length).toBe(before); // no recipe was auto-learned from this run
+  });
+
   it('leaves a clean positive finish untouched (no corpus re-answer when nothing is reported missing)', async () => {
     const reg = buildRegistry();
     let unknownCalls = 0;
@@ -1240,6 +1350,30 @@ describe('orchestrator — user recipe trust/quarantine (the authored-recipe saf
     const wf = (await loadWorkflows()).find((w) => w.id === 'user:r1')!;
     expect(wf.steps.map((s) => s.instruction)).toEqual(['step one', 'step two']); // rolled back
     expect(wf.trusted).toBe(true);
+  });
+
+  it('a failed run DELETES an auto-learned recipe that drove it (no last-good to roll back to — one chance)', async () => {
+    const autoRecipe: Workflow = {
+      id: 'auto:r1', origin: 'auto', domain: '*', goalKeywords: ['knit', 'scarf'], goalSample: 'knit a scarf',
+      steps: [{ instruction: 'step one' }, { instruction: 'step two' }],
+    };
+    await saveWorkflow(autoRecipe);
+    expect((await loadWorkflows()).some((w) => w.id === 'auto:r1')).toBe(true); // sanity: it's stored and matchable
+    // Same real-failure shape as the user-recipe case above: multi-step plan, executor never calls a
+    // tool → unknown-tool storm → ABORTED.
+    const multiStep = rawResponse({ content: JSON.stringify({ steps: [{ description: 'a', successCriteria: 'x' }, { description: 'b', successCriteria: 'y' }] }) });
+    const ollama = makeFakeOllama({
+      planner: [multiStep, multiStep, multiStep],
+      executor: [
+        rawResponse({ content: 'no tool' }), rawResponse({ content: 'still none' }),
+        rawResponse({ content: 'a' }), rawResponse({ content: 'b' }), rawResponse({ content: 'c' }), rawResponse({ content: 'd' }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxReplans: 2, maxStepTurns: 4 });
+    const r = await orch.runUntilTerminal(await orch.start('knit a scarf for me'));
+    expect(r.phase).toBe('ABORTED');
+    expect((await loadWorkflows()).some((w) => w.id === 'auto:r1')).toBe(false); // auto recipe: one chance, now gone
   });
 });
 
@@ -1637,5 +1771,78 @@ describe('orchestrator — facts ledger: ungrounded mid-plan prose is blocked', 
     expect(promptsAfterBlock).toContain('[VERIFICATION]');
     // Also confirm the grounded answer did advance (final verdict 'success', not 'partial' or 'aborted').
     expect(result.summary).toContain('111,111');
+  });
+});
+
+describe('orchestrator — recipe-parity retry × outer replan loop does not compound', () => {
+  // The bug: roles/planner.ts's internal recipe-parity retry and the orchestrator's OUTER
+  // replan() loop both key off `matchedWorkflow` with no shared memory. Worst case, EVERY one
+  // of the outer loop's replan() calls could ALSO re-trigger the inner retry (up to 6 planner
+  // calls before giving up). The fix threads `hot.recipeRetryUsed` through both plan() and
+  // replan() call sites of runPlanner — this test drives the REAL orchestrator state machine
+  // (not a direct runPlanner call) through exactly that compounding scenario end-to-end.
+  it('the inner recipe-parity retry fires at most once across an initial plan() AND a later outer replan()', async () => {
+    await upsertUserWorkflow({
+      id: 'user:parity1',
+      origin: 'user',
+      domain: '*',
+      goalKeywords: ['facilities', 'museum'],
+      goalSample: 'find facilities on the museum site',
+      whenToUse: 'find facilities on a museum site',
+      // 3-step recipe — a 1-step plan is "collapsed" relative to this every time it's checked.
+      steps: [{ instruction: 'open the site' }, { instruction: 'read facilities' }, { instruction: 'report' }],
+      trusted: false,
+    });
+
+    let plannerCalls = 0;
+    const onePlan = JSON.stringify({ steps: [{ description: 'search for everything at once', successCriteria: 'gathered' }] });
+    // The retry's own richer response — still only 1 step is needed after this to prove the
+    // COUNT, not the content; what matters is how many times chatOnce is invoked as 'planner'.
+    const richPlan = JSON.stringify({
+      steps: [
+        { description: 'open the site', successCriteria: 'opened' },
+        { description: 'read facilities', successCriteria: 'read' },
+        { description: 'report', successCriteria: 'reported' },
+      ],
+    });
+    const ollama = makeFakeOllama(
+      {
+        planner: [
+          rawResponse({ content: onePlan }), // initial plan() attempt 1 → collapsed → inner retry fires
+          rawResponse({ content: richPlan }), // initial plan()'s inner retry (attempt 2)
+          rawResponse({ content: onePlan }), // outer replan() attempt 1 → collapsed again, but MUST be gated off
+        ],
+        executor: [
+          // Trip the circuit breaker with 3 identical noop actions (same mechanism as the
+          // existing "circuit breaker forces replan" test above) — the simplest deterministic
+          // way in this codebase to force the orchestrator's OUTER replan() to fire.
+          rawResponse({ toolCalls: [{ name: 'noop', args: { x: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'noop', args: { x: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'noop', args: { x: 1 } }] }),
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+        ],
+        evaluator: [],
+      },
+      { onChat: (_m, role) => { if (role === 'planner') plannerCalls++; } },
+    );
+
+    const orch = new Orchestrator({
+      ollama,
+      registry: buildRegistry(),
+      settings: { ...DEFAULT_SETTINGS },
+      emit: () => undefined,
+      maxReplans: 3,
+    });
+    const initial = await orch.start('find facilities on the museum site');
+    await orch.runUntilTerminal(initial);
+
+    // Exactly 3 planner calls total: initial plan (1) + its inner retry (1) + the outer
+    // replan's single attempt (1, gated — no SECOND inner retry). Without the fix this would
+    // be 4 (the outer replan's collapsed plan re-triggering its own inner retry).
+    expect(plannerCalls).toBe(3);
+
+    const hot = await loadHot();
+    expect(hot?.recipeRetryUsed).toBe(true); // persisted for the rest of the task
+    expect(hot?.replanCount).toBeGreaterThanOrEqual(1); // the outer loop's own count is untouched/unbounded by this flag
   });
 });

@@ -34,8 +34,6 @@ export function budgetsFor(numCtx: number): Record<Role, number> {
     compactor: Math.round(26_000 * scale),
   };
 }
-/** Budgets at the default window — back-compat for direct importers. */
-export const BUDGETS: Record<Role, number> = budgetsFor(DEFAULT_NUM_CTX);
 
 /** Raw working-memory caps (chars). CROSS-TURN memory (scratch + observed) scales with the window;
  *  the PER-READ page cap stays FIXED — the ARIA tool caps extraction at this size, and a 4B reads a
@@ -52,8 +50,6 @@ export function capsFor(numCtx: number): { page: number; scratch: number; observ
 }
 
 export const COMPACT_TRIGGER_FRAC = 0.8;
-
-export const CompactionRequired = Symbol('compaction-required');
 
 export interface BudgetCheck {
   tokens: number;
@@ -76,13 +72,4 @@ export function checkBudget(
     overBudget: tokens > budget,
     shouldCompact: role === 'executor' && tokens > budget * COMPACT_TRIGGER_FRAC,
   };
-}
-
-export function truncateSection(prompt: string, sectionName: string, maxChars: number): string {
-  const start = prompt.indexOf(`${sectionName}:`);
-  if (start < 0) return prompt;
-  const end = prompt.indexOf('\n\n', start + sectionName.length + 1);
-  const tail = end < 0 ? '' : prompt.slice(end);
-  const head = prompt.slice(0, start);
-  return `${head}${sectionName}: [truncated for budget — ${maxChars}ch]\n${tail}`;
 }
