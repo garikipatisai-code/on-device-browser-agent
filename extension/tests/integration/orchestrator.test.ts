@@ -6,7 +6,7 @@ import { ToolRegistry } from '@/agent/tools/registry';
 import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
-import { loadHot, clearHot, _setHot } from '@/background/state_store';
+import { loadHot, clearHot, _setHot, loadEvents } from '@/background/state_store';
 import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, type Workflow } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
@@ -966,6 +966,39 @@ describe('orchestrator — PII in tool args is redacted (job-apply privacy)', ()
     // recentActions block — neither may carry the raw email (args were previously un-redacted).
     expect(execPrompts.length).toBeGreaterThanOrEqual(2);
     expect(execPrompts.slice(1).join('\n')).not.toContain('john.doe@example.com');
+  });
+
+  // emit() is the single chokepoint every TimelineEvent flows through before persistence
+  // (appendEvent → IndexedDB). This asserts redaction happens THERE, not per call site —
+  // reading back the persisted events directly, not just later prompts built from them.
+  it('persists a tool.call event with args redacted, not verbatim, in IndexedDB', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.type',
+      description: 'type into a field',
+      argsSchema: z.object({ tabId: z.number().int(), elementIndex: z.number().int(), text: z.string() }),
+      async dispatch() {
+        return { ok: true, content: 'Typed' };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'fill the form', successCriteria: 'done' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.type', args: { tabId: 1, elementIndex: 2, text: 'jane.doe@example.com' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Filled the email field.' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const result = await orch.runUntilTerminal(await orch.start('fill in my email on the form'));
+    expect(result.phase).toBe('DONE');
+
+    const taskId = (orch as unknown as { taskId: string }).taskId;
+    const events = await loadEvents(taskId);
+    expect(events.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain('jane.doe@example.com');
+    expect(serialized).toContain('[REDACTED: EMAIL]');
   });
 });
 

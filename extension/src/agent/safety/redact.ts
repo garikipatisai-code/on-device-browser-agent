@@ -44,6 +44,27 @@ export function redact(input: string): string {
   return out;
 }
 
+/**
+ * Redacts a TimelineEvent before it is persisted/emitted. This is the single chokepoint
+ * every event flows through (see orchestrator.ts's emit()) — so no individual call site
+ * needs its own redact() call, and no future TimelineEvent variant can reintroduce a PII leak.
+ * Returns a new object; never mutates the input. Never throws.
+ */
+export function redactEvent<T>(ev: T): T {
+  const e = ev as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...e };
+  if ('args' in out) {
+    try {
+      out.args = JSON.parse(redact(JSON.stringify(out.args)));
+    } catch {
+      out.args = '[redacted]';
+    }
+  }
+  if (typeof out.content === 'string') out.content = redact(out.content);
+  if (typeof out.message === 'string') out.message = redact(out.message);
+  return out as unknown as T;
+}
+
 export function redactDeep<T>(v: T): T {
   if (typeof v === 'string') return redact(v) as unknown as T;
   if (Array.isArray(v)) return v.map(redactDeep) as unknown as T;
