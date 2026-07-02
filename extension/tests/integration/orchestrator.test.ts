@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
 import { loadHot, clearHot, _setHot, loadEvents } from '@/background/state_store';
-import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, type Workflow } from '@/agent/workflow_memory';
+import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, saveWorkflow, type Workflow } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
 function buildRegistry(): ToolRegistry {
@@ -1350,6 +1350,30 @@ describe('orchestrator — user recipe trust/quarantine (the authored-recipe saf
     const wf = (await loadWorkflows()).find((w) => w.id === 'user:r1')!;
     expect(wf.steps.map((s) => s.instruction)).toEqual(['step one', 'step two']); // rolled back
     expect(wf.trusted).toBe(true);
+  });
+
+  it('a failed run DELETES an auto-learned recipe that drove it (no last-good to roll back to — one chance)', async () => {
+    const autoRecipe: Workflow = {
+      id: 'auto:r1', origin: 'auto', domain: '*', goalKeywords: ['knit', 'scarf'], goalSample: 'knit a scarf',
+      steps: [{ instruction: 'step one' }, { instruction: 'step two' }],
+    };
+    await saveWorkflow(autoRecipe);
+    expect((await loadWorkflows()).some((w) => w.id === 'auto:r1')).toBe(true); // sanity: it's stored and matchable
+    // Same real-failure shape as the user-recipe case above: multi-step plan, executor never calls a
+    // tool → unknown-tool storm → ABORTED.
+    const multiStep = rawResponse({ content: JSON.stringify({ steps: [{ description: 'a', successCriteria: 'x' }, { description: 'b', successCriteria: 'y' }] }) });
+    const ollama = makeFakeOllama({
+      planner: [multiStep, multiStep, multiStep],
+      executor: [
+        rawResponse({ content: 'no tool' }), rawResponse({ content: 'still none' }),
+        rawResponse({ content: 'a' }), rawResponse({ content: 'b' }), rawResponse({ content: 'c' }), rawResponse({ content: 'd' }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxReplans: 2, maxStepTurns: 4 });
+    const r = await orch.runUntilTerminal(await orch.start('knit a scarf for me'));
+    expect(r.phase).toBe('ABORTED');
+    expect((await loadWorkflows()).some((w) => w.id === 'auto:r1')).toBe(false); // auto recipe: one chance, now gone
   });
 });
 

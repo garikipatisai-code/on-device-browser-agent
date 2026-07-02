@@ -798,18 +798,24 @@ export class Orchestrator {
     }
   }
 
-  /** Settle the USER recipe (if one drove this run): a CLEAN, non-redundant success proves it
-   *  (trust + snapshot); any failure/messy/redundant run quarantines it (rollback to last-good, or
-   *  delete if brand-new). Builtin/auto recipes are untouched. This is the user-recipe "catch":
-   *  a bad authored recipe can't keep being used. */
+  /** Settle the recipe that drove this run (user OR auto — builtins are untouched, they're curated,
+   *  not learned). A CLEAN, non-redundant success proves a USER recipe (trust + snapshot); auto
+   *  recipes have no trust concept, so a clean run needs no bookkeeping here. ANY failure/messy/
+   *  redundant run quarantines whichever recipe drove it: a user recipe rolls back to last-good (or
+   *  deletes if brand-new); an auto recipe always deletes outright — it never has a last-good (it
+   *  wasn't hand-edited), so it gets exactly one chance and can be re-learned from a future clean
+   *  run. This is the recipe-safety "catch": a bad recipe (authored or learned) can't keep being used. */
   private async settleUserRecipe(verdict: string): Promise<void> {
     const wf = this.matchedWorkflow;
-    if (!wf || wf.origin !== 'user') return;
+    if (!wf || (wf.origin !== 'user' && wf.origin !== 'auto')) return;
     const cleanSuccess = verdict === 'success' && !this.runDirty && !traceHasRedundancy(this.trace);
     try {
       if (cleanSuccess) {
-        await markWorkflowTrusted(wf.id);
-        this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe "${wf.id}" confirmed (clean run).` });
+        if (wf.origin === 'user') {
+          await markWorkflowTrusted(wf.id);
+          this.emit({ kind: 'log', ts: Date.now(), level: 'info', message: `Recipe "${wf.id}" confirmed (clean run).` });
+        }
+        // origin === 'auto': already proven once (that's how it got learned) — nothing to record.
       } else {
         const res = await quarantineWorkflow(wf.id);
         if (res === 'rolledback') {
