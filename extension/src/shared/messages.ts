@@ -25,7 +25,7 @@ export interface Plan {
   created: number;
 }
 
-export type DomainTier = 'read-only' | 'click-only' | 'full-action';
+export type DomainTier = 'read-only' | 'click-only';
 
 export interface Settings {
   ollamaBaseUrl: string;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { DomainTier, Settings } from '@/shared/messages';
 import { sameModel } from '@/shared/messages';
+import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
 import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
 import { extractResumeText } from '../resume';
 import { fileToBase64 } from '../file_bytes';
@@ -20,7 +21,7 @@ interface Props {
 
 type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
 
-const TIERS: DomainTier[] = ['read-only', 'click-only', 'full-action'];
+const TIERS: DomainTier[] = ['read-only', 'click-only'];
 
 export function SettingsPanel({
   settings,
@@ -239,7 +240,7 @@ export function SettingsPanel({
           <div className="domain-row" key={host}>
             <input value={host} readOnly />
             <select
-              value={tier}
+              value={migrateLegacyTier(tier)}
               onChange={(e) => {
                 const t = e.target.value as DomainTier;
                 onTier(host, t);

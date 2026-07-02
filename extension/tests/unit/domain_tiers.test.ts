@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { DomainTier } from '@/shared/messages';
 import {
   assertCanAct,
   DomainTierError,
@@ -30,14 +31,28 @@ describe('domain_tiers — defaults', () => {
     expect(getDomainTier('amazon.com', { 'amazon.com': 'click-only' })).toBe('click-only');
   });
   it('suffix match (parent domain)', () => {
-    expect(getDomainTier('smile.amazon.com', { 'amazon.com': 'full-action' })).toBe('full-action');
+    expect(getDomainTier('smile.amazon.com', { 'amazon.com': 'click-only' })).toBe('click-only');
+  });
+  it('migrates a pre-collapse "full-action" value read from storage to click-only', () => {
+    // Pre-migration users could have persisted 'full-action' for a host. It must read back as
+    // click-only (the closer/more-permissive of the two remaining tiers), not crash, and not
+    // silently downgrade to read-only (that would be a security regression: it would revoke
+    // click/type access an existing user had already granted).
+    const legacyTiers = { 'amazon.com': 'full-action' } as unknown as Record<string, DomainTier>;
+    expect(getDomainTier('amazon.com', legacyTiers)).toBe('click-only');
+  });
+  it('migrates a legacy "full-action" value reached via suffix match too', () => {
+    const legacyTiers = { 'amazon.com': 'full-action' } as unknown as Record<string, DomainTier>;
+    expect(getDomainTier('smile.amazon.com', legacyTiers)).toBe('click-only');
   });
 });
 
 describe('TIER_ORDER', () => {
   it('is monotonic', () => {
     expect(TIER_ORDER['read-only']).toBeLessThan(TIER_ORDER['click-only']);
-    expect(TIER_ORDER['click-only']).toBeLessThan(TIER_ORDER['full-action']);
+  });
+  it('has exactly the two live tiers', () => {
+    expect(Object.keys(TIER_ORDER).sort()).toEqual(['click-only', 'read-only']);
   });
 });
 
@@ -50,10 +65,9 @@ describe('assertCanAct', () => {
       assertCanAct('https://amazon.com/p/123', 'click-only', { 'amazon.com': 'click-only' }),
     ).not.toThrow();
   });
-  it('blocks click-only host from full-action', () => {
-    expect(() =>
-      assertCanAct('https://amazon.com/p/123', 'full-action', { 'amazon.com': 'click-only' }),
-    ).toThrow(DomainTierError);
+  it('a legacy "full-action" host also satisfies a click-only requirement (migrates, not stricter)', () => {
+    const legacyTiers = { 'amazon.com': 'full-action' } as unknown as Record<string, DomainTier>;
+    expect(() => assertCanAct('https://amazon.com/p/123', 'click-only', legacyTiers)).not.toThrow();
   });
   it('blocks chrome:// urls', () => {
     expect(() => assertCanAct('chrome://extensions', 'read-only', {})).toThrow(DomainTierError);
