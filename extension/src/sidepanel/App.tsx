@@ -206,7 +206,7 @@ export function App() {
 
       <div className="content" role="tabpanel">
         {connectionLost && (
-          <Alert kind="warn">Connection to the agent was lost — reconnecting…</Alert>
+          <Alert kind="warn">Connection to the agent was lost — it will reconnect on your next action.</Alert>
         )}
 
         {tab === 'agent' && (
