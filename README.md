@@ -12,7 +12,8 @@ A goal-anchored autonomous browser agent that runs **entirely on your device** �
 - **Ask the current page.** Point it at a tab and ask a question — it answers from that page, on-device, with sources, no web search.
 - **Steerable.** Redirect a run mid-flight without restarting it, and set **standing preferences** that apply to every task.
 - **Job-apply (v1):** upload a résumé (`.pdf`/`.docx`/`.txt`); the model extracts your profile to fill application form fields, and **attaches the résumé file itself** to the form. Use the **"Apply to a job"** box with a Greenhouse/Lever URL — the agent fills + attaches, then **stops before submit** for your review (it never auto-submits). See Caveats for ATS coverage.
-- **Safety & privacy by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only`/`full-action` before the agent can interact. PII is redacted before anything is logged or persisted, and nothing ever leaves your machine.
+- **Safety & privacy by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only` before the agent can interact. PII is redacted before anything is logged or persisted, and nothing ever leaves your machine.
+- **Optional: bypass per-site approval.** A Settings checkbox lets the agent click, type, and submit on *any* site without upgrading it domain-by-domain first — handy for one-off tasks, at the cost of no per-domain checkpoint (it can act on forms/purchases on a site you never explicitly approved). Default **off**. Even with it on, the protocol blocklist (`file:`, `chrome:`, `javascript:`, `data:`, and similar dangerous schemes) still applies — it only relaxes site-access tiers, never that.
 
 ## Requirements
 
@@ -40,7 +41,7 @@ Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → 
 ## Usage
 
 1. **Settings → Models:** confirm Ollama is reachable and the models are installed (Refresh).
-2. **Settings → Domain tiers:** add the site(s) you want the agent to act on and set `click-only` or `full-action`. (Unlisted sites stay read-only.)
+2. **Settings → Domain tiers:** add the site(s) you want the agent to act on and set `click-only`. (Unlisted sites stay read-only. Or check the bypass box in Settings to skip per-site approval entirely — see Safety above.)
 3. *(For job-apply)* **Settings → Profile:** upload a résumé — the model fills the profile JSON; review and **Save**.
 4. **Agent tab:** type a goal and **Run**, e.g.:
    - `search amazon for a wireless mouse and list the first 3 results`

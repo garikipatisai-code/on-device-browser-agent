@@ -3,6 +3,14 @@
 **Date:** 2026-06-23
 **Status:** Approved (conversation)
 
+> **Update (2026-07-01, prod-readiness review Task 8):** the tier system described below
+> (`read-only`/`click-only`/`full-action`) was later collapsed to **two** tiers,
+> `read-only`/`click-only` — `full-action` no longer exists in code (it was byte-identical
+> to `click-only` in enforcement, so it carried no distinct behavior). The bypass mechanism
+> itself is unaffected: it still relaxes whichever site-access tiers exist, and the protocol
+> blocklist still applies regardless. The rest of this document is left as written on
+> 2026-06-23 and describes the three-tier system that was true at the time.
+
 ## Problem
 
 The domain-tier safety gate (every site starts **read-only**; the user must upgrade a host to click-only/full-action before the agent can click/type/submit) blocks the agent even when a click is needed purely to *read* information. Live evidence — goal *"Find the phone number and opening hours of the British Museum"*:
