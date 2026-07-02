@@ -630,15 +630,17 @@ export async function markWorkflowTrusted(id: string): Promise<void> {
 
 export type QuarantineResult = 'deleted' | 'rolledback' | 'ignored';
 
-/** A run that USED a user recipe failed/was messy → make the bad version unusable. A recipe with a
- *  last-good snapshot rolls back to it (a bad edit is undone); one without (brand new, unproven) is
- *  deleted. Builtin/auto recipes are left alone (they're gated elsewhere). */
+/** A run that USED a stored (user or auto) recipe failed/was messy → make the bad version unusable.
+ *  A USER recipe with a last-good snapshot rolls back to it (a bad edit is undone); one without
+ *  (brand new, unproven) is deleted. An AUTO recipe never has a last-good (it's learned, not hand-
+ *  edited) — a failed run always deletes it outright: one chance, then it's gone (it can always be
+ *  re-learned from a future clean run). Builtin recipes aren't in the stored array at all (they're
+ *  seeds), so an unresolvable/builtin id is left alone — 'ignored'. */
 export async function quarantineWorkflow(id: string): Promise<QuarantineResult> {
-  if (!id.startsWith('user:')) return 'ignored';
   const stored = await loadStored();
   const wf = stored.find((s) => s.id === id);
-  if (!wf) return 'ignored';
-  if (wf.lastGood) {
+  if (!wf || wf.origin === 'builtin') return 'ignored';
+  if (wf.origin === 'user' && wf.lastGood) {
     const restored: Workflow = {
       ...wf,
       whenToUse: wf.lastGood.whenToUse,

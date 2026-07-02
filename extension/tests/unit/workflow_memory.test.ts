@@ -388,9 +388,26 @@ describe('user recipe CRUD + trust/quarantine', () => {
     expect(loaded.trusted).toBe(true); // last-good was a proven version
   });
 
-  it('quarantineWorkflow leaves builtin/auto recipes untouched', async () => {
-    expect(await quarantineWorkflow('seed-compare')).toBe('ignored');
-    expect(await quarantineWorkflow('auto:whatever')).toBe('ignored');
+  it('quarantineWorkflow leaves an unresolvable/builtin id untouched (never deletes a builtin seed)', async () => {
+    expect(await quarantineWorkflow('seed-compare')).toBe('ignored'); // builtin seeds aren't in the stored array
+  });
+
+  it('quarantineWorkflow DELETES an auto-learned recipe on failure (no last-good to roll back to)', async () => {
+    // Realistic auto id, minted the same way orchestrator.ts does: `auto:${ulid()}`.
+    const autoWf: Workflow = {
+      id: 'auto:01HXAMPLEAUTOID000000001',
+      origin: 'auto',
+      domain: 'jobs.example',
+      goalKeywords: ['apply', 'job'],
+      goalSample: 'apply to a job',
+      steps: [{ instruction: 'a' }, { instruction: 'b' }],
+    };
+    await saveWorkflow(autoWf);
+    expect((await loadWorkflows()).some((w) => w.id === autoWf.id)).toBe(true); // sanity: it's stored
+
+    const res = await quarantineWorkflow(autoWf.id);
+    expect(res).toBe('deleted');
+    expect((await loadWorkflows()).some((w) => w.id === autoWf.id)).toBe(false);
   });
 });
 
