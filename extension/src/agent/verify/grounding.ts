@@ -25,8 +25,15 @@ export function ungroundedNumbers(text: string, observed: string): string[] {
 
 // A finish that claims a requested field is ABSENT. Used to trigger a re-answer from the full
 // observed corpus: the agent may have moved past the page/snippet that actually had the field.
+// The negative lookahead after "not (listed|shown|...)" excludes "not X at/for Y" phrasings —
+// those are price/attribute comparisons ("not listed at full price — it's on sale") or scoping
+// ("not available for pickup, only for delivery"), not absence claims, and must not trip a
+// corpus re-answer. "on" is deliberately NOT in the lookahead: it's genuinely ambiguous between
+// an absence ("not shown on the page") and a comparison ("not shown on mobile, only on desktop")
+// with the same surface shape, so excluding it risks suppressing a real absence claim instead —
+// a worse failure than the rare over-trigger it would prevent.
 const MISSING_RE =
-  /\bnot (listed|shown|available|provided|mentioned|specified|found|displayed|stated)\b|\b(could ?n'?t|can ?not|could not|unable to) (find|locate)\b|\bno mention\b|\bdo(es)?(?: ?n'?t| not) (list|mention|show|include|provide|state)\b|\bunavailable\b/i;
+  /\bnot (listed|shown|available|provided|mentioned|specified|found|displayed|stated)(?!\s+(?:at|for)\b)\b|\b(could ?n'?t|can ?not|could not|unable to) (find|locate)\b|\bno mention\b|\bdo(es)?(?: ?n'?t| not) (list|mention|show|include|provide|state)\b|\bunavailable\b/i;
 
 /** True if a finish summary claims a requested field is missing/absent. */
 export function mentionsMissing(text: string): boolean {
