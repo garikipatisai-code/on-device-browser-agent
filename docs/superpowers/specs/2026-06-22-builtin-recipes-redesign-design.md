@@ -21,7 +21,7 @@ A skill doesn't re-teach what the model can do; it **enforces a discipline / sup
 
 A recipe earns its place only if it guards one of these.
 
-## The 6 recipes
+## The 6 recipes (this redesign's proposal — more have been added since; see the current built-in set in `workflow_memory.ts`)
 1. **compare-and-rank** (`seed-compare`) — *which is largest/best/cheapest; compare X vs Y vs Z*. Steps: one search per item (never combined) → read each value from snippet (open only if missing) → same basis for all → report values + winner. Guards: basis-mixing, list-page trap, over-opening, ungrounded winner.
 2. **research-with-sources** (`seed-research`) — *research/explain/summarize/find info on a topic*. Steps: break into 2–4 sub-questions → one focused search each, read snippets → synthesize only from what you read → cite sources. Guards: hallucination, missing citations, over-opening.
 3. **extract-page-fields** (`seed-extract`, NEW) — *report the price/rating/stock/specs of a product/page*. Steps: open the page → report only fields present as text → icon/graphic-only field → "not shown", never guess → big table: pull the specific row, don't summarize. Guards: absent-field hallucination, giant-table failure, grounding.
