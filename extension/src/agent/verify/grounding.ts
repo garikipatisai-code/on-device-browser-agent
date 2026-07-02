@@ -52,6 +52,15 @@ export function ungroundedNumbers(text: string, observed: string): string[] {
 // call — the original, narrower bug this fix targets. The opposite error (suppressing a genuine
 // absence claim) is worse: it would silently skip the honesty check entirely. See
 // grounding.test.ts for the full case matrix, including the documented residual.
+//
+// Known remaining gap (the unsafe direction, left open deliberately): an absence claim about one
+// field and an unrelated "$"/"on sale" mention about a DIFFERENT field can still coincidentally
+// land in the same comma-joined clause within the 60-char window, e.g. "Wi-Fi password is not
+// listed at the front desk, but rooms start at $89 a night." wrongly suppresses. Widening the
+// clause boundary to also break on "," (mirroring the ";" fix above) is NOT a free fix: comma is
+// also the connector the accepted comparison phrasing itself relies on ("...at Y, but/on Z"), so
+// it just relocates the same blind spot rather than closing it. Left as a documented residual
+// rather than chased further.
 const MISSING_RE =
   /\bnot (listed|shown|available|provided|mentioned|specified|found|displayed|stated)(?!\s+(?:at|for)\b(?=[^.!?;]{0,60}(?:\$\s?\d|\bon sale\b)))\b|\b(could ?n'?t|can ?not|could not|unable to) (find|locate)\b|\bno mention\b|\bdo(es)?(?: ?n'?t| not) (list|mention|show|include|provide|state)\b|\bunavailable\b/i;
 
