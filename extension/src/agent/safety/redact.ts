@@ -48,26 +48,42 @@ export function redact(input: string): string {
  * Redacts a TimelineEvent before it is persisted/emitted. This is the single chokepoint
  * every event flows through (see orchestrator.ts's emit()) — so no individual call site
  * needs its own redact() call, and no future TimelineEvent variant can reintroduce a PII leak.
- * Covers every free-text field currently in the union: tool.call's args, tool.result's
- * content, log's message, evaluator.verdict's reason, and finish's summary — all of these
- * carry LLM-generated prose that can echo back raw PII it just read or typed.
+ *
+ * Recursively redacts every STRING VALUE in the event, at any depth, in objects or arrays —
+ * numbers/booleans/null/undefined are returned as-is and never touch the regex. This closes
+ * the bug class structurally (no per-field checklist to forget a field on — closed three rounds
+ * of "one more field missed": evaluator.verdict.reason / finish.summary, then finish.sources,
+ * a string[] that a `typeof === 'string'` guard could never catch).
+ *
+ * Earlier version stringified the WHOLE event (including numbers) to JSON text and ran redact()
+ * over that text, then re-parsed. That collided with CC_CANDIDATE_RE: every event's `ts` field is
+ * a 13-digit Date.now() value, and ~10% of any timestamp range passes the Luhn checksum by pure
+ * chance (measured over 100k consecutive real timestamps) — a false CC match replaces the numeric
+ * literal with an unquoted `[REDACTED: CC]` token, corrupting the JSON and losing the whole event
+ * to the parse-failure fallback. The walker below fixes this at the actual root cause: a number
+ * is never coerced to a string in the first place, so the regex never sees it — zero collision
+ * risk, not a narrower one, and no change to redact()/CC_CANDIDATE_RE (so every other caller of
+ * redact() is unaffected).
+ *
+ * Depth-capped (8) as a guard against unbounded recursion; TimelineEvent data (tool args/results,
+ * LLM-generated strings) is plain JSON-shaped and never contains a live circular object reference
+ * in practice, so this is a depth guard, not a cycle detector — see the test file for why a
+ * circular-ref scenario isn't exercised here.
+ *
  * Returns a new object; never mutates the input. Never throws.
  */
-export function redactEvent<T>(ev: T): T {
-  const e = ev as unknown as Record<string, unknown>;
-  const out: Record<string, unknown> = { ...e };
-  if ('args' in out) {
-    try {
-      out.args = JSON.parse(redact(JSON.stringify(out.args)));
-    } catch {
-      out.args = '[redacted]';
-    }
+function redactValue(v: unknown, depth = 0): unknown {
+  if (depth > 8) return '[redacted: too deep]';
+  if (typeof v === 'string') return redact(v);
+  if (Array.isArray(v)) return v.map((x) => redactValue(x, depth + 1));
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, val]) => [k, redactValue(val, depth + 1)]));
   }
-  if (typeof out.content === 'string') out.content = redact(out.content);
-  if (typeof out.message === 'string') out.message = redact(out.message);
-  if (typeof out.reason === 'string') out.reason = redact(out.reason);
-  if (typeof out.summary === 'string') out.summary = redact(out.summary);
-  return out as unknown as T;
+  return v; // number, boolean, null, undefined — never touched, never at risk of a regex collision
+}
+
+export function redactEvent<T>(ev: T): T {
+  return redactValue(ev) as T;
 }
 
 export function redactDeep<T>(v: T): T {
