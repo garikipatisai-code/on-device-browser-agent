@@ -1,7 +1,8 @@
 # Job-apply — roadmap & pending work
 
-> Status: 2026-06-15. The **apply-to-one** slice is implemented and unit-verified on
-> branch `feat/apply-to-one` (TSC clean, 201 tests, build OK). Design + plan:
+> Status: 2026-06-15. The **apply-to-one** slice is implemented and unit-verified;
+> branch `feat/apply-to-one` (TSC clean, the full test suite green, build OK) has since
+> merged into `main`. Design + plan:
 > `docs/superpowers/specs/2026-06-14-apply-to-one-design.md`,
 > `docs/superpowers/plans/2026-06-15-apply-to-one.md`. This file tracks what's deferred.
 

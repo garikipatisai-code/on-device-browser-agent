@@ -66,4 +66,33 @@ describe('LOCATE_FN (functional, in happy-dom)', () => {
       '<input type="file" name="doc1" id="a"><input type="file" name="doc2" id="b">';
     expect((locate('') as HTMLElement).id).toBe('a');
   });
+
+  it('pierces an open shadow root to find a file input nested inside it', () => {
+    document.body.innerHTML = '<div id="host"></div>';
+    const host = document.getElementById('host') as HTMLElement;
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<input type="file" id="shadow-input" name="resume_upload">';
+    const found = locate('') as HTMLElement;
+    expect(found).not.toBeNull();
+    expect(found.id).toBe('shadow-input');
+  });
+
+  it('does not crash on a closed shadow root and falls through to the light-DOM result', () => {
+    document.body.innerHTML = '<div id="host"></div><input type="file" id="light">';
+    const host = document.getElementById('host') as HTMLElement;
+    const root = host.attachShadow({ mode: 'closed' });
+    root.innerHTML = '<input type="file" id="closed-input">';
+    const found = locate('') as HTMLElement;
+    expect(found).not.toBeNull();
+    expect(found.id).toBe('light');
+  });
+
+  it('returns null (does not throw) when the only file input is behind a closed shadow root', () => {
+    document.body.innerHTML = '<div id="host"></div>';
+    const host = document.getElementById('host') as HTMLElement;
+    const root = host.attachShadow({ mode: 'closed' });
+    root.innerHTML = '<input type="file" id="unreachable">';
+    expect(() => locate('')).not.toThrow();
+    expect(locate('')).toBeNull();
+  });
 });

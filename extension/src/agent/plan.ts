@@ -47,9 +47,3 @@ export function walkPlan(plan: Plan, stepId: string, outcome: 'done' | 'fail'): 
   }
   return { plan: { ...plan, steps: next }, terminal, advanced, nextStep };
 }
-
-export function progressFraction(plan: Plan | null): number {
-  if (!plan || plan.steps.length === 0) return 0;
-  const done = plan.steps.filter((s) => s.status === 'completed').length;
-  return done / plan.steps.length;
-}

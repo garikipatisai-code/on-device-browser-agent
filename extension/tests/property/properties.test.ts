@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
+import type { DomainTier } from '@/shared/messages';
 import { actionHash, parseJSONPermissive, stableStringify, TokenRatioEstimator } from '@/agent/util';
 import { newPlan, walkPlan } from '@/agent/plan';
 import { getDomainTier, TIER_ORDER } from '@/agent/safety/domain_tiers';
@@ -133,14 +134,31 @@ describe('property: TokenRatioEstimator stays positive', () => {
 describe('property: domain tier ordering', () => {
   it('TIER_ORDER is transitive', () => {
     expect(TIER_ORDER['read-only'] < TIER_ORDER['click-only']).toBe(true);
-    expect(TIER_ORDER['click-only'] < TIER_ORDER['full-action']).toBe(true);
   });
 
   it('unknown hosts default to read-only for arbitrary configs', () => {
     fc.assert(
-      fc.property(fc.dictionary(fc.string({ minLength: 1, maxLength: 20 }), fc.constantFrom('read-only' as const, 'click-only' as const, 'full-action' as const)), (tiers) => {
+      fc.property(fc.dictionary(fc.string({ minLength: 1, maxLength: 20 }), fc.constantFrom('read-only' as const, 'click-only' as const)), (tiers) => {
         return getDomainTier('totally-unconfigured-host-name-xyz.example', tiers) === 'read-only';
       }),
+      { numRuns: 100 },
+    );
+  });
+
+  it('a legacy "full-action" value anywhere in the config never changes the unknown-host default', () => {
+    // Regression guard for the tier-collapse migration: getDomainTier must keep defaulting
+    // unconfigured hosts to read-only no matter what legacy values other hosts carry.
+    fc.assert(
+      fc.property(
+        fc.dictionary(
+          fc.string({ minLength: 1, maxLength: 20 }),
+          fc.constantFrom('read-only' as const, 'click-only' as const, 'full-action' as const),
+        ),
+        (tiers) => {
+          const legacy = tiers as unknown as Record<string, DomainTier>;
+          return getDomainTier('totally-unconfigured-host-name-xyz.example', legacy) === 'read-only';
+        },
+      ),
       { numRuns: 100 },
     );
   });

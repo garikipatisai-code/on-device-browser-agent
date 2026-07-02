@@ -94,12 +94,12 @@ describe('settings', () => {
     // same base before any writes back → last-writer-wins drops the others unless serialized.
     await Promise.all([
       setDomainTier('a.com', 'click-only'),
-      setDomainTier('b.com', 'full-action'),
+      setDomainTier('b.com', 'read-only'),
       saveSettings({ executorModel: 'concurrent:9b' }),
     ]);
     const s = await loadSettings();
     expect(s.domainTiers['a.com']).toBe('click-only');
-    expect(s.domainTiers['b.com']).toBe('full-action');
+    expect(s.domainTiers['b.com']).toBe('read-only');
     expect(s.executorModel).toBe('concurrent:9b');
   });
 });
