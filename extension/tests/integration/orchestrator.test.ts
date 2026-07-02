@@ -1142,6 +1142,83 @@ describe('orchestrator — re-answers from the full corpus when a finish reports
     expect(result.summary).toContain('Café');
   });
 
+  // A corpus re-answer silently REPLACES the executor's own finish text — same category of
+  // self-correction as a rejected finish or an evaluator FAIL. Every other self-correction path
+  // calls markDirty() so the run is excluded from recipe-learning (see the "clean-run recipe
+  // gate" describe block below); this path must too, or a silently-corrected answer still counts
+  // as a "clean" run and gets taught back as a recipe.
+  it('marks the run dirty when a finish is re-answered from the corpus (excluded from recipe-learning)', async () => {
+    const before = (await loadWorkflows()).length;
+    const reg = buildRegistry();
+    reg.register({
+      name: 'tab.open',
+      description: 'open a tab',
+      argsSchema: z.object({ url: z.string() }),
+      async dispatch({ url }) {
+        return { ok: true, content: `Opened ${url}`, data: { tabId: 42, url } };
+      },
+    });
+    reg.register({
+      name: 'aria.extract',
+      description: 'read',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return {
+          ok: true,
+          content: 'Gallery visitor amenities: Terrace Café open daily. Cloakroom available. Free Wi-Fi throughout the building.',
+          data: { url: 'https://gallery.example/visit' },
+        };
+      },
+    });
+    const events: TimelineEvent[] = [];
+    const ollama = makeFakeOllama({
+      planner: [
+        rawResponse({
+          content: JSON.stringify({
+            steps: [
+              { description: 'open the gallery site and read amenities', successCriteria: 'amenities read' },
+              { description: 'report the amenities', successCriteria: 'reported' },
+            ],
+          }),
+        }),
+      ],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://gallery.example/visit' } }] }),
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 42 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'Cloakroom: available. Café: not listed. Wi-Fi: not listed.' } }] }),
+      ],
+      evaluator: [],
+      // The corpus re-answer (a non-role prompt → 'unknown') fills the gap from observedText.
+      unknown: [rawResponse({ content: 'The gallery lists a Terrace Café (open daily), a cloakroom for bags and coats, and free Wi-Fi throughout.' })],
+    });
+    const orch = new Orchestrator({
+      ollama,
+      registry: reg,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: (e) => events.push(e),
+      maxStepTurns: 8,
+    });
+    const result = await orch.runUntilTerminal(
+      await orch.start('open the gallery site and list its visitor amenities — cloakroom, café, Wi-Fi'),
+    );
+
+    // Sanity: the reconciliation itself still worked (same as the sibling test above).
+    expect(result.verdict).toBe('success');
+    expect(result.summary.toLowerCase()).not.toContain('not listed');
+
+    // The dirty flag surfaces via the SAME observable path used for every other self-correction
+    // (finish rejected / evaluator FAIL / tier denial / breaker trip): the auto-learn gate in
+    // finishOk() skips saving a recipe and logs the reason. If this run were wrongly treated as
+    // clean, a NEW recipe would be auto-recorded (trace has tab.open → traceWorthLearning, no
+    // redundancy, no prior matchedWorkflow → nothing else would block it).
+    const dirtyLog = events.find(
+      (e) => e.kind === 'log' && /Recipe not saved \(run not clean/i.test(e.message),
+    ) as Extract<TimelineEvent, { kind: 'log' }> | undefined;
+    expect(dirtyLog).toBeTruthy();
+    expect(dirtyLog!.message).toContain('finish re-answered from corpus');
+    expect((await loadWorkflows()).length).toBe(before); // no recipe was auto-learned from this run
+  });
+
   it('leaves a clean positive finish untouched (no corpus re-answer when nothing is reported missing)', async () => {
     const reg = buildRegistry();
     let unknownCalls = 0;

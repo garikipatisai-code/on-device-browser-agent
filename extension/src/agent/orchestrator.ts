@@ -767,6 +767,7 @@ export class Orchestrator {
     if (corpusAnswer && corpusAnswer.length >= 40 && !mentionsMissing(corpusAnswer)) {
       const g = this.gateFinishSummary('success', corpusAnswer);
       if (g.verdict === 'success') {
+        this.markDirty('finish re-answered from corpus');
         this.emit({
           kind: 'log',
           ts: Date.now(),
