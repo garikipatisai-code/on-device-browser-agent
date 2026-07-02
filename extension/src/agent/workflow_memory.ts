@@ -12,14 +12,14 @@ import { memoryGet, memorySet } from '@/background/state_store';
 import { redact } from './safety/redact';
 import { ulid } from './util';
 
-export interface WorkflowStep {
+interface WorkflowStep {
   instruction: string;
   toolHint?: string;
 }
 
 /** Where a recipe came from. 'builtin' = bundled archetype (read-only); 'user' = author-edited
  *  (editable, trust-gated); 'auto' = learned from a clean run (fallback only, demoted in matching). */
-export type WorkflowOrigin = 'builtin' | 'user' | 'auto';
+type WorkflowOrigin = 'builtin' | 'user' | 'auto';
 
 export interface Workflow {
   id: string;
@@ -556,7 +556,7 @@ function parseStepLine(line: string): WorkflowStep | null {
   return instruction ? { instruction, toolHint } : { instruction: text };
 }
 
-export interface UserRecipeInput {
+interface UserRecipeInput {
   id?: string;
   name: string;
   whenToUse: string;
@@ -628,7 +628,7 @@ export async function markWorkflowTrusted(id: string): Promise<void> {
   await memorySet(STORE_KEY, stored);
 }
 
-export type QuarantineResult = 'deleted' | 'rolledback' | 'ignored';
+type QuarantineResult = 'deleted' | 'rolledback' | 'ignored';
 
 /** A run that USED a stored (user or auto) recipe failed/was messy → make the bad version unusable.
  *  A USER recipe with a last-good snapshot rolls back to it (a bad edit is undone); one without
