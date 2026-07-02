@@ -46,11 +46,6 @@ export interface Settings {
   /** Durable, user-edited standing guidance injected into every run (planner/executor/evaluator),
    *  e.g. "use city-proper population figures" or "prefer official sources". */
   preferences?: string;
-  cloud?: {
-    provider?: 'deepseek' | 'anthropic';
-    apiKey?: string;
-    enabledRoles?: Role[];
-  };
   /** Ollama context window; default 32768, raise only after verifying VRAM with `ollama ps`. */
   numCtx?: number;
 }

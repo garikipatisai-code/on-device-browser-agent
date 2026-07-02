@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { redact, redactDeep, luhnValid } from '@/agent/safety/redact';
-import { anonymize, deanonymize, DeanonError } from '@/agent/safety/anonymize';
 
 describe('redact', () => {
   it('redacts email', () => {
@@ -59,32 +58,5 @@ describe('luhnValid', () => {
     expect(luhnValid('4242424242424241')).toBe(false);
     expect(luhnValid('abc')).toBe(false);
     expect(luhnValid('1')).toBe(false);
-  });
-});
-
-describe('anonymize / deanonymize', () => {
-  it('round-trips emails', () => {
-    const { text, table } = anonymize('email a@b.com and c@d.com');
-    expect(text).not.toContain('a@b.com');
-    expect(deanonymize(text, table)).toBe('email a@b.com and c@d.com');
-  });
-  it('round-trips multiple types', () => {
-    const input = 'Mr. John Smith at john@x.com, phone 415-555-1234, address 123 Main Street.';
-    const { text, table } = anonymize(input);
-    expect(text).not.toContain('john@x.com');
-    expect(text).not.toContain('415-555-1234');
-    expect(deanonymize(text, table)).toBe(input);
-  });
-  it('reuses placeholders for repeated values', () => {
-    const { text } = anonymize('a@b.com and again a@b.com');
-    const tokens = text.match(/<EMAIL_\d+>/g)!;
-    expect(tokens[0]).toBe(tokens[1]);
-  });
-  it('throws DeanonError on unknown token', () => {
-    expect(() => deanonymize('hello <EMAIL_99> world', {})).toThrow(DeanonError);
-  });
-  it('leaves non-PII alone', () => {
-    const { text } = anonymize('hello world');
-    expect(text).toBe('hello world');
   });
 });
