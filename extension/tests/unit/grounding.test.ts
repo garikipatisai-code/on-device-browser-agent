@@ -19,6 +19,17 @@ describe('mentionsMissing — detects a "requested field is absent" claim in a f
     expect(mentionsMissing('The review count is not specified on the product page.')).toBe(true);
     expect(mentionsMissing('The phone number is unavailable.')).toBe(true);
   });
+  it('is true for a genuine absence claim that happens to use "at/for" non-comparatively (code review regression: a bare at/for exclusion wrongly suppressed these)', () => {
+    expect(mentionsMissing('Wi-Fi is not listed at this time.')).toBe(true);
+    expect(mentionsMissing('Hours are not available at this time.')).toBe(true);
+    expect(mentionsMissing('The SKU was not found at this location.')).toBe(true);
+    expect(mentionsMissing('not listed at all on the site.')).toBe(true);
+    expect(mentionsMissing('Price is not listed at the moment.')).toBe(true);
+    // a real absence claim followed much later by an unrelated remark that happens to start
+    // with "but" must NOT be suppressed — "but" alone, far from "at/for", is not comparison
+    // evidence (same asymmetry as the "on" exclusion: err toward not suppressing).
+    expect(mentionsMissing('The SKU is not found at this location, but the store still has other items in stock.')).toBe(true);
+  });
   it('is false for a clean positive answer', () => {
     expect(mentionsMissing('Café: Court Café, open daily. Cloakroom: available. Wi-Fi: free throughout.')).toBe(false);
     expect(mentionsMissing('The phone number is +44 20 7323 8000')).toBe(false);
@@ -34,5 +45,10 @@ describe('mentionsMissing — detects a "requested field is absent" claim in a f
   it('still flags a genuine "on"-phrased absence claim, even one styled like a comparison (documents the deliberate scope boundary: "on" is ambiguous, so it stays a true-positive trigger rather than risk suppressing a real absence)', () => {
     expect(mentionsMissing('The badge is not shown on mobile, only on desktop.')).toBe(true);
     expect(mentionsMissing('Wi-Fi is not shown on the page, but the café is open daily.')).toBe(true);
+  });
+  it('documents the residual: a comparison phrased WITHOUT any marker word ($ figure / only / instead / on sale / however) still over-triggers — this is the accepted, harmless direction (one extra corpus-check call), not a fix for every possible comparison phrasing', () => {
+    expect(mentionsMissing('It is not listed at the member price; non-members pay the standard rate.')).toBe(true);
+    expect(mentionsMissing('The item is not available for same-day delivery — choose standard shipping for that.')).toBe(true);
+    expect(mentionsMissing('The rating is not shown for verified buyers; it is visible to everyone else.')).toBe(true);
   });
 });
