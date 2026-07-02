@@ -14,6 +14,9 @@ export interface PortClient {
   send: (cmd: PanelCommand) => void;
   /** Tear down the connection (component unmount). */
   disconnect: () => void;
+  /** Register a callback fired whenever the SW port disconnects (e.g. mid-run SW death), so the
+   *  UI can surface a visible signal instead of silently freezing at the last-received phase. */
+  onDisconnect: (cb: () => void) => void;
 }
 
 type Connect = (info: { name: string }) => chrome.runtime.Port;
@@ -23,6 +26,7 @@ export function createPortClient(
   connect: Connect = (info) => chrome.runtime.connect(info),
 ): PortClient {
   let port: chrome.runtime.Port | null = null;
+  let onDisconnectCb: (() => void) | null = null;
 
   function open(): chrome.runtime.Port {
     const p = connect({ name: PORT_NAME });
@@ -30,6 +34,7 @@ export function createPortClient(
     p.onMessage.addListener((msg) => onUpdate(msg as SwUpdate));
     p.onDisconnect.addListener(() => {
       void chrome.runtime?.lastError; // swallow the expected "port disconnected" notice
+      onDisconnectCb?.();
       if (port === p) port = null; // next send() revives it (and wakes the SW)
     });
     return p;
@@ -53,6 +58,9 @@ export function createPortClient(
         /* noop */
       }
       port = null;
+    },
+    onDisconnect(cb) {
+      onDisconnectCb = cb;
     },
   };
 }

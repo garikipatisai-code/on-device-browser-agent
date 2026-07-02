@@ -49,6 +49,10 @@ export function App() {
   const [now, setNow] = useState(0);
   const [activityOpen, setActivityOpen] = useState(false);
   const [ollamaDown, setOllamaDown] = useState(false);
+  // True from the moment the SW port disconnects mid-run until the next update arrives (the
+  // already-working lazy-reconnect in port.ts revives the connection on the next send() — this
+  // only makes that gap visible instead of the panel silently freezing at the last-seen phase).
+  const [connectionLost, setConnectionLost] = useState(false);
   const clientRef = useRef<PortClient | null>(null);
 
   // ---- SW connection (contract: do not change message shapes) ----
@@ -59,6 +63,7 @@ export function App() {
       return;
     }
     const onUpdate = (msg: SwUpdate) => {
+      setConnectionLost(false); // any message proves the connection is alive again
       switch (msg.type) {
         case 'status':
           setStatus(msg.status);
@@ -121,6 +126,7 @@ export function App() {
     };
     const client = createPortClient(onUpdate);
     clientRef.current = client;
+    client.onDisconnect(() => setConnectionLost(true));
     client.send({ type: 'settings.get' });
     client.send({ type: 'agent.status' });
     client.send({ type: 'models.list' });
@@ -199,6 +205,10 @@ export function App() {
       <Tabs tab={tab} onTab={setTab} />
 
       <div className="content" role="tabpanel">
+        {connectionLost && (
+          <Alert kind="warn">Connection to the agent was lost — reconnecting…</Alert>
+        )}
+
         {tab === 'agent' && (
           <>
             {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
