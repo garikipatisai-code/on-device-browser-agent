@@ -805,7 +805,7 @@ export class Orchestrator {
    *  deletes if brand-new); an auto recipe always deletes outright — it never has a last-good (it
    *  wasn't hand-edited), so it gets exactly one chance and can be re-learned from a future clean
    *  run. This is the recipe-safety "catch": a bad recipe (authored or learned) can't keep being used. */
-  private async settleUserRecipe(verdict: string): Promise<void> {
+  private async settleRecipe(verdict: string): Promise<void> {
     const wf = this.matchedWorkflow;
     if (!wf || (wf.origin !== 'user' && wf.origin !== 'auto')) return;
     const cleanSuccess = verdict === 'success' && !this.runDirty && !traceHasRedundancy(this.trace);
@@ -836,7 +836,7 @@ export class Orchestrator {
   ): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
-    await this.settleUserRecipe(verdict);
+    await this.settleRecipe(verdict);
     // Auto-learn ONLY from a success that NO recipe guided — i.e. a genuinely new flow. If a recipe
     // (user/builtin/auto) already drove the run, re-recording is redundant and worse: saveWorkflow's
     // near-duplicate dedup would clobber the very user recipe that just succeeded. The gates below
@@ -864,7 +864,7 @@ export class Orchestrator {
   private async abortNow(hot: AgentStateHot, reason: string): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'ABORTED' });
-    await this.settleUserRecipe('aborted'); // a failed run quarantines the user recipe that drove it
+    await this.settleRecipe('aborted'); // a failed run quarantines whichever recipe drove it
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
     return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };
   }
