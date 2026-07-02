@@ -48,6 +48,20 @@ describe('redactEvent — centralized per-TimelineEvent redaction (emit() chokep
     expect(out.message).toContain('[REDACTED: EMAIL]');
   });
 
+  it('redacts PII inside an evaluator.verdict event\'s reason string', () => {
+    const ev: TimelineEvent = { kind: 'evaluator.verdict', ts: 0, verdict: 'PASS', reason: 'Field filled with jane.doe@example.com as required' };
+    const out = redactEvent(ev) as Extract<TimelineEvent, { kind: 'evaluator.verdict' }>;
+    expect(out.reason).not.toContain('jane.doe@example.com');
+    expect(out.reason).toContain('[REDACTED: EMAIL]');
+  });
+
+  it('redacts PII inside a finish event\'s summary string', () => {
+    const ev: TimelineEvent = { kind: 'finish', ts: 0, verdict: 'success', summary: 'Filled in the email jane.doe@example.com and submitted the form' };
+    const out = redactEvent(ev) as Extract<TimelineEvent, { kind: 'finish' }>;
+    expect(out.summary).not.toContain('jane.doe@example.com');
+    expect(out.summary).toContain('[REDACTED: EMAIL]');
+  });
+
   it('is a safe no-op passthrough for event kinds with no free-text/args field', () => {
     const ev: TimelineEvent = { kind: 'role.start', ts: 0, role: 'executor', stepId: 'step-1' };
     const out = redactEvent(ev);

@@ -48,6 +48,9 @@ export function redact(input: string): string {
  * Redacts a TimelineEvent before it is persisted/emitted. This is the single chokepoint
  * every event flows through (see orchestrator.ts's emit()) — so no individual call site
  * needs its own redact() call, and no future TimelineEvent variant can reintroduce a PII leak.
+ * Covers every free-text field currently in the union: tool.call's args, tool.result's
+ * content, log's message, evaluator.verdict's reason, and finish's summary — all of these
+ * carry LLM-generated prose that can echo back raw PII it just read or typed.
  * Returns a new object; never mutates the input. Never throws.
  */
 export function redactEvent<T>(ev: T): T {
@@ -62,6 +65,8 @@ export function redactEvent<T>(ev: T): T {
   }
   if (typeof out.content === 'string') out.content = redact(out.content);
   if (typeof out.message === 'string') out.message = redact(out.message);
+  if (typeof out.reason === 'string') out.reason = redact(out.reason);
+  if (typeof out.summary === 'string') out.summary = redact(out.summary);
   return out as unknown as T;
 }
 
