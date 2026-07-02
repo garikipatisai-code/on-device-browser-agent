@@ -4,7 +4,6 @@ import type { DomainTier } from '@/shared/messages';
 export const TIER_ORDER: Record<DomainTier, number> = {
   'read-only': 0,
   'click-only': 1,
-  'full-action': 2,
 };
 
 export class DomainTierError extends Error {
@@ -48,13 +47,23 @@ export function hostFor(url: string): string {
 
 export function getDomainTier(host: string, tiers: Record<string, DomainTier>): DomainTier {
   if (!host) return 'read-only';
-  if (tiers[host]) return tiers[host];
+  if (tiers[host]) return migrateLegacyTier(tiers[host]);
   const parts = host.split('.');
   for (let i = 1; i < parts.length - 1; i++) {
     const suffix = parts.slice(i).join('.');
-    if (tiers[suffix]) return tiers[suffix];
+    if (tiers[suffix]) return migrateLegacyTier(tiers[suffix]);
   }
   return 'read-only';
+}
+
+/** Pre-collapse installs may have persisted the now-removed 'full-action' tier (it was byte-
+ *  identical to 'click-only' in enforcement — see assertCanAct call sites, all hardcode
+ *  'click-only'). Read it back as 'click-only', the closer/more-permissive of the two remaining
+ *  tiers, so an existing grant isn't silently narrowed to read-only. Exported so the Settings UI
+ *  can apply the same normalization when rendering a persisted value directly. */
+export function migrateLegacyTier(tier: DomainTier): DomainTier {
+  if ((tier as string) === 'full-action') return 'click-only';
+  return tier;
 }
 
 export function assertCanAct(
@@ -66,8 +75,8 @@ export function assertCanAct(
   if (isBlockedUrl(url)) {
     throw new DomainTierError(`Blocked URL scheme: ${url}`, '', required, 'read-only');
   }
-  // The opt-in bypass relaxes only the site-access tiers (read-only/click-only/full-action) —
-  // the protocol blocklist above STILL applies (file:/chrome:/javascript: are security, not access).
+  // The opt-in bypass relaxes only the site-access tiers (read-only/click-only) — the protocol
+  // blocklist above STILL applies (file:/chrome:/javascript: are security, not access).
   if (bypass) return;
   const host = hostFor(url);
   const actual = getDomainTier(host, tiers);
