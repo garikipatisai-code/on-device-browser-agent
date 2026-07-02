@@ -27,7 +27,6 @@ function record(op: string, ms: number, ok: boolean): void {
 export async function timed<T>(
   op: string,
   fn: () => Promise<T>,
-  meta?: Record<string, unknown>,
 ): Promise<T> {
   const t0 = performance.now();
   let ok = false;
@@ -38,7 +37,7 @@ export async function timed<T>(
   } finally {
     const ms = performance.now() - t0;
     record(op, ms, ok);
-    void recordMetric({ ts: Date.now(), op, ms, ok, meta });
+    void recordMetric({ ts: Date.now(), op, ms, ok });
   }
 }
 
