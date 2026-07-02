@@ -34,7 +34,7 @@ import {
 import { currentStep, newPlan, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
-import { redact, redactDeep } from './safety/redact';
+import { redact, redactDeep, redactEvent } from './safety/redact';
 import { ungroundedNumbers, mentionsMissing } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
@@ -443,7 +443,7 @@ export class Orchestrator {
       ts: Date.now(),
       tool: out.tool,
       ok: out.result.ok,
-      content: redact((out.result.content ?? '').slice(0, 2_000)),
+      content: (out.result.content ?? '').slice(0, 2_000),
     });
 
     await this.autoObserveAfterNavigation(out, toolCtx);
@@ -948,8 +948,9 @@ export class Orchestrator {
   }
 
   private emit(ev: TimelineEvent) {
-    this.opts.emit(ev);
-    void appendEvent(this.taskId, ev);
+    const safe = redactEvent(ev);
+    this.opts.emit(safe);
+    void appendEvent(this.taskId, safe);
   }
 
   private assertNotAborted() {
