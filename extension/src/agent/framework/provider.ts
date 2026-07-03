@@ -1,7 +1,7 @@
 // The seam every seat (head chef, sous chef, helper) calls through — lets a
 // seat's model backend be swapped without the seat's own code knowing.
 import type { ChatOptions, ChatResponse, OllamaClient } from '@/background/ollama';
-import type { Settings } from '@/shared/messages';
+import type { FrontierConfig, Settings } from '@/shared/messages';
 import { composeSignal } from '@/background/signal';
 
 export interface ModelProvider {
@@ -18,9 +18,10 @@ export function localProvider(ollama: OllamaClient): ModelProvider {
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
-// Reuse Settings['frontier'] rather than defining a second, structurally-identical
-// interface — provider.ts already imports Settings for resolveLeadProvider below.
-export type FrontierConfig = NonNullable<Settings['frontier']>;
+// FrontierConfig is defined in shared/messages.ts (the Settings UI needs it
+// too) — re-exported here so existing importers of provider.ts's own
+// FrontierConfig keep working unchanged.
+export type { FrontierConfig };
 
 /** Raw fetch against the Anthropic Messages API — no SDK dependency, matching
  *  OllamaClient's own pattern. Only ever called for the head-chef/sous-chef
@@ -100,6 +101,48 @@ async function safeText(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+export function openAICompatibleProvider(cfg: Extract<FrontierConfig, { provider: 'openai-compatible' }>): ModelProvider {
+  return {
+    async chatOnce(opts: ChatOptions): Promise<ChatResponse> {
+      const body: Record<string, unknown> = {
+        model: cfg.model,
+        max_tokens: 4096,
+        messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+      };
+      if (opts.thinking === true) body.reasoning_effort = 'high';
+
+      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 120_000, opts.signal);
+      try {
+        const res = await fetch(cfg.baseUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
+          body: JSON.stringify(body),
+          signal,
+        });
+        if (!res.ok) throw frontierHttpError(res.status, await safeText(res));
+        return normalizeOpenAIResponse(await res.json());
+      } finally {
+        cleanup();
+      }
+    },
+  };
+}
+
+function normalizeOpenAIResponse(json: Record<string, unknown>): ChatResponse {
+  const choice = (json.choices as Array<{ message?: { content?: string; refusal?: string } }> | undefined)?.[0];
+  if (choice?.message?.refusal) throw new Error(`Frontier model declined the request (${choice.message.refusal})`);
+  const text = choice?.message?.content ?? '';
+  const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  return {
+    message: { role: 'assistant', content: text },
+    done: true,
+    promptEvalCount: usage?.prompt_tokens,
+    evalCount: usage?.completion_tokens,
+    toolCalls: [],
+    rawText: text,
+  };
 }
 
 /** Composes at the resolution layer so runHeadChef/runSousChef stay unaware

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { localProvider, frontierProvider, withFallback, resolveLeadProvider } from '@/agent/framework/provider';
+import { localProvider, frontierProvider, openAICompatibleProvider, withFallback, resolveLeadProvider } from '@/agent/framework/provider';
 import { DEFAULT_SETTINGS } from '@/shared/messages';
 import { makeFakeOllama } from '../helpers';
 
@@ -92,6 +92,91 @@ describe('frontierProvider', () => {
     const body2 = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(body1.thinking).toEqual({ type: 'adaptive' });
     expect(body2.thinking).toEqual({ type: 'adaptive' });
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('openAICompatibleProvider', () => {
+  it('translates a request and returns the text response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: 'the answer' } }],
+        usage: { prompt_tokens: 12, completion_tokens: 8 },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = openAICompatibleProvider({
+      provider: 'openai-compatible',
+      apiKey: 'sk-oa-test',
+      model: 'gpt-5.1',
+      baseUrl: 'https://api.openai.com/v1/chat/completions',
+    });
+    const res = await provider.chatOnce({
+      model: 'gpt-5.1',
+      messages: [
+        { role: 'system', content: 'You are the PLANNER' },
+        { role: 'user', content: 'plan this' },
+      ],
+    });
+
+    expect(res.rawText).toBe('the answer');
+    expect(res.promptEvalCount).toBe(12);
+    expect(res.evalCount).toBe(8);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.openai.com/v1/chat/completions');
+    expect(init.headers.authorization).toBe('Bearer sk-oa-test');
+    expect(init.headers['content-type']).toBe('application/json');
+    const body = JSON.parse(init.body);
+    expect(body.model).toBe('gpt-5.1');
+    expect(body.max_tokens).toBe(4096);
+    expect(body.messages).toEqual([
+      { role: 'system', content: 'You are the PLANNER' },
+      { role: 'user', content: 'plan this' },
+    ]);
+    expect(body.reasoning_effort).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('sends reasoning_effort only when opts.thinking is true', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = openAICompatibleProvider({
+      provider: 'openai-compatible', apiKey: 'sk-x', model: 'gpt-5.1', baseUrl: 'https://x/chat/completions',
+    });
+    await provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }], thinking: true });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.reasoning_effort).toBe('high');
+    vi.unstubAllGlobals();
+  });
+
+  it('throws on a refusal field in the response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { refusal: 'policy' } }] }),
+    }));
+    const provider = openAICompatibleProvider({
+      provider: 'openai-compatible', apiKey: 'sk-x', model: 'gpt-5.1', baseUrl: 'https://x/chat/completions',
+    });
+    await expect(
+      provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }] }),
+    ).rejects.toThrow(/declined/);
+    vi.unstubAllGlobals();
+  });
+
+  it('throws a status-bearing error on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' }));
+    const provider = openAICompatibleProvider({
+      provider: 'openai-compatible', apiKey: 'sk-x', model: 'gpt-5.1', baseUrl: 'https://x/chat/completions',
+    });
+    await expect(
+      provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }] }),
+    ).rejects.toMatchObject({ status: 429 });
     vi.unstubAllGlobals();
   });
 });
