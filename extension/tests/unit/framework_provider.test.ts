@@ -65,6 +65,35 @@ describe('frontierProvider', () => {
     await expect(provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }] })).rejects.toMatchObject({ status: 500 });
     vi.unstubAllGlobals();
   });
+
+  it('sends thinking:disabled when opts.thinking is explicitly false', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: 'ok' }], usage: {} }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = frontierProvider({ provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' });
+    await provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }], thinking: false });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    vi.unstubAllGlobals();
+  });
+
+  it('sends thinking:adaptive when opts.thinking is true or omitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: 'ok' }], usage: {} }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = frontierProvider({ provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' });
+    await provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }], thinking: true });
+    await provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }] }); // omitted
+    const body1 = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body2 = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body1.thinking).toEqual({ type: 'adaptive' });
+    expect(body2.thinking).toEqual({ type: 'adaptive' });
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('withFallback', () => {

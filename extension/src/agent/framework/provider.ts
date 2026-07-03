@@ -29,7 +29,7 @@ export type FrontierConfig = NonNullable<Settings['frontier']>;
  *  message + a run of user/assistant messages. If a future frontier-eligible
  *  seat needs tool-calling, this needs the full tool_use/tool_result mapping,
  *  deliberately not built here. */
-export function frontierProvider(cfg: FrontierConfig): ModelProvider {
+export function frontierProvider(cfg: Extract<FrontierConfig, { provider: 'anthropic' }>): ModelProvider {
   return {
     async chatOnce(opts: ChatOptions): Promise<ChatResponse> {
       const { system, messages } = splitSystem(opts.messages);
@@ -37,7 +37,7 @@ export function frontierProvider(cfg: FrontierConfig): ModelProvider {
         model: cfg.model,
         max_tokens: 4096,
         messages,
-        thinking: { type: 'adaptive' },
+        thinking: { type: opts.thinking === false ? 'disabled' : 'adaptive' },
       };
       if (system) body.system = system;
 
