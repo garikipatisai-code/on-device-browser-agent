@@ -19,7 +19,7 @@ import type { ToolRegistry } from './tools/registry';
 import type { ToolContext, ToolResult } from './tools/registry';
 import type { ExecutorOutput } from './roles/executor';
 import type { Verdict } from './roles/evaluator';
-import { addGroundedFact, groundingCorpus, renderFacts, type Fact } from './facts';
+import { addGroundedFact, renderFacts, type Fact } from './facts';
 import { runHeadChef } from './framework/head_chef';
 import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
 import { runHelper, runHelperCompaction } from './framework/helper';
@@ -37,7 +37,7 @@ import { currentStep, newPlan, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
 import { redact, redactDeep, redactEvent } from './safety/redact';
-import { ungroundedNumbers, mentionsMissing } from './verify/grounding';
+import { mentionsMissing } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
 import { sleep } from '@/background/signal';
@@ -247,14 +247,14 @@ export class Orchestrator {
         // tool-produced advance is already page-grounded. The circuit breaker stops a model that
         // loops on bad prose.
         if (execOut.tool === 'answer') {
-          const ung = ungroundedNumbers(execOut.result.content ?? '', groundingCorpus(this.observedText, this.facts));
-          if (ung.length) {
+          const v = verifyFinish(execOut.result.content ?? '', this.observedText, this.facts);
+          if (!v.ok) {
             this.markDirty('mid-plan prose answer ungrounded');
-            this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `prose answer rejected (ungrounded: ${ung.join(', ')})` });
+            this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `prose answer rejected (${v.reason})` });
             const sp = await getScratchpad(this.taskId);
             await setScratchpad(
               this.taskId,
-              `${sp}\n[VERIFICATION] Your answer asserted ${ung.join(', ')}, not found on any page read. Re-read the page (aria.extract) and use only on-page values, or report them as unavailable.`.slice(-this.caps.scratch),
+              `${sp}\n[VERIFICATION] Your answer was rejected: ${v.reason}. Re-read the page (aria.extract) and use only on-page values, or report them as unavailable.`.slice(-this.caps.scratch),
             );
             continue;
           }
