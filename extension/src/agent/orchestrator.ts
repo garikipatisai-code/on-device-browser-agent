@@ -17,11 +17,13 @@ import {
 } from '@/background/state_store';
 import type { ToolRegistry } from './tools/registry';
 import type { ToolContext, ToolResult } from './tools/registry';
-import { runPlanner } from './roles/planner';
-import { runExecutor } from './roles/executor';
-import { runEvaluator, type Verdict } from './roles/evaluator';
+import type { ExecutorOutput } from './roles/executor';
+import type { Verdict } from './roles/evaluator';
 import { addGroundedFact, groundingCorpus, renderFacts, type Fact } from './facts';
-import { runCompactor } from './roles/compactor';
+import { runHeadChef } from './framework/head_chef';
+import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
+import { runHelper, runHelperCompaction } from './framework/helper';
+import { localProvider, resolveLeadProvider, type ModelProvider } from './framework/provider';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
 import {
@@ -61,7 +63,7 @@ const OBSERVATION_TOOLS = new Set(['aria.extract', 'vision.read']);
 const NAVIGATING_TOOLS = new Set(['tab.click', 'open_result', 'tab.open']);
 
 /** The exact shape the executor role returns (tool, args, result, eval counts). */
-type ExecutorOut = Awaited<ReturnType<typeof runExecutor>>;
+type ExecutorOut = ExecutorOutput;
 
 export interface OrchestratorOpts {
   ollama: OllamaClient;
@@ -126,9 +128,20 @@ export class Orchestrator {
   // success (e.g. combined-query → list page → denial → recover) can't poison the recipe store.
   private runDirty = false;
   private dirtyReason = '';
+  private leadProvider: ModelProvider;
+  private helperProvider: ModelProvider;
 
   constructor(private opts: OrchestratorOpts) {
     this.signal = opts.signal ?? new AbortController().signal;
+    this.leadProvider = resolveLeadProvider(opts.settings, opts.ollama, (reason) =>
+      this.emit({
+        kind: 'log',
+        ts: Date.now(),
+        level: 'warn',
+        message: `Frontier call failed, using local model instead: ${reason}`,
+      }),
+    );
+    this.helperProvider = localProvider(opts.ollama);
   }
 
   async start(goal: string): Promise<AgentStateHot> {
@@ -208,9 +221,9 @@ export class Orchestrator {
           // hit a read-only/tier denial after the facts were read). Prefer a grounded salvage over
           // the defeatist message; preferSalvageOnDenial no-ops (keeps this verdict) if no denial
           // occurred — so a genuine "not found" stays an honest blocked/failed.
-          return this.preferSalvageOnDenial(hot, this.gateFinishSummary(fin.verdict, fin.summary));
+          return this.preferSalvageOnDenial(hot, gateFinishSummary(fin.verdict, fin.summary, this.observedText, this.facts));
         }
-        const v = this.verifyFinish(fin.summary);
+        const v = verifyFinish(fin.summary, this.observedText, this.facts);
         if (v.ok) {
           return this.finalizeFinish(hot, 'success', fin.summary);
         }
@@ -343,10 +356,9 @@ export class Orchestrator {
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'planner' });
     const t0 = performance.now();
     const out = await timed('planner', () =>
-      runPlanner({
+      runHeadChef(this.leadProvider, {
         ctx: this.commonCtx(hot),
         model: this.opts.settings.plannerModel,
-        ollama: this.opts.ollama,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
         recipeRetryUsed: hot.recipeRetryUsed,
@@ -373,10 +385,9 @@ export class Orchestrator {
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'planner' });
     const t0 = performance.now();
     const out = await timed('planner.replan', () =>
-      runPlanner({
+      runHeadChef(this.leadProvider, {
         ctx: this.commonCtx(hot),
         model: this.opts.settings.plannerModel,
-        ollama: this.opts.ollama,
         replanContext: reason,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
@@ -426,10 +437,9 @@ export class Orchestrator {
     const toolFilter = blocked ? (name: string) => name !== blocked : undefined;
 
     const out = await timed('executor', () =>
-      runExecutor({
+      runHelper(this.helperProvider, {
         ctx,
         model: this.opts.settings.executorModel,
-        ollama: this.opts.ollama,
         registry: this.opts.registry,
         toolCtx,
         toolFilter,
@@ -597,10 +607,9 @@ export class Orchestrator {
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'evaluator', stepId });
     const t0 = performance.now();
     const ev = await timed('evaluator', () =>
-      runEvaluator({
+      runSousChef(this.leadProvider, {
         ctx: this.commonCtx(hot, scratch),
         model: this.opts.settings.evaluatorModel,
-        ollama: this.opts.ollama,
         lastExecutorResult: lastResult,
         step,
         signal: this.signal,
@@ -633,12 +642,11 @@ export class Orchestrator {
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'compactor' });
     const t0 = performance.now();
     const out = await timed('compactor', () =>
-      runCompactor({
+      runHelperCompaction(this.helperProvider, {
         goal: hotState.goal,
         toolCatalog: this.opts.registry.describe(),
         scratchpad: scratch,
         model: this.opts.settings.compactorModel,
-        ollama: this.opts.ollama,
         signal: this.signal,
         numCtx: this.numCtx,
       }),
@@ -726,38 +734,11 @@ export class Orchestrator {
     }
   }
 
-  /** Verify a success answer is grounded in what was actually read.
-   *  Deterministic number check only: an e4b LLM verify was tried but false-rejected
-   *  correct/honest answers in the benchmark (correct 80%→67%), so it was dropped —
-   *  see docs/superpowers/specs/2026-06-18-theme-a-page-grounded-verification-design.md. */
-  private verifyFinish(summary: string): { ok: boolean; reason: string } {
-    if (!summary || !summary.trim()) {
-      return { ok: false, reason: 'no answer text provided' };
-    }
-    const ungrounded = ungroundedNumbers(summary, groundingCorpus(this.observedText, this.facts));
-    if (ungrounded.length) {
-      return { ok: false, reason: `value(s) not found on any page read: ${ungrounded.join(', ')}` };
-    }
-    return { ok: true, reason: '' };
-  }
-
-  /** Gate any data-bearing finish (executor OR evaluator) through the deterministic grounding
-   *  check. Both roles are the same small-model class and can assert a number that's on no page
-   *  read. A 'success' carrying an ungrounded (or empty) answer is downgraded to 'partial'; a
-   *  'partial' keeps its verdict but gets the unverified note appended (it's already a concession).
-   *  'blocked'/'failed' are honest non-answers with no fabrication risk and pass through unchanged. */
-  private gateFinishSummary(verdict: string, summary: string): { verdict: string; summary: string } {
-    if (verdict !== 'success' && verdict !== 'partial') return { verdict, summary };
-    const v = this.verifyFinish(summary);
-    if (v.ok) return { verdict, summary };
-    return { verdict: 'partial', summary: `${summary}\n\n[unverified against page: ${v.reason}]` };
-  }
-
   /** Gate a data-bearing executor/evaluator finish, then reconcile a "field is missing" claim
    *  against the FULL corpus. NOT used by the salvage paths (giveUp/preferSalvageOnDenial), which
    *  already answer from the corpus. */
   private async finalizeFinish(hot: AgentStateHot, verdict: string, summary: string): Promise<RunResult> {
-    const g = this.gateFinishSummary(verdict, summary);
+    const g = gateFinishSummary(verdict, summary, this.observedText, this.facts);
     const reconciled = g.verdict === 'success' ? await this.reconcileMissingFromCorpus(hot, g.summary) : g.summary;
     return this.finishOk(hot, g.verdict, reconciled);
   }
@@ -774,7 +755,7 @@ export class Orchestrator {
     // A short/junk answer (or one that still says "not shown") means the field is genuinely
     // absent — keep the honest original (preserves absent-field honesty, e.g. an icon-only rating).
     if (corpusAnswer && corpusAnswer.length >= 40 && !mentionsMissing(corpusAnswer)) {
-      const g = this.gateFinishSummary('success', corpusAnswer);
+      const g = gateFinishSummary('success', corpusAnswer, this.observedText, this.facts);
       if (g.verdict === 'success') {
         this.markDirty('finish re-answered from corpus');
         this.emit({
@@ -876,7 +857,7 @@ export class Orchestrator {
     this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `${reason} Trying a final answer from what was gathered.` });
     const answer = await this.synthesizeFromObserved(hot);
     if (answer) {
-      const g = this.gateFinishSummary('partial', answer);
+      const g = gateFinishSummary('partial', answer, this.observedText, this.facts);
       return this.finishOk(hot, g.verdict, g.summary);
     }
     return this.abortNow(hot, reason);
@@ -894,7 +875,7 @@ export class Orchestrator {
     if (this.sawActionDenial) {
       const salvaged = await this.synthesizeFromObserved(hot);
       if (salvaged) {
-        const g = this.gateFinishSummary('partial', salvaged);
+        const g = gateFinishSummary('partial', salvaged, this.observedText, this.facts);
         return this.finishOk(hot, g.verdict, g.summary);
       }
     }

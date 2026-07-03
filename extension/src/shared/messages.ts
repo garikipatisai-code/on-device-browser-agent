@@ -48,6 +48,15 @@ export interface Settings {
   preferences?: string;
   /** Ollama context window; default 32768, raise only after verifying VRAM with `ollama ps`. */
   numCtx?: number;
+  /** Master toggle: when true, the head-chef and sous-chef seats (planner,
+   *  evaluator) may run on the configured frontier model instead of local
+   *  Ollama. The helper seat (executor, compactor) always stays local. */
+  hybridMode?: boolean;
+  frontier?: {
+    provider: 'anthropic';
+    apiKey: string;
+    model: string;
+  };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -69,6 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   profileJson: '',
   preferences: '',
   numCtx: 32_768,
+  hybridMode: false,
 };
 
 /** Treat a bare model name as equal to its `:latest` tag (Ollama's default). */

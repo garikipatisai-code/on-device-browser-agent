@@ -1,5 +1,5 @@
 // Compactor role.
-import type { OllamaClient } from '@/background/ollama';
+import type { ModelProvider } from '../framework/provider';
 import { parseJSONPermissive } from '../util';
 import { buildCompactorMessages } from '../prompts';
 import { NUM_CTX } from '../budget';
@@ -9,7 +9,7 @@ export interface CompactorInput {
   toolCatalog: string;
   scratchpad: string;
   model: string;
-  ollama: OllamaClient;
+  ollama: ModelProvider;
   signal?: AbortSignal;
   timeoutMs?: number;
   numCtx?: number;

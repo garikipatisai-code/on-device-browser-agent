@@ -1,6 +1,7 @@
 // Executor role: pick ONE tool, dispatch it, return the result for the orchestrator.
 
-import type { ChatMessage, OllamaClient, ToolDef } from '@/background/ollama';
+import type { ChatMessage, ToolDef } from '@/background/ollama';
+import type { ModelProvider } from '../framework/provider';
 import type { ToolRegistry } from '../tools/registry';
 import type { ToolContext, ToolResult } from '../tools/registry';
 import { buildExecutorMessages, buildExecutorRetryMessages, type CommonContext } from '../prompts';
@@ -10,7 +11,7 @@ import { parseJSONPermissive } from '../util';
 export interface ExecutorInput {
   ctx: CommonContext;
   model: string;
-  ollama: OllamaClient;
+  ollama: ModelProvider;
   registry: ToolRegistry;
   toolCtx: ToolContext;
   toolFilter?: (name: string) => boolean;

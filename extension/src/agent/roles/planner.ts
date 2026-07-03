@@ -1,5 +1,5 @@
 // Planner role.
-import type { OllamaClient } from '@/background/ollama';
+import type { ModelProvider } from '../framework/provider';
 import { newPlan } from '../plan';
 import type { Plan } from '@/shared/messages';
 import { parseJSONPermissive } from '../util';
@@ -9,7 +9,7 @@ import { NUM_CTX } from '../budget';
 export interface PlannerInput {
   ctx: CommonContext;
   model: string;
-  ollama: OllamaClient;
+  ollama: ModelProvider;
   replanContext?: string;
   workflowRecipe?: string;
   /** Step count of the matched recipe (if any). Used to detect an under-planned/collapsed plan. */
