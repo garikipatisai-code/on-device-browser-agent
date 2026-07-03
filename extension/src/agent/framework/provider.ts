@@ -90,7 +90,7 @@ function normalizeAnthropicResponse(json: Record<string, unknown>): ChatResponse
 }
 
 function frontierHttpError(status: number, body: string): Error & { status: number } {
-  const err = new Error(`Anthropic HTTP ${status}: ${body.slice(0, 256)}`) as Error & { status: number };
+  const err = new Error(`Frontier HTTP ${status}: ${body.slice(0, 256)}`) as Error & { status: number };
   err.status = status;
   return err;
 }
