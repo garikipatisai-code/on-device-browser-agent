@@ -14,6 +14,8 @@ The agent-framework-model-tiering work (2026-07-02) shipped a frontier "lead sea
 
 Same evolutionary approach as the parent spec: extend the existing `ModelProvider`/`FrontierConfig` shapes rather than rebuild them. Cover the broadest set of non-Anthropic providers with the single most-leveraged addition — a generic OpenAI-compatible provider (base URL + Bearer auth + Chat Completions shape) — rather than hardcoding a new named provider per vendor. Fix the thinking gap the same way `withFallback` already composes behavior: a small provider-wrapping function, not a rewrite of the role or provider layers.
 
+**Concretely, this one addition covers the actual set of providers in scope:** OpenAI directly, OpenRouter (aggregates open-source models behind an OpenAI-shaped endpoint), and DeepSeek/MiniMax's own direct APIs — all of these publish an OpenAI Chat Completions-compatible endpoint, so all of them are just "pick `openai-compatible`, set `baseUrl` and `model`," never a new provider function. Anthropic keeps its own dedicated `frontierProvider` since its request/response shape is genuinely different (content blocks, `x-api-key` header, top-level `system` field).
+
 ## Design
 
 ### Config shape (`shared/messages.ts`)
@@ -87,7 +89,8 @@ function normalizeOpenAIResponse(json: Record<string, unknown>): ChatResponse {
 Differences from `frontierProvider` (Anthropic), and why each is simpler here:
 
 - **No `splitSystem`.** OpenAI's shape keeps a `role: 'system'` message directly inside the `messages` array — Anthropic is the one needing extraction into a top-level `system` field.
-- **`reasoning_effort` sent only when `opts.thinking === true`.** Best-effort: OpenAI's own reasoning models recognize this field; most non-OpenAI "OpenAI-compatible" backends (self-hosted vLLM/llama.cpp, most proxies) don't, so it's omitted rather than guessed when not explicitly requested.
+- **`reasoning_effort` sent only when `opts.thinking === true`.** Best-effort: OpenAI's own reasoning models recognize this field; most non-OpenAI "OpenAI-compatible" backends don't. Concretely: DeepSeek's and MiniMax's own APIs, and most OpenRouter-routed open-weight models, will silently ignore it — their reasoning models (if any) either always reason or use a provider-specific control this generic path doesn't attempt to guess. So for those specific providers, "Default" and "Always on" (below) are expected to behave the same. It's still sent for the OpenAI case where it does something, and omitted rather than guessed the rest of the time.
+- **DeepSeek/MiniMax-style reasoning models often return a separate `reasoning_content` field alongside `content`** (their chain-of-thought, distinct from the final answer). `normalizeOpenAIResponse` deliberately reads only `content`, never `reasoning_content` — the same "don't surface raw reasoning into observed text" choice `normalizeAnthropicResponse` already makes by filtering to `type === 'text'` blocks only.
 - **Reuses `frontierHttpError`/`safeText` unchanged**, so `withFallback`'s 5xx-retry-then-fallback logic works identically for both providers with zero changes to `withFallback` itself.
 - **Refusal surfaces via `choices[0].message.refusal`** (present on some models/backends for safety-declined requests) rather than a `stop_reason` field.
 
@@ -143,9 +146,9 @@ Extends the existing "Frontier model (optional)" card — no new card, no new vi
 
 1. **Provider** `<select>` (Anthropic / OpenAI-compatible) — same idiom as the existing `DomainTier` select, shown when `hybridMode` is on.
 2. **Model** — existing field; placeholder adapts to the selected provider (`claude-opus-4-8` vs `gpt-5.1`).
-3. **Base URL** — new field, shown only when provider is `openai-compatible`; prefilled with `https://api.openai.com/v1/chat/completions` the first time that provider is selected, fully editable (self-hosted/proxy users overwrite it).
+3. **Base URL** — new field, shown only when provider is `openai-compatible`; prefilled with `https://api.openai.com/v1/chat/completions` the first time that provider is selected, fully editable. Field hint lists concrete examples so the field isn't a blank guess: OpenRouter (`https://openrouter.ai/api/v1/chat/completions`), DeepSeek (`https://api.deepseek.com/chat/completions`), MiniMax, or any self-hosted/proxy endpoint.
 4. **API key** — existing field; placeholder adapts (`sk-ant-...` vs `sk-...`).
-5. **Thinking (lead seat)** `<select>` — `Default (recommended)` / `Always on` / `Always off`, mapping to `leadThinking` `undefined`/`true`/`false`. Placed *outside* the `hybridMode`-conditional block (always visible in the card) since it's meaningful in local-only mode too.
+5. **Thinking (lead seat)** `<select>` — `Default (recommended)` / `Always on` / `Always off`, mapping to `leadThinking` `undefined`/`true`/`false`. Placed *outside* the `hybridMode`-conditional block (always visible in the card) since it's meaningful in local-only mode too. Hint text says plainly that this is best-effort on non-Anthropic/non-OpenAI providers (DeepSeek, MiniMax, OpenRouter-routed models, self-hosted) — "Default" and "Always on" may behave identically there, since reasoning control isn't standardized across providers.
 
 Field order (Provider → Model → Base URL → API key) means the form only ever shows fields relevant to the chosen provider — it doesn't grow cluttered as providers are added.
 
@@ -160,6 +163,7 @@ Same trade-off as the parent spec, extended one step further: pointing the lead 
 - **Thinking control for executor/compactor** — out of scope; they never reach `resolveLeadProvider`.
 - **Validating or allowlisting the user-supplied `baseUrl`** — it's trusted input, same trust boundary as the API key field right next to it.
 - **A selectable reasoning-effort level** (low/medium/high) — the Settings toggle is a plain on/off/default; "on" maps to a fixed `reasoning_effort: 'high'` for the openai-compatible path.
+- **Meaningful reasoning control on DeepSeek, MiniMax, OpenRouter-routed models, or self-hosted backends.** The thinking toggle only does something real on Anthropic and OpenAI itself; elsewhere it's a no-op by omission, not a broken feature — there's no standardized field to send instead.
 
 ## Testing (TDD)
 
