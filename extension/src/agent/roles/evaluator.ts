@@ -1,5 +1,5 @@
 // Evaluator role.
-import type { OllamaClient } from '@/background/ollama';
+import type { ModelProvider } from '../framework/provider';
 import { parseJSONPermissive } from '../util';
 import type { Step } from '@/shared/messages';
 import { buildEvaluatorMessages, type CommonContext } from '../prompts';
@@ -8,7 +8,7 @@ import { NUM_CTX } from '../budget';
 export interface EvaluatorInput {
   ctx: CommonContext;
   model: string;
-  ollama: OllamaClient;
+  ollama: ModelProvider;
   lastExecutorResult: string;
   step: Step;
   signal?: AbortSignal;
