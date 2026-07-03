@@ -677,7 +677,7 @@ Expected: All tests PASS.
 - [ ] **Step 5: Run typecheck**
 
 Run: `cd extension && npm run typecheck`
-Expected: PASS. (This also confirms the Task 1 → Task 4 type-flow is coherent end to end.)
+Expected: **Still fails with exactly one error**, in `resolveLeadProvider` (`provider.ts`, around the `withFallback(frontierProvider(settings.frontier), ...)` line): `Argument of type 'FrontierConfig' is not assignable to parameter of type '{ provider: "anthropic"; ... }'`. This is expected and does not mean this task is broken — `frontierProvider`'s parameter type was narrowed to just its `anthropic` arm in Task 3, but `resolveLeadProvider` still calls it directly with the full union; Task 5 replaces that call site with the type-safe `frontierProviderFor` dispatcher, which is what actually closes this out. Confirm the error is confined to that one call site in `resolveLeadProvider` — nothing in `messages.ts`, nothing in the test file, nothing else in `provider.ts`.
 
 - [ ] **Step 6: Commit**
 
