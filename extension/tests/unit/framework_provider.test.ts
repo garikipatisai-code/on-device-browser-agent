@@ -41,6 +41,10 @@ describe('frontierProvider', () => {
     const body = JSON.parse(init.body);
     expect(body.system).toBe('You are the PLANNER');
     expect(body.messages).toEqual([{ role: 'user', content: 'plan this' }]);
+    expect(body.max_tokens).toBe(4096);
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(init.headers['anthropic-version']).toBe('2023-06-01');
+    expect(init.headers['content-type']).toBe('application/json');
 
     vi.unstubAllGlobals();
   });
