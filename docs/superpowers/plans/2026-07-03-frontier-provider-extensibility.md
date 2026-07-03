@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-03-frontier-provider-extensibility-design.md`
 
+**Task order note (post-execution fix):** Task 2 (Settings UI) was originally written last, right before final verification. It was moved to run immediately after Task 1 because it only depends on Task 1's `FrontierConfig` type — not on any of the provider-layer runtime code built in the tasks that used to precede it. The old `SettingsPanel.tsx`'s `updateFrontier` helper spreads `s.frontier` into an object literal in a way that only type-checked against the *old*, non-union `frontier` shape; once Task 1 lands, that file fails `npm run typecheck` until its own task runs. Moving it up keeps every single commit in this plan typecheck-clean, instead of leaving the tree red for five tasks in a row.
+
 ---
 
 ### Task 1: Widen `Settings['frontier']` to a discriminated union + add `leadThinking`
@@ -17,9 +19,9 @@
 **Files:**
 - Modify: `extension/src/shared/messages.ts:28-60`
 
-This task is pure type surface — there's no runtime behavior to red/green test yet (that starts in Task 2). The acceptance check is the type checker itself: the new union's `anthropic` arm is structurally identical to today's only shape, so every existing literal `{provider:'anthropic', apiKey, model}` object in the codebase must still satisfy it without changes.
+This task is pure type surface — there's no runtime behavior to red/green test yet (that starts in Task 3). The acceptance check is the type checker itself: the new union's `anthropic` arm is structurally identical to today's only shape, so every existing literal `{provider:'anthropic', apiKey, model}` object in the codebase must still satisfy it without changes.
 
-- [ ] **Step 1: Replace the `Settings` interface's `frontier` field with a named discriminated union type, and add `leadThinking`**
+- [x] **Step 1: Replace the `Settings` interface's `frontier` field with a named discriminated union type, and add `leadThinking`**
 
 Current content (lines 28-60):
 
@@ -107,12 +109,12 @@ export interface Settings {
 
 Do not touch `DEFAULT_SETTINGS` — it already omits `frontier` entirely (stays `undefined`), and `leadThinking` should be omitted the same way (undefined by default).
 
-- [ ] **Step 2: Run typecheck to verify the widened type is backward compatible**
+- [x] **Step 2: Run typecheck to verify the widened type is backward compatible**
 
 Run: `cd extension && npm run typecheck`
-Expected: PASS, no errors. (If you see an error referencing `provider.ts`'s `FrontierConfig` export or `frontierProvider`'s parameter type, stop — that's expected to surface here and gets fixed in Task 3, not this task. Confirm the error is confined to `provider.ts`, not `messages.ts` or any other consumer, before proceeding.)
+Expected: PASS against everything **except** `sidepanel/components/SettingsPanel.tsx` — that file's pre-existing `updateFrontier` helper spreads the old flat `frontier` shape and will fail to typecheck against the new union until Task 2 (next) replaces it. Confirm the *only* error is in `SettingsPanel.tsx`; anything else is a real problem, stop and report it.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add extension/src/shared/messages.ts
@@ -121,11 +123,266 @@ git commit -m "feat(settings): widen frontier config to a discriminated union, a
 
 ---
 
-### Task 2: `frontierProvider` — honor `opts.thinking` instead of ignoring it
+### Task 2: Settings UI — provider select, base URL field, thinking select
 
 **Files:**
-- Modify: `extension/src/agent/framework/provider.ts` (the `frontierProvider` function)
-- Test: `extension/tests/unit/framework_provider.test.ts`
+- Modify: `extension/src/sidepanel/components/SettingsPanel.tsx`
+
+This task depends only on Task 1's `FrontierConfig` type — nothing here calls into the provider-layer functions built in later tasks. It's placed here (not at the end) specifically to keep typecheck green immediately after Task 1, since the *existing* `updateFrontier` helper is what breaks once `frontier` becomes a union.
+
+- [x] **Step 1: Update imports and add the default-URL constant**
+
+Current top of file:
+
+```tsx
+import { useEffect, useState } from 'react';
+import type { DomainTier, Settings } from '@/shared/messages';
+import { sameModel } from '@/shared/messages';
+import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
+import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
+import { extractResumeText } from '../resume';
+import { fileToBase64 } from '../file_bytes';
+import { Icon } from './Icon';
+```
+
+Replace the second line:
+
+```tsx
+import { useEffect, useState } from 'react';
+import type { DomainTier, FrontierConfig, Settings } from '@/shared/messages';
+import { sameModel } from '@/shared/messages';
+import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
+import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
+import { extractResumeText } from '../resume';
+import { fileToBase64 } from '../file_bytes';
+import { Icon } from './Icon';
+```
+
+Then find the module-level constant:
+
+```tsx
+const TIERS: DomainTier[] = ['read-only', 'click-only'];
+```
+
+Add a sibling constant right after it:
+
+```tsx
+const TIERS: DomainTier[] = ['read-only', 'click-only'];
+const OPENAI_COMPATIBLE_DEFAULT_URL = 'https://api.openai.com/v1/chat/completions';
+```
+
+- [x] **Step 2: Replace `updateFrontier` to handle the discriminated union**
+
+Current:
+
+```tsx
+  const updateFrontier = (patch: Partial<NonNullable<Settings['frontier']>>) =>
+    setLocal((s) => ({
+      ...s,
+      frontier: {
+        provider: 'anthropic',
+        apiKey: '',
+        model: '',
+        ...s.frontier,
+        ...patch,
+      },
+    }));
+```
+
+Replace with:
+
+```tsx
+  const updateFrontier = (patch: {
+    provider?: FrontierConfig['provider'];
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  }) => {
+    setLocal((s) => {
+      const provider = patch.provider ?? s.frontier?.provider ?? 'anthropic';
+      const apiKey = patch.apiKey ?? s.frontier?.apiKey ?? '';
+      const model = patch.model ?? s.frontier?.model ?? '';
+      const frontier: FrontierConfig =
+        provider === 'anthropic'
+          ? { provider, apiKey, model }
+          : {
+              provider,
+              apiKey,
+              model,
+              baseUrl: patch.baseUrl ?? (s.frontier?.provider === 'openai-compatible' ? s.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL),
+            };
+      return { ...s, frontier };
+    });
+  };
+```
+
+(A plain `Partial<FrontierConfig>` won't work here — `Partial` of a union type only keeps the keys common to *every* arm, so `baseUrl` would be silently dropped from the patch type entirely, and this is exactly the shape of bug that broke Task 1's typecheck against the *old* `updateFrontier`. The explicit object type above avoids that trap.)
+
+- [x] **Step 3: Replace the "Frontier model (optional)" card**
+
+Current card (from `{/* Frontier model (optional) */}` through the closing `</div>` right before the `<div className="save-bar">`):
+
+```tsx
+      {/* Frontier model (optional) */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="spark" size={13} /> Frontier model (optional)
+        </div>
+        <div className="field-hint">
+          Let the planner and evaluator use a frontier model instead of the local one. Everything
+          else (reading pages, clicking, typing) always stays local. Off by default.
+        </div>
+        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={!!local.hybridMode}
+            onChange={(e) => update('hybridMode', e.target.checked)}
+          />
+          <span>
+            <strong>Use a frontier model for planning and evaluation (hybrid mode)</strong>. Calls a
+            paid API repeatedly during a run (roughly every 3rd turn) — this app doesn't track or cap
+            that spend.
+          </span>
+        </label>
+        {local.hybridMode && (
+          <>
+            <div className="field">
+              <span className="field-label">Model</span>
+              <input
+                placeholder="claude-opus-4-8"
+                value={local.frontier?.model ?? ''}
+                onChange={(e) => updateFrontier({ model: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <span className="field-label">API key</span>
+              <input
+                type="password"
+                placeholder="sk-ant-..."
+                value={local.frontier?.apiKey ?? ''}
+                onChange={(e) => updateFrontier({ apiKey: e.target.value })}
+              />
+            </div>
+          </>
+        )}
+      </div>
+```
+
+Replace with:
+
+```tsx
+      {/* Frontier model (optional) */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="spark" size={13} /> Frontier model (optional)
+        </div>
+        <div className="field-hint">
+          Let the planner and evaluator use a frontier model instead of the local one. Everything
+          else (reading pages, clicking, typing) always stays local. Off by default.
+        </div>
+        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={!!local.hybridMode}
+            onChange={(e) => update('hybridMode', e.target.checked)}
+          />
+          <span>
+            <strong>Use a frontier model for planning and evaluation (hybrid mode)</strong>. Calls a
+            paid API repeatedly during a run (roughly every 3rd turn) — this app doesn't track or cap
+            that spend.
+          </span>
+        </label>
+        {local.hybridMode && (
+          <>
+            <div className="field">
+              <span className="field-label">Provider</span>
+              <select
+                value={local.frontier?.provider ?? 'anthropic'}
+                onChange={(e) => updateFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
+              >
+                <option value="anthropic">Anthropic</option>
+                <option value="openai-compatible">OpenAI-compatible</option>
+              </select>
+            </div>
+            <div className="field">
+              <span className="field-label">Model</span>
+              <input
+                placeholder={local.frontier?.provider === 'openai-compatible' ? 'gpt-5.1' : 'claude-opus-4-8'}
+                value={local.frontier?.model ?? ''}
+                onChange={(e) => updateFrontier({ model: e.target.value })}
+              />
+            </div>
+            {local.frontier?.provider === 'openai-compatible' && (
+              <div className="field">
+                <span className="field-label">Base URL</span>
+                <input
+                  placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
+                  value={local.frontier.baseUrl}
+                  onChange={(e) => updateFrontier({ baseUrl: e.target.value })}
+                />
+                <div className="field-hint">
+                  Examples — OpenRouter: <code>https://openrouter.ai/api/v1/chat/completions</code>; DeepSeek:{' '}
+                  <code>https://api.deepseek.com/chat/completions</code>; or any self-hosted/proxy endpoint
+                  speaking the same OpenAI Chat Completions shape.
+                </div>
+              </div>
+            )}
+            <div className="field">
+              <span className="field-label">API key</span>
+              <input
+                type="password"
+                placeholder={local.frontier?.provider === 'openai-compatible' ? 'sk-...' : 'sk-ant-...'}
+                value={local.frontier?.apiKey ?? ''}
+                onChange={(e) => updateFrontier({ apiKey: e.target.value })}
+              />
+            </div>
+          </>
+        )}
+        <div className="field">
+          <span className="field-label">Thinking (lead seat)</span>
+          <select
+            value={local.leadThinking === undefined ? 'default' : local.leadThinking ? 'on' : 'off'}
+            onChange={(e) => {
+              const v = e.target.value;
+              update('leadThinking', v === 'default' ? undefined : v === 'on');
+            }}
+          >
+            <option value="default">Default (recommended)</option>
+            <option value="on">Always on</option>
+            <option value="off">Always off</option>
+          </select>
+          <div className="field-hint">
+            Overrides extended thinking for the planner/evaluator seat, on whichever model is serving
+            it (local or frontier). Best-effort only on Anthropic and OpenAI itself — DeepSeek,
+            MiniMax, OpenRouter-routed models, and self-hosted backends don't have a standardized way
+            to control this, so Default and Always on may behave identically there. Leave on Default
+            unless you have a specific reason to change it.
+          </div>
+        </div>
+      </div>
+```
+
+Note the Thinking field sits *outside* the `{local.hybridMode && (...)}` block — it's always visible in this card, since it affects local-only mode too.
+
+- [x] **Step 4: Run typecheck and build**
+
+Run: `cd extension && npm run typecheck && npm run build`
+Expected: Both PASS with no errors — this also confirms Task 1's typecheck gap is now fully closed, with no errors anywhere in the tree.
+
+- [x] **Step 5: Manual verification note**
+
+No automated component test exists for `SettingsPanel.tsx` today (consistent with the parent spec's equivalent task) — verification here is typecheck + build + a live browser click-through, same as the parent spec's precedent. If a live browser check isn't achievable in your environment, say so explicitly rather than skipping the note.
+
+- [x] **Step 6: Commit**
+
+```bash
+git add extension/src/sidepanel/components/SettingsPanel.tsx
+git commit -m "feat(settings-ui): add provider select, base URL field, and thinking override select"
+```
+
+---
+
+### Task 3: `frontierProvider` — honor `opts.thinking` instead of ignoring it
 
 **Files:**
 - Modify: `extension/src/agent/framework/provider.ts`
@@ -205,7 +462,7 @@ export function frontierProvider(cfg: Extract<FrontierConfig, { provider: 'anthr
       if (system) body.system = system;
 ```
 
-(The parameter type narrows from the full `FrontierConfig` union to just its `anthropic` arm — this function only ever handles that shape; Task 3 makes callers pass the right arm.)
+(The parameter type narrows from the full `FrontierConfig` union to just its `anthropic` arm — this function only ever handles that shape; Task 4 makes callers pass the right arm.)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -221,7 +478,7 @@ git commit -m "fix(framework): frontierProvider now honors opts.thinking instead
 
 ---
 
-### Task 3: Add `openAICompatibleProvider` + `normalizeOpenAIResponse`
+### Task 4: Add `openAICompatibleProvider` + `normalizeOpenAIResponse`
 
 **Files:**
 - Modify: `extension/src/agent/framework/provider.ts`
@@ -420,7 +677,7 @@ Expected: All tests PASS.
 - [ ] **Step 5: Run typecheck**
 
 Run: `cd extension && npm run typecheck`
-Expected: PASS. (This also confirms the Task 1 → Task 3 type-flow is coherent end to end.)
+Expected: **Still fails with exactly one error**, in `resolveLeadProvider` (`provider.ts`, around the `withFallback(frontierProvider(settings.frontier), ...)` line): `Argument of type 'FrontierConfig' is not assignable to parameter of type '{ provider: "anthropic"; ... }'`. This is expected and does not mean this task is broken — `frontierProvider`'s parameter type was narrowed to just its `anthropic` arm in Task 3, but `resolveLeadProvider` still calls it directly with the full union; Task 5 replaces that call site with the type-safe `frontierProviderFor` dispatcher, which is what actually closes this out. Confirm the error is confined to that one call site in `resolveLeadProvider` — nothing in `messages.ts`, nothing in the test file, nothing else in `provider.ts`.
 
 - [ ] **Step 6: Commit**
 
@@ -431,7 +688,7 @@ git commit -m "feat(framework): add openAICompatibleProvider (OpenAI, OpenRouter
 
 ---
 
-### Task 4: Dispatch between providers by `cfg.provider`, wire into `resolveLeadProvider`
+### Task 5: Dispatch between providers by `cfg.provider`, wire into `resolveLeadProvider`
 
 **Files:**
 - Modify: `extension/src/agent/framework/provider.ts`
@@ -519,7 +776,7 @@ git commit -m "feat(framework): dispatch resolveLeadProvider's frontier branch b
 
 ---
 
-### Task 5: Add `withThinkingOverride`, compose it into `resolveLeadProvider`
+### Task 6: Add `withThinkingOverride`, compose it into `resolveLeadProvider`
 
 **Files:**
 - Modify: `extension/src/agent/framework/provider.ts`
@@ -595,7 +852,7 @@ Expected: FAIL — `resolveLeadProvider` doesn't read `settings.leadThinking` ye
 
 - [ ] **Step 3: Implement `withThinkingOverride` and compose it into `resolveLeadProvider`**
 
-In `extension/src/agent/framework/provider.ts`, immediately after the `describeFallbackReason` function (the last helper belonging to `withFallback`, right before the doc comment above `frontierProviderFor` from Task 4), insert:
+In `extension/src/agent/framework/provider.ts`, immediately after the `describeFallbackReason` function (the last helper belonging to `withFallback`, right before the doc comment above `frontierProviderFor` from Task 5), insert:
 
 ```ts
 export function withThinkingOverride(provider: ModelProvider, override?: boolean): ModelProvider {
@@ -609,7 +866,7 @@ export function withThinkingOverride(provider: ModelProvider, override?: boolean
 
 ```
 
-Then find the `resolveLeadProvider` body from Task 4:
+Then find the `resolveLeadProvider` body from Task 5:
 
 ```ts
 export function resolveLeadProvider(
@@ -651,7 +908,7 @@ git commit -m "feat(framework): add withThinkingOverride, compose into resolveLe
 
 ---
 
-### Task 6: E2E regression test — override plumbing doesn't break the local path
+### Task 7: E2E regression test — override plumbing doesn't break the local path
 
 **Files:**
 - Modify: `extension/tests/integration/scripted_e2e.test.ts`
@@ -696,9 +953,9 @@ Add this `it` block inside the existing `describe('scripted-browser E2E ...', ..
 
 This is deliberately distinct from the existing `hybridMode:false` baseline test right above it — that one proves the *unset* default is unchanged; this one proves the override machinery (`withThinkingOverride` actively forcing `thinking: true` into every call reaching the local fake) doesn't break the real orchestrator's local-only path when a user actually turns it on. No new imports needed — everything used here is already imported in this file.
 
-- [ ] **Step 2: Run the test to verify it fails initially, then passes after Task 5**
+- [ ] **Step 2: Run the test to verify it fails initially, then passes after Task 6**
 
-If you're running this task after Task 5 is already committed (the expected order), this test should PASS immediately — it's a regression/characterization test for already-implemented behavior, not new production code.
+If you're running this task after Task 6 is already committed (the expected order), this test should PASS immediately — it's a regression/characterization test for already-implemented behavior, not new production code.
 
 Run: `cd extension && npx vitest run tests/integration/scripted_e2e.test.ts`
 Expected: All tests in this file PASS (4 pre-existing + this new one = 5 total).
@@ -708,263 +965,6 @@ Expected: All tests in this file PASS (4 pre-existing + this new one = 5 total).
 ```bash
 git add extension/tests/integration/scripted_e2e.test.ts
 git commit -m "test: leadThinking:true doesn't break the real orchestrator's local-only path"
-```
-
----
-
-### Task 7: Settings UI — provider select, base URL field, thinking select
-
-**Files:**
-- Modify: `extension/src/sidepanel/components/SettingsPanel.tsx`
-
-- [ ] **Step 1: Update imports and add the default-URL constant**
-
-Current top of file:
-
-```tsx
-import { useEffect, useState } from 'react';
-import type { DomainTier, Settings } from '@/shared/messages';
-import { sameModel } from '@/shared/messages';
-import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
-import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
-import { extractResumeText } from '../resume';
-import { fileToBase64 } from '../file_bytes';
-import { Icon } from './Icon';
-```
-
-Replace the second line:
-
-```tsx
-import { useEffect, useState } from 'react';
-import type { DomainTier, FrontierConfig, Settings } from '@/shared/messages';
-import { sameModel } from '@/shared/messages';
-import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
-import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
-import { extractResumeText } from '../resume';
-import { fileToBase64 } from '../file_bytes';
-import { Icon } from './Icon';
-```
-
-Then find the module-level constant:
-
-```tsx
-const TIERS: DomainTier[] = ['read-only', 'click-only'];
-```
-
-Add a sibling constant right after it:
-
-```tsx
-const TIERS: DomainTier[] = ['read-only', 'click-only'];
-const OPENAI_COMPATIBLE_DEFAULT_URL = 'https://api.openai.com/v1/chat/completions';
-```
-
-- [ ] **Step 2: Replace `updateFrontier` to handle the discriminated union**
-
-Current:
-
-```tsx
-  const updateFrontier = (patch: Partial<NonNullable<Settings['frontier']>>) =>
-    setLocal((s) => ({
-      ...s,
-      frontier: {
-        provider: 'anthropic',
-        apiKey: '',
-        model: '',
-        ...s.frontier,
-        ...patch,
-      },
-    }));
-```
-
-Replace with:
-
-```tsx
-  const updateFrontier = (patch: {
-    provider?: FrontierConfig['provider'];
-    apiKey?: string;
-    model?: string;
-    baseUrl?: string;
-  }) => {
-    setLocal((s) => {
-      const provider = patch.provider ?? s.frontier?.provider ?? 'anthropic';
-      const apiKey = patch.apiKey ?? s.frontier?.apiKey ?? '';
-      const model = patch.model ?? s.frontier?.model ?? '';
-      const frontier: FrontierConfig =
-        provider === 'anthropic'
-          ? { provider, apiKey, model }
-          : {
-              provider,
-              apiKey,
-              model,
-              baseUrl: patch.baseUrl ?? (s.frontier?.provider === 'openai-compatible' ? s.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL),
-            };
-      return { ...s, frontier };
-    });
-  };
-```
-
-(A plain `Partial<FrontierConfig>` won't work here — `Partial` of a union type only keeps the keys common to *every* arm, so `baseUrl` would be silently dropped from the patch type entirely. The explicit object type above avoids that trap.)
-
-- [ ] **Step 3: Replace the "Frontier model (optional)" card**
-
-Current card (from `{/* Frontier model (optional) */}` through the closing `</div>` right before the `<div className="save-bar">`):
-
-```tsx
-      {/* Frontier model (optional) */}
-      <div className="card setting-group">
-        <div className="card-title">
-          <Icon name="spark" size={13} /> Frontier model (optional)
-        </div>
-        <div className="field-hint">
-          Let the planner and evaluator use a frontier model instead of the local one. Everything
-          else (reading pages, clicking, typing) always stays local. Off by default.
-        </div>
-        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
-          <input
-            type="checkbox"
-            checked={!!local.hybridMode}
-            onChange={(e) => update('hybridMode', e.target.checked)}
-          />
-          <span>
-            <strong>Use a frontier model for planning and evaluation (hybrid mode)</strong>. Calls a
-            paid API repeatedly during a run (roughly every 3rd turn) — this app doesn't track or cap
-            that spend.
-          </span>
-        </label>
-        {local.hybridMode && (
-          <>
-            <div className="field">
-              <span className="field-label">Model</span>
-              <input
-                placeholder="claude-opus-4-8"
-                value={local.frontier?.model ?? ''}
-                onChange={(e) => updateFrontier({ model: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <span className="field-label">API key</span>
-              <input
-                type="password"
-                placeholder="sk-ant-..."
-                value={local.frontier?.apiKey ?? ''}
-                onChange={(e) => updateFrontier({ apiKey: e.target.value })}
-              />
-            </div>
-          </>
-        )}
-      </div>
-```
-
-Replace with:
-
-```tsx
-      {/* Frontier model (optional) */}
-      <div className="card setting-group">
-        <div className="card-title">
-          <Icon name="spark" size={13} /> Frontier model (optional)
-        </div>
-        <div className="field-hint">
-          Let the planner and evaluator use a frontier model instead of the local one. Everything
-          else (reading pages, clicking, typing) always stays local. Off by default.
-        </div>
-        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
-          <input
-            type="checkbox"
-            checked={!!local.hybridMode}
-            onChange={(e) => update('hybridMode', e.target.checked)}
-          />
-          <span>
-            <strong>Use a frontier model for planning and evaluation (hybrid mode)</strong>. Calls a
-            paid API repeatedly during a run (roughly every 3rd turn) — this app doesn't track or cap
-            that spend.
-          </span>
-        </label>
-        {local.hybridMode && (
-          <>
-            <div className="field">
-              <span className="field-label">Provider</span>
-              <select
-                value={local.frontier?.provider ?? 'anthropic'}
-                onChange={(e) => updateFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
-              >
-                <option value="anthropic">Anthropic</option>
-                <option value="openai-compatible">OpenAI-compatible</option>
-              </select>
-            </div>
-            <div className="field">
-              <span className="field-label">Model</span>
-              <input
-                placeholder={local.frontier?.provider === 'openai-compatible' ? 'gpt-5.1' : 'claude-opus-4-8'}
-                value={local.frontier?.model ?? ''}
-                onChange={(e) => updateFrontier({ model: e.target.value })}
-              />
-            </div>
-            {local.frontier?.provider === 'openai-compatible' && (
-              <div className="field">
-                <span className="field-label">Base URL</span>
-                <input
-                  placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
-                  value={local.frontier.baseUrl}
-                  onChange={(e) => updateFrontier({ baseUrl: e.target.value })}
-                />
-                <div className="field-hint">
-                  Examples — OpenRouter: <code>https://openrouter.ai/api/v1/chat/completions</code>; DeepSeek:{' '}
-                  <code>https://api.deepseek.com/chat/completions</code>; or any self-hosted/proxy endpoint
-                  speaking the same OpenAI Chat Completions shape.
-                </div>
-              </div>
-            )}
-            <div className="field">
-              <span className="field-label">API key</span>
-              <input
-                type="password"
-                placeholder={local.frontier?.provider === 'openai-compatible' ? 'sk-...' : 'sk-ant-...'}
-                value={local.frontier?.apiKey ?? ''}
-                onChange={(e) => updateFrontier({ apiKey: e.target.value })}
-              />
-            </div>
-          </>
-        )}
-        <div className="field">
-          <span className="field-label">Thinking (lead seat)</span>
-          <select
-            value={local.leadThinking === undefined ? 'default' : local.leadThinking ? 'on' : 'off'}
-            onChange={(e) => {
-              const v = e.target.value;
-              update('leadThinking', v === 'default' ? undefined : v === 'on');
-            }}
-          >
-            <option value="default">Default (recommended)</option>
-            <option value="on">Always on</option>
-            <option value="off">Always off</option>
-          </select>
-          <div className="field-hint">
-            Overrides extended thinking for the planner/evaluator seat, on whichever model is serving
-            it (local or frontier). Best-effort only on Anthropic and OpenAI itself — DeepSeek,
-            MiniMax, OpenRouter-routed models, and self-hosted backends don't have a standardized way
-            to control this, so Default and Always on may behave identically there. Leave on Default
-            unless you have a specific reason to change it.
-          </div>
-        </div>
-      </div>
-```
-
-Note the Thinking field sits *outside* the `{local.hybridMode && (...)}` block — it's always visible in this card, since it affects local-only mode too.
-
-- [ ] **Step 4: Run typecheck and build**
-
-Run: `cd extension && npm run typecheck && npm run build`
-Expected: Both PASS with no errors.
-
-- [ ] **Step 5: Manual verification note**
-
-No automated component test exists for `SettingsPanel.tsx` today (consistent with the parent spec's equivalent task) — verification here is typecheck + build + a live browser click-through, same as the parent spec's precedent. If a live browser check isn't achievable in your environment, say so explicitly rather than skipping the note.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add extension/src/sidepanel/components/SettingsPanel.tsx
-git commit -m "feat(settings-ui): add provider select, base URL field, and thinking override select"
 ```
 
 ---

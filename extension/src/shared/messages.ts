@@ -27,6 +27,14 @@ export interface Plan {
 
 export type DomainTier = 'read-only' | 'click-only';
 
+/** A persisted frontier config for the lead seat. 'anthropic' is Claude's own
+ *  Messages API; 'openai-compatible' is any backend speaking the OpenAI Chat
+ *  Completions shape — OpenAI itself, OpenRouter, DeepSeek, MiniMax, or a
+ *  self-hosted server — distinguished only by baseUrl/model, never new code. */
+export type FrontierConfig =
+  | { provider: 'anthropic'; apiKey: string; model: string }
+  | { provider: 'openai-compatible'; apiKey: string; model: string; baseUrl: string };
+
 export interface Settings {
   ollamaBaseUrl: string;
   plannerModel: string;
@@ -52,11 +60,11 @@ export interface Settings {
    *  evaluator) may run on the configured frontier model instead of local
    *  Ollama. The helper seat (executor, compactor) always stays local. */
   hybridMode?: boolean;
-  frontier?: {
-    provider: 'anthropic';
-    apiKey: string;
-    model: string;
-  };
+  frontier?: FrontierConfig;
+  /** Overrides extended-thinking for the lead seat (head-chef/sous-chef) on
+   *  whichever provider serves it. undefined = today's unchanged per-role
+   *  defaults; true/false forces it either way, regardless of provider. */
+  leadThinking?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
