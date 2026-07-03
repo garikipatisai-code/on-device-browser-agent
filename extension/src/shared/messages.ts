@@ -129,6 +129,16 @@ export type PanelCommand =
   | { type: 'models.list' }
   | { type: 'preflight' };
 
+/** A chat-style session: an ordered list of turns (each turn is one Orchestrator run,
+ *  its own taskId) sharing carried-forward context (facts + last summary). */
+export interface Session {
+  id: string;
+  title: string;
+  createdAt: number;
+  lastActiveAt: number;
+  turnIds: string[];
+}
+
 /** A recipe as shown/edited in the Recipes tab (UI mirror of the agent's Workflow). */
 export interface RecipeView {
   id: string;

@@ -4,15 +4,18 @@
 // - clearHot drains the mutex before erasing
 
 import { openDB, type IDBPDatabase } from 'idb';
+import { ulid } from '@/agent/util';
 import type {
   AgentStatus,
   DomainTier,
   Plan,
+  Session,
   Settings,
   TaskPhase,
   TimelineEvent,
 } from '@/shared/messages';
 import { DEFAULT_SETTINGS } from '@/shared/messages';
+import type { Fact } from '@/agent/facts';
 
 export interface AgentStateHot {
   goal: string; // IMMUTABLE after set
@@ -219,7 +222,7 @@ export async function setDomainTier(host: string, tier: DomainTier): Promise<Set
 // ---------- IndexedDB (warm) ----------
 
 const DB_NAME = 'browser-agent';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export interface FindingRecord {
   id?: number;
@@ -279,6 +282,12 @@ export function db(): Promise<IDBPDatabase> {
       }
       if (!d.objectStoreNames.contains('scratchpad')) {
         d.createObjectStore('scratchpad', { keyPath: 'taskId' });
+      }
+      if (!d.objectStoreNames.contains('sessions')) {
+        d.createObjectStore('sessions', { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains('sessionContext')) {
+        d.createObjectStore('sessionContext', { keyPath: 'sessionId' });
       }
     },
   });
@@ -389,6 +398,88 @@ export async function getScratchpad(taskId: string): Promise<string> {
     return rec?.content ?? '';
   } catch {
     return '';
+  }
+}
+
+// ---------- Sessions (chat-style history + carried-forward context) ----------
+// Session itself is defined in @/shared/messages (imported above) — only its
+// CRUD lives here, same as every other store.
+
+export interface SessionContext {
+  sessionId: string;
+  facts: Fact[];
+  lastSummary: string;
+  updatedAt: number;
+}
+
+const SESSION_TITLE_MAX = 80;
+const SESSION_SUMMARY_MAX = 500;
+
+export async function createSession(): Promise<Session> {
+  const s: Session = {
+    id: ulid(),
+    title: '',
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+    turnIds: [],
+  };
+  const d = await db();
+  await d.put('sessions', s);
+  return s;
+}
+
+export async function listSessions(): Promise<Session[]> {
+  try {
+    const d = await db();
+    const all = (await d.getAll('sessions')) as Session[];
+    return all.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  const d = await db();
+  await d.delete('sessions', sessionId);
+  await d.delete('sessionContext', sessionId);
+}
+
+/** Appends a turn's taskId to the session, sets the title from the FIRST turn's goal only
+ *  (subsequent turns don't overwrite it), and bumps lastActiveAt. */
+export async function appendTurnToSession(sessionId: string, taskId: string, goal?: string): Promise<void> {
+  const d = await db();
+  const cur = (await d.get('sessions', sessionId)) as Session | undefined;
+  if (!cur) return;
+  const next: Session = {
+    ...cur,
+    turnIds: [...cur.turnIds, taskId],
+    title: cur.title || (goal ?? '').slice(0, SESSION_TITLE_MAX),
+    lastActiveAt: Date.now(),
+  };
+  await d.put('sessions', next);
+}
+
+export async function loadSessionContext(sessionId: string): Promise<SessionContext> {
+  try {
+    const d = await db();
+    const rec = (await d.get('sessionContext', sessionId)) as SessionContext | undefined;
+    return rec ?? { sessionId, facts: [], lastSummary: '', updatedAt: 0 };
+  } catch {
+    return { sessionId, facts: [], lastSummary: '', updatedAt: 0 };
+  }
+}
+
+export async function saveSessionContext(sessionId: string, facts: Fact[], lastSummary: string): Promise<void> {
+  try {
+    const d = await db();
+    await d.put('sessionContext', {
+      sessionId,
+      facts,
+      lastSummary: lastSummary.slice(0, SESSION_SUMMARY_MAX),
+      updatedAt: Date.now(),
+    });
+  } catch {
+    /* best-effort, same pattern as setScratchpad/recordMetric */
   }
 }
 

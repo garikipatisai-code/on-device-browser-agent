@@ -2,15 +2,21 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _setHot,
   appendEvent,
+  appendTurnToSession,
   clearHot,
+  createSession,
+  deleteSession,
   getScratchpad,
+  listSessions,
   loadEvents,
   loadHot,
+  loadSessionContext,
   loadSettings,
   memoryGet,
   memoryList,
   memorySet,
   patchHot,
+  saveSessionContext,
   saveSettings,
   setDomainTier,
   setScratchpad,
@@ -120,6 +126,77 @@ describe('scratchpad + memory + events', () => {
     const all = await loadEvents('t1');
     expect(all.length).toBe(1);
     expect(all[0].kind).toBe('log');
+  });
+});
+
+describe('sessions', () => {
+  it('creates, lists, and deletes a session', async () => {
+    const s1 = await createSession();
+    const s2 = await createSession();
+    const listed = await listSessions();
+    expect(listed.map((s) => s.id).sort()).toEqual([s1.id, s2.id].sort());
+    expect(s1.title).toBe('');
+    expect(s1.turnIds).toEqual([]);
+
+    await deleteSession(s1.id);
+    const afterDelete = await listSessions();
+    expect(afterDelete.map((s) => s.id)).toEqual([s2.id]);
+  });
+
+  it('lists sessions sorted by lastActiveAt descending', async () => {
+    const older = await createSession();
+    await appendTurnToSession(older.id, 'task-a');
+    const newer = await createSession();
+    await appendTurnToSession(newer.id, 'task-b');
+    // touch `older` again so it becomes the most recently active
+    await appendTurnToSession(older.id, 'task-c');
+    const listed = await listSessions();
+    expect(listed[0].id).toBe(older.id);
+    expect(listed[1].id).toBe(newer.id);
+  });
+
+  it('appendTurnToSession appends the taskId and sets the title from the first turn only', async () => {
+    const s = await createSession();
+    await appendTurnToSession(s.id, 'task-1', 'find the population of Austin');
+    await appendTurnToSession(s.id, 'task-2', 'now do Seattle too');
+    const listed = await listSessions();
+    const found = listed.find((x) => x.id === s.id)!;
+    expect(found.turnIds).toEqual(['task-1', 'task-2']);
+    expect(found.title).toBe('find the population of Austin');
+  });
+
+  it('truncates a long goal to build the title', async () => {
+    const s = await createSession();
+    const longGoal = 'x'.repeat(200);
+    await appendTurnToSession(s.id, 'task-1', longGoal);
+    const listed = await listSessions();
+    expect(listed[0].title.length).toBeLessThanOrEqual(80);
+  });
+});
+
+describe('sessionContext', () => {
+  it('a session with no saved context loads as empty facts + empty summary', async () => {
+    const s = await createSession();
+    const ctx = await loadSessionContext(s.id);
+    expect(ctx).toEqual({ sessionId: s.id, facts: [], lastSummary: '', updatedAt: 0 });
+  });
+
+  it('round-trips facts and a summary', async () => {
+    const s = await createSession();
+    const facts = [{ step: 'step-1', text: 'Austin population: 961,855' }];
+    await saveSessionContext(s.id, facts, 'success: Austin has 961,855 residents');
+    const ctx = await loadSessionContext(s.id);
+    expect(ctx.facts).toEqual(facts);
+    expect(ctx.lastSummary).toBe('success: Austin has 961,855 residents');
+    expect(ctx.updatedAt).toBeGreaterThan(0);
+  });
+
+  it('caps lastSummary at 500 chars', async () => {
+    const s = await createSession();
+    const long = 'y'.repeat(1000);
+    await saveSessionContext(s.id, [], long);
+    const ctx = await loadSessionContext(s.id);
+    expect(ctx.lastSummary.length).toBe(500);
   });
 });
 
