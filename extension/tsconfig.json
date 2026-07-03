@@ -18,9 +18,8 @@
     "resolveJsonModule": true,
     "jsx": "react-jsx",
     "types": ["chrome", "vite/client", "vitest/globals"],
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src", "tests"],
