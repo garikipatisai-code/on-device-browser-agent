@@ -46,6 +46,18 @@ export function SettingsPanel({
 
   const update = <K extends keyof Settings>(k: K, v: Settings[K]) => setLocal((s) => ({ ...s, [k]: v }));
 
+  const updateFrontier = (patch: Partial<NonNullable<Settings['frontier']>>) =>
+    setLocal((s) => ({
+      ...s,
+      frontier: {
+        provider: 'anthropic',
+        apiKey: '',
+        model: '',
+        ...s.frontier,
+        ...patch,
+      },
+    }));
+
   const isInstalled = (name: string) =>
     installedModels.length === 0 || installedModels.some((m) => sameModel(m, name));
   const connected = installedModels.length > 0;
@@ -277,6 +289,50 @@ export function SettingsPanel({
             <Icon name="plus" size={12} /> Add
           </button>
         </div>
+      </div>
+
+      {/* Frontier model (optional) */}
+      <div className="card setting-group">
+        <div className="card-title">
+          <Icon name="spark" size={13} /> Frontier model (optional)
+        </div>
+        <div className="field-hint">
+          Let the planner and evaluator use a frontier model instead of the local one. Everything
+          else (reading pages, clicking, typing) always stays local. Off by default.
+        </div>
+        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={!!local.hybridMode}
+            onChange={(e) => update('hybridMode', e.target.checked)}
+          />
+          <span>
+            <strong>Use a frontier model for planning and evaluation (hybrid mode)</strong>. Calls a
+            paid API repeatedly during a run (roughly every 3rd turn) — this app doesn't track or cap
+            that spend.
+          </span>
+        </label>
+        {local.hybridMode && (
+          <>
+            <div className="field">
+              <span className="field-label">Model</span>
+              <input
+                placeholder="claude-opus-4-8"
+                value={local.frontier?.model ?? ''}
+                onChange={(e) => updateFrontier({ model: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <span className="field-label">API key</span>
+              <input
+                type="password"
+                placeholder="sk-ant-..."
+                value={local.frontier?.apiKey ?? ''}
+                onChange={(e) => updateFrontier({ apiKey: e.target.value })}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       <div className="save-bar">
