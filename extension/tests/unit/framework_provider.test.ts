@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { localProvider, frontierProvider, openAICompatibleProvider, withFallback, resolveLeadProvider } from '@/agent/framework/provider';
+import { localProvider, frontierProvider, openAICompatibleProvider, withFallback, withThinkingOverride, resolveLeadProvider } from '@/agent/framework/provider';
+import type { OllamaClient } from '@/background/ollama';
 import { DEFAULT_SETTINGS } from '@/shared/messages';
 import { makeFakeOllama } from '../helpers';
 
@@ -213,6 +214,23 @@ describe('withFallback', () => {
   });
 });
 
+describe('withThinkingOverride', () => {
+  it('passes through the exact same provider reference when override is undefined', async () => {
+    const inner = { chatOnce: vi.fn().mockResolvedValue({ message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' }) };
+    const provider = withThinkingOverride(inner, undefined);
+    expect(provider).toBe(inner); // true no-op, not a functionally-equivalent wrapper
+    await provider.chatOnce({ model: 'x', messages: [], thinking: false });
+    expect(inner.chatOnce).toHaveBeenCalledWith({ model: 'x', messages: [], thinking: false });
+  });
+
+  it('forces opts.thinking to the override value', async () => {
+    const inner = { chatOnce: vi.fn().mockResolvedValue({ message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' }) };
+    const provider = withThinkingOverride(inner, true);
+    await provider.chatOnce({ model: 'x', messages: [], thinking: false });
+    expect(inner.chatOnce).toHaveBeenCalledWith({ model: 'x', messages: [], thinking: true });
+  });
+});
+
 describe('resolveLeadProvider', () => {
   it('resolves to local when hybridMode is off', () => {
     const fake = makeFakeOllama({});
@@ -253,5 +271,18 @@ describe('resolveLeadProvider', () => {
     await p.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'hi' }] });
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.openai.com/v1/chat/completions');
     vi.unstubAllGlobals();
+  });
+
+  it('composes leadThinking over the local branch even when hybridMode is off', async () => {
+    const captured: Array<{ thinking?: boolean }> = [];
+    const fake = {
+      chatOnce: async (opts: { thinking?: boolean }) => {
+        captured.push(opts);
+        return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
+      },
+    } as unknown as OllamaClient;
+    const p = resolveLeadProvider({ ...DEFAULT_SETTINGS, hybridMode: false, leadThinking: true }, fake);
+    await p.chatOnce({ model: 'x', messages: [], thinking: false });
+    expect(captured[0].thinking).toBe(true);
   });
 });

@@ -185,6 +185,15 @@ function describeFallbackReason(err: unknown): string {
   return err instanceof Error ? err.message : 'unknown frontier error';
 }
 
+export function withThinkingOverride(provider: ModelProvider, override?: boolean): ModelProvider {
+  if (override === undefined) return provider; // no-op — today's per-role hardcoded defaults stand
+  return {
+    async chatOnce(opts: ChatOptions): Promise<ChatResponse> {
+      return provider.chatOnce({ ...opts, thinking: override });
+    },
+  };
+}
+
 function frontierProviderFor(cfg: FrontierConfig): ModelProvider {
   return cfg.provider === 'anthropic' ? frontierProvider(cfg) : openAICompatibleProvider(cfg);
 }
@@ -199,6 +208,8 @@ export function resolveLeadProvider(
   ollama: OllamaClient,
   onFallback?: (reason: string) => void,
 ): ModelProvider {
-  if (!settings.hybridMode || !settings.frontier?.apiKey) return localProvider(ollama);
-  return withFallback(frontierProviderFor(settings.frontier), localProvider(ollama), onFallback);
+  const base = !settings.hybridMode || !settings.frontier?.apiKey
+    ? localProvider(ollama)
+    : withFallback(frontierProviderFor(settings.frontier), localProvider(ollama), onFallback);
+  return withThinkingOverride(base, settings.leadThinking);
 }
