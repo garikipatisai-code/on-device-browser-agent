@@ -1,6 +1,6 @@
 # On-Device Browser Agent
 
-A goal-anchored autonomous browser agent that runs **entirely on your device** — a Chrome (MV3) extension driven by a **local LLM via [Ollama](https://ollama.com)** (default: `gemma4:e4b`). You give it a goal in plain language; it plans, reads pages, clicks/types, and reports back. No cloud, no API keys — your browsing and your data stay local.
+A goal-anchored autonomous browser agent that runs **entirely on your device** — a Chrome (MV3) extension driven by a **local LLM via [Ollama](https://ollama.com)** (default: `gemma4:e4b`). You give it a goal in plain language; it plans, reads pages, clicks/types, and reports back. No cloud, no API keys — your browsing and your data stay local **by default**. An optional, off-by-default hybrid mode can hand planning/evaluation to a frontier model if you choose to configure one — see "Optional: hybrid mode" below.
 
 ## What it does
 
@@ -14,6 +14,7 @@ A goal-anchored autonomous browser agent that runs **entirely on your device** �
 - **Job-apply (v1):** upload a résumé (`.pdf`/`.docx`/`.txt`); the model extracts your profile to fill application form fields, and **attaches the résumé file itself** to the form. Use the **"Apply to a job"** box with a Greenhouse/Lever URL — the agent fills + attaches, then **stops before submit** for your review (it never auto-submits). See Caveats for ATS coverage.
 - **Safety & privacy by default:** every site starts **read-only**; you explicitly upgrade a domain to `click-only` before the agent can interact. PII is redacted before anything is logged or persisted, and nothing ever leaves your machine.
 - **Optional: bypass per-site approval.** A Settings checkbox lets the agent click, type, and submit on *any* site without upgrading it domain-by-domain first — handy for one-off tasks, at the cost of no per-domain checkpoint (it can act on forms/purchases on a site you never explicitly approved). Default **off**. Even with it on, the protocol blocklist (`file:`, `chrome:`, `javascript:`, `data:`, and similar dangerous schemes) still applies — it only relaxes site-access tiers, never that.
+- **Optional: hybrid mode.** Let the planner and evaluator run on a frontier model instead of the local one — Anthropic directly, or any backend speaking the OpenAI Chat Completions API (OpenAI, OpenRouter, DeepSeek, MiniMax, a self-hosted server — just point it at a base URL). Everything that actually touches the browser — reading pages, clicking, typing, uploading — always stays local and on-device, regardless of this setting. Default **off**; with it off, behavior is unchanged from fully local. Turning it on means page content the evaluator judges can reach that third-party API — an explicit trade you opt into, not a silent one. Configure it in **Settings → Frontier model (optional)**.
 
 ## Requirements
 
@@ -59,7 +60,7 @@ Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → 
 
 - **Service worker** (`src/background`) — owns the orchestrator and the Ollama client; kept alive across long runs (20s keepalive + a detached run loop).
 - **Side panel** (`src/sidepanel`, React) — goal input, live timeline, settings, and résumé parsing (`mammoth`/`pdfjs`).
-- **Agent** (`src/agent`) — roles (`planner`/`executor`/`evaluator`/`compactor`), the tool registry + browser tools (CDP-based, with command timeouts), the ARIA simplifier, the grounded **facts ledger** + answer grounding-verifier (`facts.ts`), **workflow-memory recipes**, the profile, the configurable context window (`budget.ts`), and the safety layer (domain tiers, redaction, circuit breaker).
+- **Agent** (`src/agent`) — roles (`planner`/`executor`/`evaluator`/`compactor`), a swappable model-provider layer (`agent/framework/`) that lets the planner/evaluator optionally run on a frontier model while everything else stays local, the tool registry + browser tools (CDP-based, with command timeouts), the ARIA simplifier, the grounded **facts ledger** + answer grounding-verifier (`facts.ts`), **workflow-memory recipes**, the profile, the configurable context window (`budget.ts`), and the safety layer (domain tiers, redaction, circuit breaker).
 
 ## Development
 
