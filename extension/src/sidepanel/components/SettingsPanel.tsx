@@ -40,6 +40,12 @@ export function SettingsPanel({
   const [newTier, setNewTier] = useState<DomainTier>('read-only');
   const [resumeMsg, setResumeMsg] = useState('');
   const [recipesCleared, setRecipesCleared] = useState(false);
+  // Survives a round-trip through the anthropic provider arm (which has no baseUrl field at
+  // all), so exploring the Provider select doesn't silently discard a typed-in openai-compatible
+  // endpoint (OpenRouter/DeepSeek/self-hosted). Tracked independently of `local.frontier` itself.
+  const [lastBaseUrl, setLastBaseUrl] = useState(
+    settings.frontier?.provider === 'openai-compatible' ? settings.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL,
+  );
 
   useEffect(() => {
     setLocal((s) => ({ ...s, profileJson: settings.profileJson }));
@@ -53,6 +59,7 @@ export function SettingsPanel({
     model?: string;
     baseUrl?: string;
   }) => {
+    if (patch.baseUrl !== undefined) setLastBaseUrl(patch.baseUrl);
     setLocal((s) => {
       const provider = patch.provider ?? s.frontier?.provider ?? 'anthropic';
       const apiKey = patch.apiKey ?? s.frontier?.apiKey ?? '';
@@ -64,7 +71,7 @@ export function SettingsPanel({
               provider,
               apiKey,
               model,
-              baseUrl: patch.baseUrl ?? (s.frontier?.provider === 'openai-compatible' ? s.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL),
+              baseUrl: patch.baseUrl ?? lastBaseUrl,
             };
       return { ...s, frontier };
     });

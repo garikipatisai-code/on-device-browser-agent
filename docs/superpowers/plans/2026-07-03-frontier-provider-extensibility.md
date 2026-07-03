@@ -130,7 +130,7 @@ git commit -m "feat(settings): widen frontier config to a discriminated union, a
 
 This task depends only on Task 1's `FrontierConfig` type — nothing here calls into the provider-layer functions built in later tasks. It's placed here (not at the end) specifically to keep typecheck green immediately after Task 1, since the *existing* `updateFrontier` helper is what breaks once `frontier` becomes a union.
 
-- [ ] **Step 1: Update imports and add the default-URL constant**
+- [x] **Step 1: Update imports and add the default-URL constant**
 
 Current top of file:
 
@@ -171,7 +171,7 @@ const TIERS: DomainTier[] = ['read-only', 'click-only'];
 const OPENAI_COMPATIBLE_DEFAULT_URL = 'https://api.openai.com/v1/chat/completions';
 ```
 
-- [ ] **Step 2: Replace `updateFrontier` to handle the discriminated union**
+- [x] **Step 2: Replace `updateFrontier` to handle the discriminated union**
 
 Current:
 
@@ -218,7 +218,7 @@ Replace with:
 
 (A plain `Partial<FrontierConfig>` won't work here — `Partial` of a union type only keeps the keys common to *every* arm, so `baseUrl` would be silently dropped from the patch type entirely, and this is exactly the shape of bug that broke Task 1's typecheck against the *old* `updateFrontier`. The explicit object type above avoids that trap.)
 
-- [ ] **Step 3: Replace the "Frontier model (optional)" card**
+- [x] **Step 3: Replace the "Frontier model (optional)" card**
 
 Current card (from `{/* Frontier model (optional) */}` through the closing `</div>` right before the `<div className="save-bar">`):
 
@@ -364,16 +364,16 @@ Replace with:
 
 Note the Thinking field sits *outside* the `{local.hybridMode && (...)}` block — it's always visible in this card, since it affects local-only mode too.
 
-- [ ] **Step 4: Run typecheck and build**
+- [x] **Step 4: Run typecheck and build**
 
 Run: `cd extension && npm run typecheck && npm run build`
 Expected: Both PASS with no errors — this also confirms Task 1's typecheck gap is now fully closed, with no errors anywhere in the tree.
 
-- [ ] **Step 5: Manual verification note**
+- [x] **Step 5: Manual verification note**
 
 No automated component test exists for `SettingsPanel.tsx` today (consistent with the parent spec's equivalent task) — verification here is typecheck + build + a live browser click-through, same as the parent spec's precedent. If a live browser check isn't achievable in your environment, say so explicitly rather than skipping the note.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/sidepanel/components/SettingsPanel.tsx

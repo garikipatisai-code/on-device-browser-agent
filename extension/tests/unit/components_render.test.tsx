@@ -1,9 +1,11 @@
 // Render smoke test: mount every redesigned component to static markup across its key states.
 // Can't load the extension in Chrome here, so this verifies render-safety + that each state
 // produces the right content (verdict label, phase label, plan steps, event titles, …).
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DEFAULT_SETTINGS, type Plan, type TimelineEvent } from '@/shared/messages';
+import { DEFAULT_SETTINGS, type Plan, type Settings, type TimelineEvent } from '@/shared/messages';
 import { Brand } from '@/sidepanel/components/Brand';
 import { Tabs } from '@/sidepanel/components/Tabs';
 import { Alert } from '@/sidepanel/components/Alert';
@@ -151,6 +153,76 @@ describe('redesigned components render across states', () => {
     expect(html).toContain('shop.example');
     expect(html).toContain('Save settings');
     expect(html).toMatch(/Forget learned recipes/i);
+  });
+
+  it('SettingsPanel keeps a typed-in frontier baseUrl after a round-trip through the anthropic provider', () => {
+    // Regression: switching Provider to anthropic and back to openai-compatible used to
+    // silently reset a custom baseUrl (e.g. an OpenRouter/DeepSeek endpoint) back to the
+    // hardcoded default, because updateFrontier only remembered the last baseUrl when
+    // `frontier` was *currently* shaped as openai-compatible — a detour through the
+    // anthropic arm (which has no baseUrl field at all) broke that chain.
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const settings: Settings = { ...DEFAULT_SETTINGS, hybridMode: true };
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <SettingsPanel
+          settings={settings}
+          installedModels={[DEFAULT_SETTINGS.executorModel]}
+          onSave={noop}
+          onTier={noop}
+          onRefreshModels={noop}
+          extractingProfile={false}
+          onExtractProfile={noop}
+          onStoreResume={noop}
+          onClearRecipes={noop}
+        />,
+      );
+    });
+
+    const fieldValue = (label: string) =>
+      [...container.querySelectorAll('.field')]
+        .find((f) => f.querySelector('.field-label')?.textContent === label);
+
+    const setSelect = (label: string, value: string) => {
+      const select = fieldValue(label)!.querySelector('select') as HTMLSelectElement;
+      act(() => {
+        select.value = value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    };
+    // React patches HTMLInputElement.prototype's `value` setter to track "seen" values, so a
+    // plain `input.value = x` (which goes through that patched setter) leaves React thinking it
+    // already observed this value, and a subsequently dispatched `input` event is a no-op. Go
+    // through the native (unpatched) prototype setter instead — same trick testing-library uses.
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    const setInput = (label: string, value: string) => {
+      const input = fieldValue(label)!.querySelector('input') as HTMLInputElement;
+      act(() => {
+        nativeInputValueSetter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    const getInputValue = (label: string) =>
+      (fieldValue(label)!.querySelector('input') as HTMLInputElement).value;
+
+    // Switch to openai-compatible, then type a custom baseUrl (OpenRouter's endpoint).
+    setSelect('Provider', 'openai-compatible');
+    const customUrl = 'https://openrouter.ai/api/v1/chat/completions';
+    setInput('Base URL', customUrl);
+    expect(getInputValue('Base URL')).toBe(customUrl);
+
+    // Round-trip through anthropic (no baseUrl field exists at all on that arm) and back.
+    setSelect('Provider', 'anthropic');
+    setSelect('Provider', 'openai-compatible');
+
+    expect(getInputValue('Base URL')).toBe(customUrl);
+
+    act(() => root.unmount());
+    container.remove();
   });
 
   it('MetricsPanel renders the empty state and a populated table', () => {
