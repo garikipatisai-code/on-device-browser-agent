@@ -95,6 +95,16 @@ describe('frontierProvider', () => {
     expect(body2.thinking).toEqual({ type: 'adaptive' });
     vi.unstubAllGlobals();
   });
+
+  it('throws on a response with no text content', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: [], stop_reason: 'end_turn', usage: {} }),
+    }));
+    const provider = frontierProvider({ provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' });
+    await expect(provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/no text content/);
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('openAICompatibleProvider', () => {
@@ -178,6 +188,20 @@ describe('openAICompatibleProvider', () => {
     await expect(
       provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }] }),
     ).rejects.toMatchObject({ status: 429 });
+    vi.unstubAllGlobals();
+  });
+
+  it('throws on a response with no text content', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '' } }] }),
+    }));
+    const provider = openAICompatibleProvider({
+      provider: 'openai-compatible', apiKey: 'sk-x', model: 'gpt-5.1', baseUrl: 'https://x/chat/completions',
+    });
+    await expect(
+      provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }] }),
+    ).rejects.toThrow(/no text content/);
     vi.unstubAllGlobals();
   });
 });

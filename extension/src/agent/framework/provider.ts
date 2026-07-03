@@ -78,6 +78,7 @@ function normalizeAnthropicResponse(json: Record<string, unknown>): ChatResponse
   }
   const blocks = (json.content as Array<{ type: string; text?: string }> | undefined) ?? [];
   const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+  if (!text) throw new Error('Frontier model returned no text content');
   const usage = json.usage as { input_tokens?: number; output_tokens?: number } | undefined;
   return {
     message: { role: 'assistant', content: text },
@@ -134,6 +135,7 @@ function normalizeOpenAIResponse(json: Record<string, unknown>): ChatResponse {
   const choice = (json.choices as Array<{ message?: { content?: string; refusal?: string } }> | undefined)?.[0];
   if (choice?.message?.refusal) throw new Error(`Frontier model declined the request (${choice.message.refusal})`);
   const text = choice?.message?.content ?? '';
+  if (!text) throw new Error('Frontier model returned no text content');
   const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
   return {
     message: { role: 'assistant', content: text },
