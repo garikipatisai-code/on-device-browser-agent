@@ -73,6 +73,55 @@ describe('orchestrator — full plan completion', () => {
   });
 });
 
+describe('orchestrator — hybrid mode seat routing', () => {
+  // Guards against leadProvider/helperProvider being swapped (or both wrongly resolving to
+  // the same backend) now that hybridMode can actually diverge them. The planner (lead seat)
+  // is served ONLY via a mocked fetch (the frontier path); the executor (helper seat) is
+  // served ONLY via the fake Ollama. If the two fields were swapped, the planner call would
+  // never reach fetch (it'd hit fake Ollama instead) and/or the executor call would try to
+  // hit fetch instead of fake Ollama — either way this test would fail.
+  it('routes the lead seat (planner) to frontier and the helper seat (executor) to local, never swapped', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [
+          { type: 'text', text: JSON.stringify({ steps: [{ description: 'do it', successCriteria: 'done' }] }) },
+        ],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rolesSeen: string[] = [];
+    const ollama = makeFakeOllama(
+      { executor: [rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] })] },
+      { onChat: (_model, role) => rolesSeen.push(role) },
+    );
+
+    const orch = new Orchestrator({
+      ollama,
+      registry: buildRegistry(),
+      settings: {
+        ...DEFAULT_SETTINGS,
+        hybridMode: true,
+        frontier: { provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' },
+      },
+      emit: () => undefined,
+    });
+
+    try {
+      const result = await orch.runUntilTerminal(await orch.start('do it'));
+      expect(result.phase).toBe('DONE');
+      expect(fetchMock).toHaveBeenCalledTimes(1); // planner (lead seat) went to frontier
+      expect(rolesSeen).toEqual(['executor']); // executor (helper seat) went to local, exactly once
+      expect(rolesSeen).not.toContain('planner'); // proves no swap: planner never reached fake Ollama
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('orchestrator — goal byte-survival across replan', () => {
   it('goal text is byte-identical after replan + compaction-ish path', async () => {
     const goal = 'Tidy up the kitchen drawer ★';

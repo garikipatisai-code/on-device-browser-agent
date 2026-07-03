@@ -23,7 +23,7 @@ import { addGroundedFact, groundingCorpus, renderFacts, type Fact } from './fact
 import { runHeadChef } from './framework/head_chef';
 import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
 import { runHelper, runHelperCompaction } from './framework/helper';
-import { localProvider, type ModelProvider } from './framework/provider';
+import { localProvider, resolveLeadProvider, type ModelProvider } from './framework/provider';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
 import {
@@ -133,7 +133,14 @@ export class Orchestrator {
 
   constructor(private opts: OrchestratorOpts) {
     this.signal = opts.signal ?? new AbortController().signal;
-    this.leadProvider = localProvider(opts.ollama);
+    this.leadProvider = resolveLeadProvider(opts.settings, opts.ollama, (reason) =>
+      this.emit({
+        kind: 'log',
+        ts: Date.now(),
+        level: 'warn',
+        message: `Frontier call failed, using local model instead: ${reason}`,
+      }),
+    );
     this.helperProvider = localProvider(opts.ollama);
   }
 
