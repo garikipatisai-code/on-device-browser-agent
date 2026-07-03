@@ -234,4 +234,24 @@ describe('resolveLeadProvider', () => {
     );
     expect(p).not.toBe(fake);
   });
+
+  it('resolves to the openai-compatible provider (not Anthropic) when configured', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const fake = makeFakeOllama({});
+    const p = resolveLeadProvider(
+      {
+        ...DEFAULT_SETTINGS,
+        hybridMode: true,
+        frontier: { provider: 'openai-compatible', apiKey: 'sk-x', model: 'gpt-5.1', baseUrl: 'https://api.openai.com/v1/chat/completions' },
+      },
+      fake,
+    );
+    await p.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'hi' }] });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.openai.com/v1/chat/completions');
+    vi.unstubAllGlobals();
+  });
 });

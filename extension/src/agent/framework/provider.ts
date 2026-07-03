@@ -185,6 +185,10 @@ function describeFallbackReason(err: unknown): string {
   return err instanceof Error ? err.message : 'unknown frontier error';
 }
 
+function frontierProviderFor(cfg: FrontierConfig): ModelProvider {
+  return cfg.provider === 'anthropic' ? frontierProvider(cfg) : openAICompatibleProvider(cfg);
+}
+
 /** Resolved once per run for the head-chef and sous-chef seats — they always
  *  resolve identically, since hybridMode is one master toggle, not two
  *  independent ones. Falls out to local whenever hybrid mode is off or no
@@ -196,5 +200,5 @@ export function resolveLeadProvider(
   onFallback?: (reason: string) => void,
 ): ModelProvider {
   if (!settings.hybridMode || !settings.frontier?.apiKey) return localProvider(ollama);
-  return withFallback(frontierProvider(settings.frontier), localProvider(ollama), onFallback);
+  return withFallback(frontierProviderFor(settings.frontier), localProvider(ollama), onFallback);
 }
