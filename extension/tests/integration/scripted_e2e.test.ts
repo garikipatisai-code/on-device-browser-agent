@@ -137,4 +137,36 @@ describe('scripted-browser E2E (real orchestrator + real tools + fake model)', (
     const score = scoreRun(t.expect, run);
     expect(score, score.reasons.join('; ')).toMatchObject({ completed: true, correct: true, grounded: true });
   });
+
+  it('sale-price with hybridMode false but leadThinking true still completes correctly', async () => {
+    const t = task('sale-price');
+    const state = new ScriptedBrowser(t);
+    const registry = buildScriptedRegistry(state);
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'open the Studio Wireless Headphones product and report its current price', successCriteria: 'current price reported' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://shop.example/' } }] }),
+        rawResponse({ toolCalls: [{ name: 'tab.click', args: { tabId: 101, elementIndex: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'The current price is £59.99 (down from £79.99).' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({
+      ollama,
+      registry,
+      settings: { ...DEFAULT_SETTINGS, hybridMode: false, leadThinking: true },
+      emit: () => undefined,
+    });
+    const result = await orch.runUntilTerminal(await orch.start(t.goal));
+
+    expect(result.phase).toBe('DONE');
+    expect(result.verdict).toBe('success');
+
+    const run: BenchRun = {
+      phase: result.phase, verdict: result.verdict, summary: result.summary,
+      observedText: `${t.goal}\n${state.observedText()}`, turns: result.turns, replans: result.replans,
+    };
+    const score = scoreRun(t.expect, run);
+    expect(score, score.reasons.join('; ')).toMatchObject({ completed: true, correct: true, grounded: true });
+  });
 });
