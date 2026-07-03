@@ -42,6 +42,8 @@ export interface CommonContext {
   steerNotes?: string[];
   /** Durable user-set preferences (USER.md analog), injected into every run. */
   preferences?: string;
+  /** The prior turn's finish summary, carried forward within the same chat session. */
+  priorSummary?: string;
 }
 
 /** Render mid-task user corrections as a high-priority guidance block (empty string when none,
@@ -59,6 +61,14 @@ function preferencesBlock(preferences?: string): string {
   const p = (preferences ?? '').trim();
   if (!p) return '';
   return `STANDING PREFERENCES (the user's persistent guidance — honor it unless the GOAL says otherwise):\n${p}`;
+}
+
+/** Render the prior turn's finish summary for continuity within the same chat session (empty
+ *  string when unset). Lets the GOAL reference "it"/"that"/"the same site" from the last turn. */
+function priorSummaryBlock(summary?: string): string {
+  const s = (summary ?? '').trim();
+  if (!s) return '';
+  return `PRIOR TURN IN THIS SESSION (for continuity — the current GOAL may reference "it", "that", "the same site", etc.):\n${s}`;
 }
 
 export function buildPlannerMessages(ctx: CommonContext, extra?: string, workflowRecipe?: string): ChatMessage[] {
@@ -84,6 +94,7 @@ Do NOT bake specific or guessed URLs into steps — the Executor opens real URLs
   const user = [
     `GOAL: ${ctx.goal}`,
     preferencesBlock(ctx.preferences),
+    priorSummaryBlock(ctx.priorSummary),
     steerBlock(ctx.steerNotes),
     workflowRecipe ? `PROVEN RECIPE (a known-good sequence for a task like this — build your plan from it):\n${workflowRecipe}` : '',
     `TOOLS:\n${ctx.toolCatalog}`,
@@ -189,6 +200,7 @@ Output: ONLY a JSON object of the form:
   const user = [
     `GOAL: ${ctx.goal}`,
     preferencesBlock(ctx.preferences),
+    priorSummaryBlock(ctx.priorSummary),
     `ACTIVE STEP: ${step.description}`,
     `SUCCESS CRITERIA: ${step.successCriteria}`,
     ctx.recentActions ? `ACTIONS TAKEN THIS STEP (judge the whole sequence, not just the last):\n${ctx.recentActions}` : '',
