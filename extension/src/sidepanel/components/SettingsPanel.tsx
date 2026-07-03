@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { DomainTier, Settings } from '@/shared/messages';
+import type { DomainTier, FrontierConfig, Settings } from '@/shared/messages';
 import { sameModel } from '@/shared/messages';
 import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
 import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
@@ -22,6 +22,7 @@ interface Props {
 type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
 
 const TIERS: DomainTier[] = ['read-only', 'click-only'];
+const OPENAI_COMPATIBLE_DEFAULT_URL = 'https://api.openai.com/v1/chat/completions';
 
 export function SettingsPanel({
   settings,
@@ -46,17 +47,28 @@ export function SettingsPanel({
 
   const update = <K extends keyof Settings>(k: K, v: Settings[K]) => setLocal((s) => ({ ...s, [k]: v }));
 
-  const updateFrontier = (patch: Partial<NonNullable<Settings['frontier']>>) =>
-    setLocal((s) => ({
-      ...s,
-      frontier: {
-        provider: 'anthropic',
-        apiKey: '',
-        model: '',
-        ...s.frontier,
-        ...patch,
-      },
-    }));
+  const updateFrontier = (patch: {
+    provider?: FrontierConfig['provider'];
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  }) => {
+    setLocal((s) => {
+      const provider = patch.provider ?? s.frontier?.provider ?? 'anthropic';
+      const apiKey = patch.apiKey ?? s.frontier?.apiKey ?? '';
+      const model = patch.model ?? s.frontier?.model ?? '';
+      const frontier: FrontierConfig =
+        provider === 'anthropic'
+          ? { provider, apiKey, model }
+          : {
+              provider,
+              apiKey,
+              model,
+              baseUrl: patch.baseUrl ?? (s.frontier?.provider === 'openai-compatible' ? s.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL),
+            };
+      return { ...s, frontier };
+    });
+  };
 
   const isInstalled = (name: string) =>
     installedModels.length === 0 || installedModels.some((m) => sameModel(m, name));
@@ -315,24 +327,70 @@ export function SettingsPanel({
         {local.hybridMode && (
           <>
             <div className="field">
+              <span className="field-label">Provider</span>
+              <select
+                value={local.frontier?.provider ?? 'anthropic'}
+                onChange={(e) => updateFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
+              >
+                <option value="anthropic">Anthropic</option>
+                <option value="openai-compatible">OpenAI-compatible</option>
+              </select>
+            </div>
+            <div className="field">
               <span className="field-label">Model</span>
               <input
-                placeholder="claude-opus-4-8"
+                placeholder={local.frontier?.provider === 'openai-compatible' ? 'gpt-5.1' : 'claude-opus-4-8'}
                 value={local.frontier?.model ?? ''}
                 onChange={(e) => updateFrontier({ model: e.target.value })}
               />
             </div>
+            {local.frontier?.provider === 'openai-compatible' && (
+              <div className="field">
+                <span className="field-label">Base URL</span>
+                <input
+                  placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
+                  value={local.frontier.baseUrl}
+                  onChange={(e) => updateFrontier({ baseUrl: e.target.value })}
+                />
+                <div className="field-hint">
+                  Examples — OpenRouter: <code>https://openrouter.ai/api/v1/chat/completions</code>; DeepSeek:{' '}
+                  <code>https://api.deepseek.com/chat/completions</code>; or any self-hosted/proxy endpoint
+                  speaking the same OpenAI Chat Completions shape.
+                </div>
+              </div>
+            )}
             <div className="field">
               <span className="field-label">API key</span>
               <input
                 type="password"
-                placeholder="sk-ant-..."
+                placeholder={local.frontier?.provider === 'openai-compatible' ? 'sk-...' : 'sk-ant-...'}
                 value={local.frontier?.apiKey ?? ''}
                 onChange={(e) => updateFrontier({ apiKey: e.target.value })}
               />
             </div>
           </>
         )}
+        <div className="field">
+          <span className="field-label">Thinking (lead seat)</span>
+          <select
+            value={local.leadThinking === undefined ? 'default' : local.leadThinking ? 'on' : 'off'}
+            onChange={(e) => {
+              const v = e.target.value;
+              update('leadThinking', v === 'default' ? undefined : v === 'on');
+            }}
+          >
+            <option value="default">Default (recommended)</option>
+            <option value="on">Always on</option>
+            <option value="off">Always off</option>
+          </select>
+          <div className="field-hint">
+            Overrides extended thinking for the planner/evaluator seat, on whichever model is serving
+            it (local or frontier). Best-effort only on Anthropic and OpenAI itself — DeepSeek,
+            MiniMax, OpenRouter-routed models, and self-hosted backends don't have a standardized way
+            to control this, so Default and Always on may behave identically there. Leave on Default
+            unless you have a specific reason to change it.
+          </div>
+        </div>
       </div>
 
       <div className="save-bar">
