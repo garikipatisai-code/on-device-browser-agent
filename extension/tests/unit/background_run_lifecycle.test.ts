@@ -227,4 +227,181 @@ describe('session commands', () => {
     expect(await listSessions()).toEqual([]);
     expect(bg.state().activeSessionId).toBeNull();
   });
+
+  it('agent.start auto-creates a session when none is active', async () => {
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    expect(bg.state().activeSessionId).toBeNull();
+    void bg.handleStart('a goal with no session active');
+    await flush();
+    expect(bg.state().activeSessionId).not.toBeNull();
+    const sessions = await listSessions();
+    expect(sessions.length).toBe(1);
+    expect(sessions[0].id).toBe(bg.state().activeSessionId);
+
+    liveOrch!.finishRun();
+    await flush();
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
+
+  it('agent.start reuses the already-active session instead of creating a new one', async () => {
+    await bg.handleSessionNew();
+    const existing = bg.state().activeSessionId;
+
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    void bg.handleStart('a follow-up goal');
+    await flush();
+    expect(bg.state().activeSessionId).toBe(existing);
+    const sessions = await listSessions();
+    expect(sessions.length).toBe(1);
+
+    liveOrch!.finishRun();
+    await flush();
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
+
+  it('handleSessionNew refuses to create+switch while a task is running', async () => {
+    await bg.handleSessionNew();
+    const first = bg.state().activeSessionId;
+
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    void bg.handleStart('a goal');
+    await flush();
+    expect(bg.state().orchSet).toBe(true);
+
+    await bg.handleSessionNew();
+    expect(bg.state().activeSessionId).toBe(first); // unchanged — refused while orchSet
+    expect((await listSessions()).length).toBe(1); // no second session was created
+
+    liveOrch!.finishRun();
+    await flush();
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
+
+  it('handleSessionDelete refuses to delete the ACTIVE session while a task is running, but allows deleting an inactive one', async () => {
+    await bg.handleSessionNew();
+    const active = bg.state().activeSessionId!;
+    await bg.handleSessionNew();
+    const other = bg.state().activeSessionId!;
+    await bg.handleSessionSelect(active);
+
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    void bg.handleStart('a goal');
+    await flush();
+    expect(bg.state().orchSet).toBe(true);
+
+    // Deleting the currently-active session while running is refused.
+    await bg.handleSessionDelete(active);
+    expect(bg.state().activeSessionId).toBe(active);
+    expect((await listSessions()).map((s) => s.id)).toContain(active);
+
+    // Deleting a DIFFERENT (inactive) session while running is still allowed.
+    await bg.handleSessionDelete(other);
+    expect((await listSessions()).map((s) => s.id)).not.toContain(other);
+
+    liveOrch!.finishRun();
+    await flush();
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
+
+  it('a finished turn triggers a sessions broadcast whose matching turn carries the verdict/summary', async () => {
+    await bg.handleSessionNew();
+    const sessionId = bg.state().activeSessionId!;
+
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    bg.setOrchestratorFactory((opts) => {
+      const o = fakeOrch();
+      o.emit = opts.emit;
+      // The real Orchestrator.start()/finishOk() are what call the real appendTurnToSession/
+      // updateSessionTurnResult — exercise those instead of the fake's static stubs, mirroring
+      // the existing crash-resume test's approach of swapping in the real state_store call.
+      o.start = async () => {
+        const { appendTurnToSession } = await import('@/background/state_store');
+        await appendTurnToSession(sessionId, 'task-fixed', 'the goal');
+        return { phase: 'PLANNING' } as unknown;
+      };
+      o.runUntilTerminal = async () => {
+        const { updateSessionTurnResult } = await import('@/background/state_store');
+        await updateSessionTurnResult(sessionId, 'task-fixed', 'success', 'the answer');
+        return { phase: 'DONE', verdict: 'success', summary: 'the answer', turns: 1, replans: 0 };
+      };
+      return o as unknown as Orchestrator;
+    });
+
+    void bg.handleStart('the goal');
+    await flush();
+
+    const sessions = await listSessions();
+    const found = sessions.find((s) => s.id === sessionId)!;
+    expect(found.turns[0]).toEqual({ taskId: 'task-fixed', goal: 'the goal', verdict: 'success', summary: 'the answer' });
+
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
 });

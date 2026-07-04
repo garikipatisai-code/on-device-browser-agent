@@ -117,6 +117,12 @@ async function pushSessions() {
 }
 
 async function handleSessionNew() {
+  // Same guard shape as handleSessionSelect: starting a fresh chat mid-run would orphan the
+  // live turn's _activeSessionId out from under it.
+  if (_orch || _starting) {
+    broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
+    return;
+  }
   const s = await createSession();
   _activeSessionId = s.id;
   await pushSessions();
@@ -134,6 +140,12 @@ async function handleSessionSelect(sessionId: string) {
 }
 
 async function handleSessionDelete(sessionId: string) {
+  // Deleting a DIFFERENT, inactive session while a turn runs is harmless and stays allowed;
+  // only deleting the session the live turn is actually writing into is refused.
+  if (sessionId === _activeSessionId && (_orch || _starting)) {
+    broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
+    return;
+  }
   await deleteSession(sessionId);
   if (_activeSessionId === sessionId) _activeSessionId = null;
   await pushSessions();
@@ -203,7 +215,18 @@ async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']
     broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
     return;
   }
-  _starting = true; // held only across the preflight await window, until _orch is set
+  _starting = true; // held across the session-auto-create + preflight await window, until _orch is set
+  // Auto-continue by default: a goal with no active session starts one, so a follow-up goal
+  // naturally lands in the same chat without an explicit "New chat" click first. Lives here
+  // (not in the port's switch-case) so every caller — agent.start, agent.askPage, and tests
+  // that call handleStart directly — gets it, not just one call site. Guarded by _starting
+  // above (set BEFORE this await) so two back-to-back handleStart calls can't both pass the
+  // top guard and both auto-create a session.
+  if (!_activeSessionId) {
+    const s = await createSession();
+    _activeSessionId = s.id;
+    await pushSessions();
+  }
   const settings = await loadSettings();
   const ollama = new OllamaClient(settings.ollamaBaseUrl);
 
@@ -285,6 +308,10 @@ async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']
       _abortController = null;
       await pushStatus();
       await pushMetrics();
+      // The just-finished turn's verdict/summary landed in Session.turns via
+      // updateSessionTurnResult (called from finishOk/abortNow, which runUntilTerminal already
+      // awaited above) — push the refreshed session list so the panel's transcript picks it up.
+      if (_activeSessionId) await pushSessions();
     }
   }
 }
