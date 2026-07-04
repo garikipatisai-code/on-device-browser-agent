@@ -447,16 +447,20 @@ export async function deleteSession(sessionId: string): Promise<void> {
 /** Appends a turn's taskId to the session, sets the title from the FIRST turn's goal only
  *  (subsequent turns don't overwrite it), and bumps lastActiveAt. */
 export async function appendTurnToSession(sessionId: string, taskId: string, goal?: string): Promise<void> {
-  const d = await db();
-  const cur = (await d.get('sessions', sessionId)) as Session | undefined;
-  if (!cur) return;
-  const next: Session = {
-    ...cur,
-    turnIds: [...cur.turnIds, taskId],
-    title: cur.title || (goal ?? '').slice(0, SESSION_TITLE_MAX),
-    lastActiveAt: Date.now(),
-  };
-  await d.put('sessions', next);
+  try {
+    const d = await db();
+    const cur = (await d.get('sessions', sessionId)) as Session | undefined;
+    if (!cur) return;
+    const next: Session = {
+      ...cur,
+      turnIds: [...cur.turnIds, taskId],
+      title: cur.title || (goal ?? '').slice(0, SESSION_TITLE_MAX),
+      lastActiveAt: Date.now(),
+    };
+    await d.put('sessions', next);
+  } catch {
+    /* best-effort, same pattern as loadSessionContext/saveSessionContext */
+  }
 }
 
 export async function loadSessionContext(sessionId: string): Promise<SessionContext> {

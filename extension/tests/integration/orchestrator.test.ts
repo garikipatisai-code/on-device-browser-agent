@@ -6,7 +6,7 @@ import { ToolRegistry } from '@/agent/tools/registry';
 import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
-import { loadHot, clearHot, _setHot, loadEvents, createSession, listSessions } from '@/background/state_store';
+import { loadHot, clearHot, _setHot, loadEvents, createSession, listSessions, loadSessionContext } from '@/background/state_store';
 import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, saveWorkflow, type Workflow } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
@@ -1992,5 +1992,29 @@ describe('orchestrator — session continuation', () => {
     const result = await orch.runUntilTerminal(initial);
     expect(result.phase).toBe('DONE');
     expect(result.verdict).toBe('success');
+  });
+
+  it('a session-scoped turn that ABORTS still writes back a session context reflecting the abort', async () => {
+    const session = await createSession();
+    // Same "unknown-tool storm" shape as the recipe-quarantine ABORTED tests above: a multi-step
+    // plan where the executor never calls a real tool, so nothing is ever observed, so giveUp's
+    // salvage synthesis has nothing to work from and falls through to abortNow — deterministically,
+    // with no timing/AbortController race.
+    const multiStep = rawResponse({ content: JSON.stringify({ steps: [{ description: 'a', successCriteria: 'x' }, { description: 'b', successCriteria: 'y' }] }) });
+    const ollama = makeFakeOllama({
+      planner: [multiStep, multiStep, multiStep],
+      executor: [
+        rawResponse({ content: 'no tool' }), rawResponse({ content: 'still none' }),
+        rawResponse({ content: 'a' }), rawResponse({ content: 'b' }), rawResponse({ content: 'c' }), rawResponse({ content: 'd' }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined, maxReplans: 2, maxStepTurns: 4 });
+    const initial = await orch.start('knit a scarf for me', session.id);
+    const result = await orch.runUntilTerminal(initial);
+
+    expect(result.phase).toBe('ABORTED');
+    const ctx = await loadSessionContext(session.id);
+    expect(ctx.lastSummary.startsWith('aborted:')).toBe(true);
   });
 });

@@ -178,6 +178,9 @@ export class Orchestrator {
       const carried = await loadSessionContext(this.sessionId);
       this.facts = carried.facts;
       this.priorSummary = carried.lastSummary;
+      // Recorded at start (not after finishOk/abortNow) so a future UI can show an in-progress turn;
+      // this means turnIds can include a turn that never reaches a terminal state (e.g. an unhandled
+      // crash) — sessionContext's own facts/summary only reflect turns that actually finished.
       await appendTurnToSession(this.sessionId, this.taskId, trimmed);
     } else {
       this.facts = [];
