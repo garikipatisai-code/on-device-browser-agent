@@ -59,6 +59,24 @@ export function App() {
   // only makes that gap visible instead of the panel silently freezing at the last-seen phase).
   const [connectionLost, setConnectionLost] = useState(false);
   const clientRef = useRef<PortClient | null>(null);
+  // Brand renders its own sticky header (`.app-header`, position:sticky top:0 z-index:20) above
+  // `.content`. `.agent-tab-header` also sticks at top:0 inside `.content`'s scroll — if both used
+  // a hardcoded `top`, any change to Brand's height (font-size, padding, a longer build-stamp
+  // string wrapping to two lines) would silently either leave a gap or, worse, let Brand's higher
+  // z-index cover part of `.agent-tab-header` (SessionSwitcher) for the rest of the scroll. Measure
+  // Brand's real rendered height instead of guessing a pixel value, and stick agent-tab-header
+  // immediately below it.
+  const brandRef = useRef<HTMLDivElement>(null);
+  const [brandHeight, setBrandHeight] = useState(0);
+  useEffect(() => {
+    const el = brandRef.current;
+    if (!el) return;
+    const measure = () => setBrandHeight(el.getBoundingClientRect().height);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // ---- SW connection (contract: do not change message shapes) ----
   useEffect(() => {
@@ -187,10 +205,15 @@ export function App() {
   // why an inner height-pinned scroll region doesn't reliably work in a Chrome side panel) — this
   // is the same scroll container position:sticky above already anchors against, so it needs no
   // CSS height-chain of its own and works regardless of how the side panel reports its viewport.
+  // Gated on `tab === 'agent'` (and depends on `tab`): a run keeps streaming `events` into state
+  // even while a different tab (e.g. Settings) is showing — without the gate this would yank that
+  // tab's scroll position on every event, and without `tab` in the deps, switching back to Agent
+  // mid-run wouldn't catch up to the latest activity until the next event arrived.
   const pastTurnsCountForScroll = (sessions.find((s) => s.id === activeSessionId)?.turns.length ?? 0);
   useEffect(() => {
+    if (tab !== 'agent') return;
     window.scrollTo({ top: document.documentElement.scrollHeight });
-  }, [events, pastTurnsCountForScroll, running]);
+  }, [events, pastTurnsCountForScroll, running, tab]);
 
   // While Ollama is down, poll the connection so the panel reconnects on its own the moment the
   // user starts `ollama serve` — no click needed. (The extension can't launch the process itself.)
@@ -247,7 +270,9 @@ export function App() {
 
   return (
     <div className="app">
-      <Brand />
+      <div ref={brandRef}>
+        <Brand />
+      </div>
       <Tabs tab={tab} onTab={setTab} />
 
       <div className="content" role="tabpanel">
@@ -257,7 +282,7 @@ export function App() {
 
         {tab === 'agent' && (
           <div className="agent-tab">
-            <div className="agent-tab-header">
+            <div className="agent-tab-header" style={{ top: brandHeight }}>
               {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
 
               <SessionSwitcher
