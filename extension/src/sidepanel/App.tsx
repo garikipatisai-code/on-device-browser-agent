@@ -208,12 +208,15 @@ export function App() {
   // Gated on `tab === 'agent'` (and depends on `tab`): a run keeps streaming `events` into state
   // even while a different tab (e.g. Settings) is showing — without the gate this would yank that
   // tab's scroll position on every event, and without `tab` in the deps, switching back to Agent
-  // mid-run wouldn't catch up to the latest activity until the next event arrived.
+  // mid-run wouldn't catch up to the latest activity until the next event arrived. `status` is also
+  // a dependency: RunState's plan checklist can advance (a step going active/completed/failed) via
+  // a 'status' SW message with no coincident `events` append, which would otherwise leave the view
+  // stale until the next unrelated event streamed in.
   const pastTurnsCountForScroll = (sessions.find((s) => s.id === activeSessionId)?.turns.length ?? 0);
   useEffect(() => {
     if (tab !== 'agent') return;
     window.scrollTo({ top: document.documentElement.scrollHeight });
-  }, [events, pastTurnsCountForScroll, running, tab]);
+  }, [events, pastTurnsCountForScroll, running, tab, status]);
 
   // While Ollama is down, poll the connection so the panel reconnects on its own the moment the
   // user starts `ollama serve` — no click needed. (The extension can't launch the process itself.)
