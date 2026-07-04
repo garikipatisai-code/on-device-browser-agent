@@ -105,6 +105,9 @@ export class Orchestrator {
   private facts: Fact[] = [];
   private sessionId: string | null = null;
   private priorSummary = '';
+  /** Set by plan() when the planner signals GOAL isn't actionable — checked once by
+   *  runUntilTerminal right after planning, before entering the execute/evaluate loop. */
+  private plannerNoGoal = false;
   // How many times a success finish failed verification this task (bounds self-correction).
   private verifyAttempts = 0;
   // Real executor-turn count this task (for RunResult.turns; recentActions is capped at 5).
@@ -169,6 +172,7 @@ export class Orchestrator {
     this.sourceUrls = new Set();
     this.steerNotes = [];
     this.runDirty = false;
+    this.plannerNoGoal = false;
     this.dirtyReason = '';
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
     this.taskId = ulid();
@@ -217,6 +221,13 @@ export class Orchestrator {
       this.opts.seedPlan && this.opts.seedPlan.length
         ? await this.seedPlanInto(hot, this.opts.seedPlan)
         : await this.plan(hot);
+
+    // The planner determined GOAL isn't actionable — finish immediately rather than dispatching a
+    // fake step to the Executor (which has no tool that can satisfy "please provide a goal" and
+    // would just loop). Never true on the seedPlan path (askPage always has a real forced step).
+    if (this.plannerNoGoal) {
+      return this.finishOk(hot, 'blocked', 'I need a clearer goal to work with — could you tell me what you\'d like me to do?');
+    }
 
     while (turn < maxTurns) {
       this.assertNotAborted();
@@ -391,6 +402,13 @@ export class Orchestrator {
     );
     if (out.promptEvalCount && out.evalCount) {
       this.observeTokens(buildPlannerMessages(this.commonCtx(hot)), out.promptEvalCount);
+    }
+    this.plannerNoGoal = !!out.noGoal;
+    if (out.noGoal) {
+      // Nothing to apply/emit — there's no real plan. runUntilTerminal checks plannerNoGoal
+      // immediately after this call and finishes as 'blocked' before the loop ever starts.
+      this.emit({ kind: 'role.end', ts: Date.now(), role: 'planner', ms: performance.now() - t0 });
+      return hot;
     }
     hot = await this.applyPlan(hot, out.plan);
     // The recipe-parity retry (inside runPlanner) is bounded to once per TASK, not once per

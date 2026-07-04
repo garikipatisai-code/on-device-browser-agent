@@ -34,6 +34,9 @@ export interface PlannerOutput {
    *  richer plan was adopted). The caller (orchestrator) persists this onto the shared per-task
    *  hot state (`recipeRetryUsed`) so it is never fired again for the same task. */
   retryFired?: boolean;
+  /** True iff the planner signaled GOAL isn't actionable ({"noGoal":true}). `plan` is a throwaway
+   *  empty plan in this case — the orchestrator must check this BEFORE using `plan` at all. */
+  noGoal?: boolean;
 }
 
 interface RawPlan {
@@ -42,10 +45,16 @@ interface RawPlan {
     successCriteria?: string;
     toolHint?: string;
   }>;
+  /** The planner's explicit signal that GOAL isn't an actionable task — see the prompt in
+   *  prompts/index.ts. Distinct from an empty/malformed steps array (which still retries). */
+  noGoal?: boolean;
 }
 
-function extractSteps(raw: string): Array<{ description: string; successCriteria?: string; toolHint?: string }> {
-  const parsed = parseJSONPermissive<RawPlan>(raw);
+function parseRawPlan(raw: string): RawPlan | null {
+  return parseJSONPermissive<RawPlan>(raw);
+}
+
+function extractSteps(parsed: RawPlan | null): Array<{ description: string; successCriteria?: string; toolHint?: string }> {
   return (parsed?.steps ?? [])
     .filter((s) => typeof s?.description === 'string')
     .map((s) => ({ description: s.description!, successCriteria: s.successCriteria, toolHint: s.toolHint }));
@@ -63,7 +72,11 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
     numCtx: input.numCtx ?? NUM_CTX,
   });
   let raw = resp.message.content ?? '';
-  let steps = extractSteps(raw);
+  let parsed = parseRawPlan(raw);
+  if (parsed?.noGoal === true) {
+    return { plan: newPlan([]), raw, noGoal: true, promptEvalCount: resp.promptEvalCount, evalCount: resp.evalCount };
+  }
+  let steps = extractSteps(parsed);
   if (steps.length === 0) {
     // A small model occasionally emits a wrong-shaped or empty plan even under format:json
     // (e.g. {"plan":[...]} or {}). Retry once with an explicit shape reminder before aborting the
@@ -86,7 +99,11 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
       numCtx: input.numCtx ?? NUM_CTX,
     });
     raw = resp.message.content ?? '';
-    steps = extractSteps(raw);
+    parsed = parseRawPlan(raw);
+    if (parsed?.noGoal === true) {
+      return { plan: newPlan([]), raw, noGoal: true, promptEvalCount: resp.promptEvalCount, evalCount: resp.evalCount };
+    }
+    steps = extractSteps(parsed);
   }
   if (steps.length === 0) {
     throw new Error(`Planner returned no usable steps. Raw: ${raw.slice(0, 200)}`);
@@ -128,7 +145,7 @@ export async function runPlanner(input: PlannerInput): Promise<PlannerOutput> {
       signal: input.signal,
       numCtx: input.numCtx ?? NUM_CTX,
     });
-    const s2 = extractSteps(r2.message.content ?? '');
+    const s2 = extractSteps(parseRawPlan(r2.message.content ?? ''));
     if (s2.length > steps.length) {
       steps = s2;
       raw = r2.message.content ?? '';

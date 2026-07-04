@@ -2045,3 +2045,36 @@ describe('orchestrator — session continuation', () => {
     expect(found.turns[0].summary).toBe('User aborted');
   });
 });
+
+describe('orchestrator — non-actionable input', () => {
+  it('a planner that signals no actionable goal finishes immediately as blocked, without invoking the executor or evaluator', async () => {
+    const roleCalls: Record<string, number> = {};
+    const ollama = makeFakeOllama(
+      { planner: [rawResponse({ content: JSON.stringify({ noGoal: true }) })] },
+      { onChat: (_model, role) => { roleCalls[role] = (roleCalls[role] ?? 0) + 1; } },
+    );
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const initial = await orch.start('Hi');
+    const result = await orch.runUntilTerminal(initial);
+
+    expect(result.phase).toBe('DONE');
+    expect(result.verdict).toBe('blocked');
+    expect(roleCalls.planner).toBe(1);
+    expect(roleCalls.executor).toBeUndefined();
+    expect(roleCalls.evaluator).toBeUndefined();
+  });
+
+  it('a normal actionable goal is unaffected — planner still returns real steps and the run proceeds', async () => {
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'search for the item', successCriteria: 'results shown' }] }) })],
+      executor: [rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] })],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const initial = await orch.start('find a wireless mouse under $30');
+    const result = await orch.runUntilTerminal(initial);
+
+    expect(result.phase).toBe('DONE');
+    expect(result.verdict).toBe('success');
+  });
+});
