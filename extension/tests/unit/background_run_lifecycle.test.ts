@@ -245,7 +245,7 @@ describe('session commands', () => {
     });
 
     expect(bg.state().activeSessionId).toBeNull();
-    void bg.handleStart('a goal with no session active');
+    void bg.handleStart('a goal with no session active', undefined, true);
     await flush();
     expect(bg.state().activeSessionId).not.toBeNull();
     const sessions = await listSessions();
@@ -277,7 +277,7 @@ describe('session commands', () => {
       return liveOrch as unknown as Orchestrator;
     });
 
-    void bg.handleStart('a follow-up goal');
+    void bg.handleStart('a follow-up goal', undefined, true);
     await flush();
     expect(bg.state().activeSessionId).toBe(existing);
     const sessions = await listSessions();
@@ -401,6 +401,40 @@ describe('session commands', () => {
     const found = sessions.find((s) => s.id === sessionId)!;
     expect(found.turns[0]).toEqual({ taskId: 'task-fixed', goal: 'the goal', verdict: 'success', summary: 'the answer' });
 
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
+
+  it('handleStart without autoSession (the agent.askPage call shape) stays sessionless when none is active', async () => {
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    expect(bg.state().activeSessionId).toBeNull();
+    // Same call shape as the agent.askPage case: goal + seedPlan, no third argument.
+    void bg.handleStart('what does this page say?', [
+      {
+        description: 'read the page',
+        successCriteria: 'answered',
+      },
+    ]);
+    await flush();
+    expect(bg.state().activeSessionId).toBeNull(); // no session auto-created
+    expect((await listSessions()).length).toBe(0);
+
+    liveOrch!.finishRun();
+    await flush();
     globalThis.fetch = origFetch;
     bg.setOrchestratorFactory(null);
   });

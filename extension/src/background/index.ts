@@ -208,7 +208,11 @@ async function crashResume(): Promise<void> {
 }
 void crashResume();
 
-async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']) {
+async function handleStart(
+  goal: string,
+  seedPlan?: OrchestratorOpts['seedPlan'],
+  autoSession = false,
+) {
   log('handleStart goal=', JSON.stringify(goal));
   if (_orch || _starting) {
     log('handleStart: a task is already running — rejecting');
@@ -216,13 +220,16 @@ async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']
     return;
   }
   _starting = true; // held across the session-auto-create + preflight await window, until _orch is set
-  // Auto-continue by default: a goal with no active session starts one, so a follow-up goal
-  // naturally lands in the same chat without an explicit "New chat" click first. Lives here
-  // (not in the port's switch-case) so every caller — agent.start, agent.askPage, and tests
-  // that call handleStart directly — gets it, not just one call site. Guarded by _starting
-  // above (set BEFORE this await) so two back-to-back handleStart calls can't both pass the
-  // top guard and both auto-create a session.
-  if (!_activeSessionId) {
+  // Auto-continue by default, but ONLY for agent.start (autoSession=true): a goal with no active
+  // session starts one, so a follow-up goal naturally lands in the same chat without an explicit
+  // "New chat" click first. agent.askPage passes no third argument (autoSession defaults to
+  // false) — "Ask about this page" is a quick utility, not a chat message, and must stay
+  // sessionless when none is active (spec: docs/superpowers/specs/2026-07-04-chat-sessions-
+  // frontend-design.md, "Auto-continuation, scoped to agent.start"). Lives here (not in the
+  // port's switch-case) so it can still run for tests that call handleStart directly. Guarded by
+  // _starting above (set BEFORE this await) so two back-to-back handleStart calls can't both pass
+  // the top guard and both auto-create a session.
+  if (autoSession && !_activeSessionId) {
     const s = await createSession();
     _activeSessionId = s.id;
     await pushSessions();
@@ -445,7 +452,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
             // orchestrator then runs as a top-level task sustained by the 20s
             // keepalive, with no cumulative SW lifetime limit. handleStart has its
             // own try/catch/finally, so detaching loses no error handling.
-            void handleStart(cmd.goal);
+            // autoSession=true: only agent.start auto-creates a session (see handleStart).
+            void handleStart(cmd.goal, undefined, true);
             break;
           case 'agent.askPage':
             // "Ask this page" fast path: seed a 1-step read-the-current-page-and-answer plan so
