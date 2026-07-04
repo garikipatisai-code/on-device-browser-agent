@@ -126,7 +126,8 @@ async function handleQuickChat(goal: string) {
   let summary: string;
   try {
     summary = await quickChatReply(ollama, settings.executorModel, goal);
-  } catch {
+  } catch (err) {
+    log('quick chat failed, falling back:', (err as Error).message);
     summary = QUICK_CHAT_FALLBACK;
   }
   broadcast({ type: 'append', event: { kind: 'finish', ts: Date.now(), verdict: 'chat', summary } });
