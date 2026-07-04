@@ -1965,7 +1965,11 @@ describe('orchestrator — session continuation', () => {
 
     const finalSessions = await listSessions();
     const finalSession = finalSessions.find((s) => s.id === session.id)!;
-    expect(finalSession.turnIds.length).toBe(2);
+    expect(finalSession.turns.length).toBe(2);
+    expect(finalSession.turns[0].goal).toBe('find city alpha population');
+    expect(finalSession.turns[0].verdict).toBe('success');
+    expect(finalSession.turns[1].goal).toBe('what was the population again?');
+    expect(finalSession.turns[1].verdict).toBe('success');
   });
 
   it('a turn started with no sessionId behaves exactly as before (byte-identical baseline)', async () => {

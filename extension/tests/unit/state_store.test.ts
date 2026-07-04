@@ -22,6 +22,7 @@ import {
   setScratchpad,
   toStatus,
   touchHot,
+  updateSessionTurnResult,
   _testing,
 } from '@/background/state_store';
 import { resetStorage } from '../helpers';
@@ -136,7 +137,7 @@ describe('sessions', () => {
     const listed = await listSessions();
     expect(listed.map((s) => s.id).sort()).toEqual([s1.id, s2.id].sort());
     expect(s1.title).toBe('');
-    expect(s1.turnIds).toEqual([]);
+    expect(s1.turns).toEqual([]);
 
     await deleteSession(s1.id);
     const afterDelete = await listSessions();
@@ -155,13 +156,16 @@ describe('sessions', () => {
     expect(listed[1].id).toBe(newer.id);
   });
 
-  it('appendTurnToSession appends the taskId and sets the title from the first turn only', async () => {
+  it('appendTurnToSession appends a {taskId, goal} turn and sets the title from the first turn only', async () => {
     const s = await createSession();
     await appendTurnToSession(s.id, 'task-1', 'find the population of Austin');
     await appendTurnToSession(s.id, 'task-2', 'now do Seattle too');
     const listed = await listSessions();
     const found = listed.find((x) => x.id === s.id)!;
-    expect(found.turnIds).toEqual(['task-1', 'task-2']);
+    expect(found.turns).toEqual([
+      { taskId: 'task-1', goal: 'find the population of Austin' },
+      { taskId: 'task-2', goal: 'now do Seattle too' },
+    ]);
     expect(found.title).toBe('find the population of Austin');
   });
 
@@ -171,6 +175,40 @@ describe('sessions', () => {
     await appendTurnToSession(s.id, 'task-1', longGoal);
     const listed = await listSessions();
     expect(listed[0].title.length).toBeLessThanOrEqual(80);
+  });
+
+  it('updateSessionTurnResult patches the matching turn by taskId', async () => {
+    const s = await createSession();
+    await appendTurnToSession(s.id, 'task-1', 'goal one');
+    await appendTurnToSession(s.id, 'task-2', 'goal two');
+    await updateSessionTurnResult(s.id, 'task-1', 'success', 'first answer');
+    const listed = await listSessions();
+    const found = listed.find((x) => x.id === s.id)!;
+    expect(found.turns).toEqual([
+      { taskId: 'task-1', goal: 'goal one', verdict: 'success', summary: 'first answer' },
+      { taskId: 'task-2', goal: 'goal two' },
+    ]);
+  });
+
+  it('updateSessionTurnResult caps the summary at 500 chars and redacts PII', async () => {
+    const s = await createSession();
+    await appendTurnToSession(s.id, 'task-1', 'goal one');
+    const long = 'y'.repeat(1000);
+    await updateSessionTurnResult(s.id, 'task-1', 'success', long);
+    const listed = await listSessions();
+    expect(listed[0].turns[0].summary!.length).toBe(500);
+
+    await updateSessionTurnResult(s.id, 'task-1', 'success', 'reach jane.doe@example.com for details');
+    const relisted = await listSessions();
+    expect(relisted[0].turns[0].summary).toContain('[REDACTED: EMAIL]');
+    expect(relisted[0].turns[0].summary).not.toContain('jane.doe@example.com');
+  });
+
+  it('updateSessionTurnResult is a no-op when the session or turn does not exist', async () => {
+    await expect(updateSessionTurnResult('missing-session', 'task-1', 'success', 'x')).resolves.toBeUndefined();
+    const s = await createSession();
+    await expect(updateSessionTurnResult(s.id, 'missing-task', 'success', 'x')).resolves.toBeUndefined();
+    expect((await listSessions())[0].turns).toEqual([]);
   });
 });
 

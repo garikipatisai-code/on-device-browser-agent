@@ -17,6 +17,7 @@ import {
   saveSessionContext,
   setScratchpad,
   touchHot,
+  updateSessionTurnResult,
 } from '@/background/state_store';
 import type { ToolRegistry } from './tools/registry';
 import type { ToolContext, ToolResult } from './tools/registry';
@@ -179,8 +180,9 @@ export class Orchestrator {
       this.facts = carried.facts;
       this.priorSummary = carried.lastSummary;
       // Recorded at start (not after finishOk/abortNow) so a future UI can show an in-progress turn;
-      // this means turnIds can include a turn that never reaches a terminal state (e.g. an unhandled
-      // crash) — sessionContext's own facts/summary only reflect turns that actually finished.
+      // this means turns can include one that never reaches a terminal state (e.g. an unhandled
+      // crash), left with no verdict/summary — sessionContext's own facts/summary only reflect
+      // turns that actually finished.
       await appendTurnToSession(this.sessionId, this.taskId, trimmed);
     } else {
       this.facts = [];
@@ -835,7 +837,10 @@ export class Orchestrator {
   ): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
-    if (this.sessionId) await saveSessionContext(this.sessionId, this.facts, `${verdict}: ${summary}`);
+    if (this.sessionId) {
+      await saveSessionContext(this.sessionId, this.facts, `${verdict}: ${summary}`);
+      await updateSessionTurnResult(this.sessionId, this.taskId, verdict, summary);
+    }
     await this.settleRecipe(verdict);
     // Auto-learn ONLY from a success that NO recipe guided — i.e. a genuinely new flow. If a recipe
     // (user/builtin/auto) already drove the run, re-recording is redundant and worse: saveWorkflow's
@@ -864,7 +869,10 @@ export class Orchestrator {
   private async abortNow(hot: AgentStateHot, reason: string): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'ABORTED' });
-    if (this.sessionId) await saveSessionContext(this.sessionId, this.facts, `aborted: ${reason}`);
+    if (this.sessionId) {
+      await saveSessionContext(this.sessionId, this.facts, `aborted: ${reason}`);
+      await updateSessionTurnResult(this.sessionId, this.taskId, 'aborted', reason);
+    }
     await this.settleRecipe('aborted'); // a failed run quarantines whichever recipe drove it
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
     return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };

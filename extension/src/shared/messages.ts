@@ -133,6 +133,15 @@ export type PanelCommand =
   | { type: 'session.select'; sessionId: string }
   | { type: 'session.delete'; sessionId: string };
 
+/** One turn's identity + outcome inside a session's transcript. `verdict`/`summary` are
+ *  undefined until the turn reaches a terminal state (set by updateSessionTurnResult). */
+export interface SessionTurn {
+  taskId: string;
+  goal: string;
+  verdict?: string;
+  summary?: string;
+}
+
 /** A chat-style session: an ordered list of turns (each turn is one Orchestrator run,
  *  its own taskId) sharing carried-forward context (facts + last summary). */
 export interface Session {
@@ -140,7 +149,7 @@ export interface Session {
   title: string;
   createdAt: number;
   lastActiveAt: number;
-  turnIds: string[];
+  turns: SessionTurn[];
 }
 
 /** A recipe as shown/edited in the Recipes tab (UI mirror of the agent's Workflow). */

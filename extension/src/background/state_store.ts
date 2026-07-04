@@ -422,7 +422,7 @@ export async function createSession(): Promise<Session> {
     title: '',
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
-    turnIds: [],
+    turns: [],
   };
   const d = await db();
   await d.put('sessions', s);
@@ -445,7 +445,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await d.delete('sessionContext', sessionId);
 }
 
-/** Appends a turn's taskId to the session, sets the title from the FIRST turn's goal only
+/** Appends a turn (taskId + goal) to the session, sets the title from the FIRST turn's goal only
  *  (subsequent turns don't overwrite it), and bumps lastActiveAt. */
 export async function appendTurnToSession(sessionId: string, taskId: string, goal?: string): Promise<void> {
   try {
@@ -454,13 +454,38 @@ export async function appendTurnToSession(sessionId: string, taskId: string, goa
     if (!cur) return;
     const next: Session = {
       ...cur,
-      turnIds: [...cur.turnIds, taskId],
+      turns: [...(cur.turns ?? []), { taskId, goal: goal ?? '' }],
       title: cur.title || (goal ?? '').slice(0, SESSION_TITLE_MAX),
       lastActiveAt: Date.now(),
     };
     await d.put('sessions', next);
   } catch {
     /* best-effort, same pattern as loadSessionContext/saveSessionContext */
+  }
+}
+
+/** Patches the matching turn's verdict/summary once it reaches a terminal state. Same redaction
+ *  boundary + 500-char cap as saveSessionContext's lastSummary — this is the second place a turn's
+ *  summary is persisted (the first is inside that turn's own `finish` event), so both copies must
+ *  go through `redact` before landing in IndexedDB. */
+export async function updateSessionTurnResult(
+  sessionId: string,
+  taskId: string,
+  verdict: string,
+  summary: string,
+): Promise<void> {
+  try {
+    const d = await db();
+    const cur = (await d.get('sessions', sessionId)) as Session | undefined;
+    if (!cur) return;
+    const turns = (cur.turns ?? []).map((t) =>
+      t.taskId === taskId
+        ? { ...t, verdict, summary: redact(summary.slice(0, SESSION_SUMMARY_MAX)) }
+        : t,
+    );
+    await d.put('sessions', { ...cur, turns });
+  } catch {
+    /* best-effort, same pattern as saveSessionContext */
   }
 }
 
