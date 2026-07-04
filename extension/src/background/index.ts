@@ -123,7 +123,7 @@ async function handleSessionNew() {
 }
 
 async function handleSessionSelect(sessionId: string) {
-  if (_orch) {
+  if (_orch || _starting) {
     broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
     return;
   }
