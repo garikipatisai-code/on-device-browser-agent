@@ -6,7 +6,7 @@ import { ToolRegistry } from '@/agent/tools/registry';
 import { z } from 'zod';
 import { echoTool, finishTool, nextStepTool } from '@/agent/tools/core';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
-import { loadHot, clearHot, _setHot, loadEvents } from '@/background/state_store';
+import { loadHot, clearHot, _setHot, loadEvents, createSession, listSessions } from '@/background/state_store';
 import { loadWorkflows, upsertUserWorkflow, markWorkflowTrusted, saveWorkflow, type Workflow } from '@/agent/workflow_memory';
 import { makeFakeOllama, rawResponse, resetStorage } from '../helpers';
 
@@ -1893,5 +1893,104 @@ describe('orchestrator — recipe-parity retry × outer replan loop does not com
     const hot = await loadHot();
     expect(hot?.recipeRetryUsed).toBe(true); // persisted for the rest of the task
     expect(hot?.replanCount).toBeGreaterThanOrEqual(1); // the outer loop's own count is untouched/unbounded by this flag
+  });
+});
+
+describe('orchestrator — session continuation', () => {
+  it('carries a grounded fact from turn 1 into turn 2 of the same session, with no re-observation', async () => {
+    const session = await createSession();
+
+    const reg = buildRegistry();
+    let ariaCalls = 0;
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        ariaCalls += 1;
+        return { ok: true, content: 'City Alpha population: 111,111 residents', data: { url: 'https://cities.test/alpha' } };
+      },
+    });
+
+    // Turn 1: reads the page, then advances via next_step so the evaluator runs and captures a
+    // grounded `fact` into the ledger (a direct executor `finish` never calls the evaluator/
+    // captureFact — the fact must be captured on THIS turn for saveSessionContext to have anything
+    // beyond `lastSummary` to carry forward), then finishes via the evaluator's own finishVerdict.
+    const ollama1 = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read city alpha', successCriteria: 'population reported' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'next_step', args: { reason: 'population reported' } }] }),
+      ],
+      evaluator: [
+        rawResponse({
+          content: JSON.stringify({
+            verdict: 'PASS', reason: 'population reported', shouldReplan: false,
+            finishVerdict: 'success', finishSummary: 'City Alpha population: 111,111',
+            fact: 'City Alpha population: 111,111',
+          }),
+        }),
+      ],
+    });
+    const orch1 = new Orchestrator({ ollama: ollama1, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const initial1 = await orch1.start('find city alpha population', session.id);
+    const result1 = await orch1.runUntilTerminal(initial1);
+    expect(result1.phase).toBe('DONE');
+
+    // Turn 2, same session: asks a follow-up that only makes sense with turn 1's fact carried
+    // forward. No aria.extract call is scripted for the executor this turn — if the fact isn't
+    // carried into the grounding corpus, the finish would be rejected as ungrounded and the test's
+    // executor queue would run dry (makeFakeOllama returns {} which fails toolCall parsing).
+    const execPrompts2: string[] = [];
+    const ollama2 = makeFakeOllama(
+      {
+        planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'report the population again', successCriteria: 'population reported' }] }) })],
+        executor: [
+          rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'City Alpha population: 111,111' } }] }),
+        ],
+        evaluator: [],
+      },
+      { onChat: (_m, role, messages) => { if (role === 'planner') execPrompts2.push(JSON.stringify(messages)); } },
+    );
+    const orch2 = new Orchestrator({ ollama: ollama2, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const initial2 = await orch2.start('what was the population again?', session.id);
+    const result2 = await orch2.runUntilTerminal(initial2);
+
+    expect(result2.phase).toBe('DONE');
+    expect(result2.verdict).toBe('success');
+    // Turn 2's planner prompt must contain turn 1's carried summary.
+    expect(execPrompts2.join('\n')).toContain('111,111');
+    // No re-observation happened in turn 2 (only 1 aria.extract call total, from turn 1).
+    expect(ariaCalls).toBe(1);
+
+    const finalSessions = await listSessions();
+    const finalSession = finalSessions.find((s) => s.id === session.id)!;
+    expect(finalSession.turnIds.length).toBe(2);
+  });
+
+  it('a turn started with no sessionId behaves exactly as before (byte-identical baseline)', async () => {
+    const reg = buildRegistry();
+    reg.register({
+      name: 'aria.extract',
+      description: 'extract the page',
+      argsSchema: z.object({ tabId: z.number().int().optional() }),
+      async dispatch() {
+        return { ok: true, content: 'City Alpha population: 111,111 residents', data: { url: 'https://cities.test/alpha' } };
+      },
+    });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'read city alpha', successCriteria: 'population reported' }] }) })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'aria.extract', args: { tabId: 1 } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'City Alpha population: 111,111' } }] }),
+      ],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: reg, settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    // No sessionId argument at all — matches every pre-session call site (agent.start today).
+    const initial = await orch.start('find city alpha population');
+    const result = await orch.runUntilTerminal(initial);
+    expect(result.phase).toBe('DONE');
+    expect(result.verdict).toBe('success');
   });
 });

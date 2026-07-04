@@ -8,10 +8,13 @@ import {
   _setHot,
   addFinding,
   appendEvent,
+  appendTurnToSession,
   clearHot,
   getScratchpad,
   loadHot,
+  loadSessionContext,
   patchHot,
+  saveSessionContext,
   setScratchpad,
   touchHot,
 } from '@/background/state_store';
@@ -99,6 +102,8 @@ export class Orchestrator {
   // Everything read this task (capped) — the corpus the finish-verifier grounds against.
   private observedText = '';
   private facts: Fact[] = [];
+  private sessionId: string | null = null;
+  private priorSummary = '';
   // How many times a success finish failed verification this task (bounds self-correction).
   private verifyAttempts = 0;
   // Real executor-turn count this task (for RunResult.turns; recentActions is capped at 5).
@@ -144,7 +149,7 @@ export class Orchestrator {
     this.helperProvider = localProvider(opts.ollama);
   }
 
-  async start(goal: string): Promise<AgentStateHot> {
+  async start(goal: string, sessionId?: string | null): Promise<AgentStateHot> {
     const trimmed = goal.trim();
     if (!trimmed) throw new Error('goal is empty');
     this.est.reset();
@@ -152,7 +157,6 @@ export class Orchestrator {
     this.recentActions = [];
     this.lastRead = null;
     this.observedText = '';
-    this.facts = [];
     this.verifyAttempts = 0;
     this.turns = 0;
     this.consecutiveFatal = 0;
@@ -169,6 +173,16 @@ export class Orchestrator {
     this.taskId = ulid();
     this.numCtx = clampNumCtx(this.opts.settings.numCtx);
     this.caps = capsFor(this.numCtx);
+    this.sessionId = sessionId ?? null;
+    if (this.sessionId) {
+      const carried = await loadSessionContext(this.sessionId);
+      this.facts = carried.facts;
+      this.priorSummary = carried.lastSummary;
+      await appendTurnToSession(this.sessionId, this.taskId, trimmed);
+    } else {
+      this.facts = [];
+      this.priorSummary = '';
+    }
     const hot = await _setHot(trimmed);
     await setScratchpad(this.taskId, '');
     this.log('info', `Task started: ${trimmed}`);
@@ -694,6 +708,7 @@ export class Orchestrator {
       profileBlock: renderProfileBlock(this.opts.settings.profileJson),
       steerNotes: this.steerNotes.length ? [...this.steerNotes] : undefined,
       preferences: (this.opts.settings.preferences ?? '').trim() || undefined,
+      priorSummary: this.priorSummary || undefined,
       pageContentBlock: this.lastRead
         ? wrapPageContent(
             `${this.lastRead.tool}${this.lastRead.url ? ` url=${this.lastRead.url}` : ''}`,
@@ -817,6 +832,7 @@ export class Orchestrator {
   ): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'DONE' });
+    if (this.sessionId) await saveSessionContext(this.sessionId, this.facts, `${verdict}: ${summary}`);
     await this.settleRecipe(verdict);
     // Auto-learn ONLY from a success that NO recipe guided — i.e. a genuinely new flow. If a recipe
     // (user/builtin/auto) already drove the run, re-recording is redundant and worse: saveWorkflow's
@@ -845,6 +861,7 @@ export class Orchestrator {
   private async abortNow(hot: AgentStateHot, reason: string): Promise<RunResult> {
     await this.cleanupTabs(hot);
     await patchHot({ phase: 'ABORTED' });
+    if (this.sessionId) await saveSessionContext(this.sessionId, this.facts, `aborted: ${reason}`);
     await this.settleRecipe('aborted'); // a failed run quarantines whichever recipe drove it
     this.emit({ kind: 'finish', ts: Date.now(), verdict: 'aborted', summary: reason });
     return { phase: 'ABORTED', summary: reason, verdict: 'aborted', turns: this.turns, replans: hot.replanCount };
