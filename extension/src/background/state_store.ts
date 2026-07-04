@@ -36,6 +36,7 @@ export interface AgentStateHot {
 
 const HOT_KEY = 'agent.hot';
 const SETTINGS_KEY = 'agent.settings';
+const ACTIVE_SESSION_KEY = 'agent.activeSessionId';
 
 // ---------- Mutex (FIFO, single-slot) ----------
 
@@ -184,6 +185,20 @@ export function toStatus(hot: AgentStateHot | null): AgentStatus {
     replanCount: hot.replanCount,
     ownedTabs: hot.ownedTabs,
   };
+}
+
+// ---------- Active session pointer ----------
+// Persisted separately from AgentStateHot (which is scoped to one in-flight task and cleared on
+// completion) — this pointer needs to survive well past any single task's lifetime, across
+// however many SW restarts happen between messages in the same chat.
+
+export async function loadActiveSessionId(): Promise<string | null> {
+  return ((await _storage.get(ACTIVE_SESSION_KEY)) as string | undefined) ?? null;
+}
+
+export async function saveActiveSessionId(id: string | null): Promise<void> {
+  if (id === null) await _storage.remove(ACTIVE_SESSION_KEY);
+  else await _storage.set(ACTIVE_SESSION_KEY, id);
 }
 
 // ---------- Settings ----------

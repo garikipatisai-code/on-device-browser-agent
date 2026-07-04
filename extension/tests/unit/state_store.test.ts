@@ -8,6 +8,7 @@ import {
   deleteSession,
   getScratchpad,
   listSessions,
+  loadActiveSessionId,
   loadEvents,
   loadHot,
   loadSessionContext,
@@ -16,6 +17,7 @@ import {
   memoryList,
   memorySet,
   patchHot,
+  saveActiveSessionId,
   saveSessionContext,
   saveSettings,
   setDomainTier,
@@ -127,6 +129,20 @@ describe('scratchpad + memory + events', () => {
     const all = await loadEvents('t1');
     expect(all.length).toBe(1);
     expect(all[0].kind).toBe('log');
+  });
+});
+
+describe('active session pointer', () => {
+  it('round-trips a saved id', async () => {
+    expect(await loadActiveSessionId()).toBeNull();
+    await saveActiveSessionId('session-123');
+    expect(await loadActiveSessionId()).toBe('session-123');
+  });
+
+  it('saving null removes the key entirely, not just sets it to null', async () => {
+    await saveActiveSessionId('session-123');
+    await saveActiveSessionId(null);
+    expect(await loadActiveSessionId()).toBeNull();
   });
 });
 
