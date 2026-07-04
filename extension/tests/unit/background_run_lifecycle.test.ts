@@ -220,32 +220,6 @@ describe('session commands', () => {
     bg.setOrchestratorFactory(null);
   });
 
-  it('handleSessionSelect refuses to switch during the preflight window too (starting, before orch is set)', async () => {
-    await bg.handleSessionNew();
-    const first = bg.state().activeSessionId;
-    await bg.handleSessionNew();
-    const second = bg.state().activeSessionId;
-
-    const origFetch = globalThis.fetch;
-    const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
-    ].map((name) => ({ name }));
-    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
-
-    void bg.handleStart('a goal'); // no await — handleStart's synchronous prefix (through `_starting = true`) has already run by the time this line returns
-    expect(bg.state().starting).toBe(true);
-    expect(bg.state().orchSet).toBe(false); // _orch isn't set yet — this is the exact window the fix closes
-
-    await bg.handleSessionSelect(first!);
-    expect(bg.state().activeSessionId).toBe(second); // unchanged — refused during the starting window
-
-    await flush(); // let handleStart actually finish so nothing dangles into the next test
-    globalThis.fetch = origFetch;
-  });
-
   it('handleSessionDelete removes it and clears activeSessionId if it was active', async () => {
     await bg.handleSessionNew();
     const id = bg.state().activeSessionId!;

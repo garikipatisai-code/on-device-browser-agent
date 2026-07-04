@@ -123,6 +123,8 @@ async function handleSessionNew() {
 }
 
 async function handleSessionSelect(sessionId: string) {
+  // Matches handleStart's own guard: _starting closes the async preflight gap
+  // (ping/listModels) before _orch is set, so this must check both, not just _orch.
   if (_orch || _starting) {
     broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
     return;
