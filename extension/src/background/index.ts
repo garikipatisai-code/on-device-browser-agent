@@ -616,6 +616,10 @@ export const _testing = {
   setOrchestratorFactory(fn: ((opts: OrchestratorOpts) => Orchestrator) | null) {
     _makeOrchestrator = fn ?? ((opts) => new Orchestrator(opts));
   },
+  // Registers a fake panel so broadcast() has something to post to, and returns the array it
+  // posts into — the only way tests can observe a broadcast's actual payload rather than just its
+  // downstream data effects (e.g. listSessions()), which is what every existing broadcast-adjacent
+  // test in this file checks instead.
   addTestPanel(): SwUpdate[] {
     const messages: SwUpdate[] = [];
     _panels.add({ postMessage: (m: SwUpdate) => messages.push(m) } as unknown as chrome.runtime.Port);
