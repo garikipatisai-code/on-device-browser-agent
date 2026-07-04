@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
 import type { Orchestrator } from '@/agent/orchestrator';
 import { _testing as bg } from '@/background/index';
-import { _setHot, listSessions, loadHot, patchHot } from '@/background/state_store';
+import {
+  _setHot,
+  createSession,
+  listSessions,
+  loadActiveSessionId,
+  loadHot,
+  patchHot,
+  saveActiveSessionId,
+} from '@/background/state_store';
 import { resetStorage } from '../helpers';
 
 // Drain pending micro+macrotasks so a detached handleStart can advance to its parked
@@ -114,6 +122,24 @@ describe('crash-resume: SW restart finds an in-flight task', () => {
     expect(await loadHot()).toBeNull();
     await bg.crashResume(); // must not throw on a missing hot record
     expect(await loadHot()).toBeNull();
+  });
+
+  it('restores a previously-saved activeSessionId when the session still exists', async () => {
+    const s = await createSession();
+    await saveActiveSessionId(s.id);
+
+    await bg.crashResume();
+
+    expect(bg.state().activeSessionId).toBe(s.id);
+  });
+
+  it('resets a stale activeSessionId to null when the saved session no longer exists', async () => {
+    await saveActiveSessionId('a-session-id-that-was-deleted');
+
+    await bg.crashResume();
+
+    expect(bg.state().activeSessionId).toBeNull();
+    expect(await loadActiveSessionId()).toBeNull();
   });
 
   it('the lingering ABORTED does not persist forever — the next real agent.start overwrites it', async () => {

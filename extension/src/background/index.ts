@@ -7,9 +7,11 @@ import {
   createSession,
   deleteSession,
   listSessions,
+  loadActiveSessionId,
   loadHot,
   loadSettings,
   patchHot,
+  saveActiveSessionId,
   saveResumeFile,
   saveSettings,
   setDomainTier,
@@ -117,6 +119,16 @@ async function pushSessions() {
   broadcast({ type: 'sessions', sessions: await listSessions(), activeSessionId: _activeSessionId });
 }
 
+/** Every WRITE to _activeSessionId must go through here — a bare assignment would leave the
+ *  pointer unpersisted, and Chrome idle-killing the SW between chat messages (completely normal
+ *  mid-conversation) would then silently lose track of which session is active on the next
+ *  message. Routing all writes through one helper makes that structurally impossible for any
+ *  future mutation site too, not just today's four. */
+async function setActiveSessionId(id: string | null): Promise<void> {
+  _activeSessionId = id;
+  await saveActiveSessionId(id);
+}
+
 /** Fast path for chitchat (see quick_chat.ts) — no session, no Orchestrator, one lightweight
  *  model call. Falls back to a static reply if the call fails (Ollama down, timeout, etc.) rather
  *  than surfacing an error for what's supposed to be the most forgiving path in the app. */
@@ -141,7 +153,7 @@ async function handleSessionNew() {
     return;
   }
   const s = await createSession();
-  _activeSessionId = s.id;
+  await setActiveSessionId(s.id);
   await pushSessions();
 }
 
@@ -152,7 +164,7 @@ async function handleSessionSelect(sessionId: string) {
     broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
     return;
   }
-  _activeSessionId = sessionId;
+  await setActiveSessionId(sessionId);
   await pushSessions();
 }
 
@@ -164,7 +176,7 @@ async function handleSessionDelete(sessionId: string) {
     return;
   }
   await deleteSession(sessionId);
-  if (_activeSessionId === sessionId) _activeSessionId = null;
+  if (_activeSessionId === sessionId) await setActiveSessionId(null);
   await pushSessions();
 }
 
@@ -218,12 +230,24 @@ async function crashResume(): Promise<void> {
       console.warn('[browser-agent] crash-resume: found in-flight task, marking ABORTED');
       await patchHot({ phase: 'ABORTED' });
     }
+    const restored = await loadActiveSessionId();
+    // Defensive: don't resurrect a pointer to a session that no longer exists (e.g. IndexedDB
+    // was cleared independently of chrome.storage.local — the two aren't transactional).
+    if (restored && !(await listSessions()).some((s) => s.id === restored)) {
+      await saveActiveSessionId(null);
+    } else {
+      _activeSessionId = restored;
+    }
   } catch (err) {
     // Never let SW-startup state recovery become an unhandled rejection.
     console.warn('[browser-agent] crash-resume failed:', (err as Error)?.message);
   }
 }
-void crashResume();
+// Captured (not `void`-discarded) so port.onMessage can await it below — the panel's very first
+// command (e.g. session.list) could otherwise race ahead of this restoring _activeSessionId, since
+// this is now the first time SW startup does async work that anything the panel asks for depends
+// on (before this fix, nothing the panel requested on startup depended on crashResume finishing).
+const _crashResumeDone: Promise<void> = crashResume();
 
 async function handleStart(
   goal: string,
@@ -248,7 +272,7 @@ async function handleStart(
   // the top guard and both auto-create a session.
   if (autoSession && !_activeSessionId) {
     const s = await createSession();
-    _activeSessionId = s.id;
+    await setActiveSessionId(s.id);
     await pushSessions();
   }
   const settings = await loadSettings();
@@ -458,6 +482,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
       port.postMessage({ type: 'metrics', metrics: metricsSnapshot() } satisfies SwUpdate);
     })();
     port.onMessage.addListener(async (cmd: PanelCommand) => {
+      await _crashResumeDone;
       log('command received:', cmd.type);
       try {
         switch (cmd.type) {
