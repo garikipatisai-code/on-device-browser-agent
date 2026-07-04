@@ -138,7 +138,7 @@ export function App() {
           setActiveSessionId(msg.activeSessionId);
           break;
         case 'turnEvents':
-          setEvents(msg.events);
+          if (msg.taskId === expectedTurnTaskId.current) setEvents(msg.events);
           break;
         case 'models':
           if (msg.ok) {
@@ -221,8 +221,16 @@ export function App() {
   // React batches same-event state updates, so this effect never sees a stale/empty `sessions` for
   // a just-arrived `activeSessionId`.
   const prevSessionId = useRef<string | null | undefined>(undefined);
+  // Tracks the taskId whose trace we currently want displayed (or null if none is expected, e.g.
+  // right after "New chat"). Rapidly switching sessions (A -> B -> A) can leave two independent
+  // session.turnEvents requests in flight with no ordering guarantee on their responses; this ref
+  // is updated synchronously every time the reset effect below runs, so the 'turnEvents' handler
+  // in the SW-connection effect can discard a stale response for a session the user has since
+  // switched away from instead of blindly overwriting the currently-displayed trace.
+  const expectedTurnTaskId = useRef<string | null>(null);
   useEffect(() => {
     const lastTaskId = sessions.find((s) => s.id === activeSessionId)?.turns.at(-1)?.taskId;
+    expectedTurnTaskId.current = lastTaskId ?? null;
     if (prevSessionId.current === undefined) {
       prevSessionId.current = activeSessionId; // first update on mount
       if (lastTaskId) send({ type: 'session.turnEvents', taskId: lastTaskId });
