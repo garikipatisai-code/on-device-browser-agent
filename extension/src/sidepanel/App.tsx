@@ -181,6 +181,17 @@ export function App() {
     }
   }, [activeSessionId]);
 
+  // Auto-scroll to the latest content — matches ordinary chat-app behavior so the user isn't
+  // stuck manually scrolling down. Targets the document itself (window.scrollTo), not an inner
+  // ref: the panel scrolls as a normal document (see styles.css's html/body/#root comment for
+  // why an inner height-pinned scroll region doesn't reliably work in a Chrome side panel) — this
+  // is the same scroll container position:sticky above already anchors against, so it needs no
+  // CSS height-chain of its own and works regardless of how the side panel reports its viewport.
+  const pastTurnsCountForScroll = (sessions.find((s) => s.id === activeSessionId)?.turns.length ?? 0);
+  useEffect(() => {
+    window.scrollTo({ top: document.documentElement.scrollHeight });
+  }, [events, pastTurnsCountForScroll, running]);
+
   // While Ollama is down, poll the connection so the panel reconnects on its own the moment the
   // user starts `ollama serve` — no click needed. (The extension can't launch the process itself.)
   useEffect(() => {
@@ -245,30 +256,18 @@ export function App() {
         )}
 
         {tab === 'agent' && (
-          <>
-            {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
+          <div className="agent-tab">
+            <div className="agent-tab-header">
+              {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
 
-            <SessionSwitcher
-              sessions={sessions}
-              activeSessionId={activeSessionId}
-              onNew={() => send({ type: 'session.new' })}
-              onSelect={(id) => send({ type: 'session.select', sessionId: id })}
-              onDelete={(id) => send({ type: 'session.delete', sessionId: id })}
-            />
-
-            <Composer
-              running={running}
-              goal={goal}
-              onGoalChange={setGoal}
-              onRun={handleStart}
-              applyUrl={applyUrl}
-              onApplyUrlChange={setApplyUrl}
-              onApply={handleApply}
-              onAskPage={handleAskPage}
-              onSteer={handleSteer}
-              onStop={handleAbort}
-              showExamples={events.length === 0 && status.phase === 'IDLE'}
-            />
+              <SessionSwitcher
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                onNew={() => send({ type: 'session.new' })}
+                onSelect={(id) => send({ type: 'session.select', sessionId: id })}
+                onDelete={(id) => send({ type: 'session.delete', sessionId: id })}
+              />
+            </div>
 
             {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
 
@@ -301,7 +300,23 @@ export function App() {
             ) : (
               <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
             )}
-          </>
+
+            <div className="agent-tab-composer">
+              <Composer
+                running={running}
+                goal={goal}
+                onGoalChange={setGoal}
+                onRun={handleStart}
+                applyUrl={applyUrl}
+                onApplyUrlChange={setApplyUrl}
+                onApply={handleApply}
+                onAskPage={handleAskPage}
+                onSteer={handleSteer}
+                onStop={handleAbort}
+                showExamples={events.length === 0 && status.phase === 'IDLE'}
+              />
+            </div>
+          </div>
         )}
 
         {tab === 'settings' && (
