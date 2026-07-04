@@ -446,16 +446,19 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 /** Appends a turn (taskId + goal) to the session, sets the title from the FIRST turn's goal only
- *  (subsequent turns don't overwrite it), and bumps lastActiveAt. */
+ *  (subsequent turns don't overwrite it), and bumps lastActiveAt. The goal is redacted once and
+ *  reused for both the turn and the title — same redaction boundary as updateSessionTurnResult/
+ *  saveSessionContext, since Session is IndexedDB-durable across runs, not scoped to one turn. */
 export async function appendTurnToSession(sessionId: string, taskId: string, goal?: string): Promise<void> {
   try {
     const d = await db();
     const cur = (await d.get('sessions', sessionId)) as Session | undefined;
     if (!cur) return;
+    const redactedGoal = redact(goal ?? '');
     const next: Session = {
       ...cur,
-      turns: [...(cur.turns ?? []), { taskId, goal: goal ?? '' }],
-      title: cur.title || (goal ?? '').slice(0, SESSION_TITLE_MAX),
+      turns: [...(cur.turns ?? []), { taskId, goal: redactedGoal }],
+      title: cur.title || redactedGoal.slice(0, SESSION_TITLE_MAX),
       lastActiveAt: Date.now(),
     };
     await d.put('sessions', next);

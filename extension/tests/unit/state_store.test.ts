@@ -219,6 +219,17 @@ describe('sessions', () => {
     await expect(updateSessionTurnResult(s.id, 'missing-task', 'success', 'x')).resolves.toBeUndefined();
     expect((await listSessions())[0].turns).toEqual([]);
   });
+
+  it('redacts PII in the goal before persisting it into turns and title', async () => {
+    const s = await createSession();
+    await appendTurnToSession(s.id, 'task-1', 'email my resume to jane.doe@example.com');
+    const listed = await listSessions();
+    const found = listed.find((x) => x.id === s.id)!;
+    expect(found.turns[0].goal).toContain('[REDACTED: EMAIL]');
+    expect(found.turns[0].goal).not.toContain('jane.doe@example.com');
+    expect(found.title).toContain('[REDACTED: EMAIL]');
+    expect(found.title).not.toContain('jane.doe@example.com');
+  });
 });
 
 describe('sessionContext', () => {
