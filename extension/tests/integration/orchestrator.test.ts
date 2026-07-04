@@ -2021,4 +2021,27 @@ describe('orchestrator — session continuation', () => {
     const ctx = await loadSessionContext(session.id);
     expect(ctx.lastSummary.startsWith('aborted:')).toBe(true);
   });
+
+  it('an externally-aborted turn (Stop button / watchdog path) also writes back the session — not just the internal give-up path', async () => {
+    const session = await createSession();
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: JSON.stringify({ steps: [{ description: 'a', successCriteria: 'x' }] }) })],
+      executor: [],
+      evaluator: [],
+    });
+    const orch = new Orchestrator({ ollama, registry: buildRegistry(), settings: { ...DEFAULT_SETTINGS }, emit: () => undefined });
+    const initial = await orch.start('a goal that gets stopped externally', session.id);
+    // Don't call runUntilTerminal — simulate the user clicking Stop mid-run instead, exactly as
+    // background/index.ts's handleAbort() does (calls orch.abort() directly, not via the run loop).
+    void initial; // hot state from start() isn't needed further; abort() re-fetches its own via refreshHotMaybe()
+    await orch.abort('User aborted');
+
+    const ctx = await loadSessionContext(session.id);
+    expect(ctx.lastSummary).toBe('aborted: User aborted');
+
+    const sessions = await listSessions();
+    const found = sessions.find((s) => s.id === session.id)!;
+    expect(found.turns[0].verdict).toBe('aborted');
+    expect(found.turns[0].summary).toBe('User aborted');
+  });
 });

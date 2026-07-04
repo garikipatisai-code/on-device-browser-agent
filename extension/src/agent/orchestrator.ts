@@ -365,6 +365,10 @@ export class Orchestrator {
       this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `Aborting: ${reason}` });
       await this.cleanupTabs(hot);
       await patchHot({ phase: 'ABORTED' });
+      if (this.sessionId) {
+        await saveSessionContext(this.sessionId, this.facts, `aborted: ${reason}`);
+        await updateSessionTurnResult(this.sessionId, this.taskId, 'aborted', reason);
+      }
     } catch (err) {
       this.log('error', `Abort cleanup error: ${(err as Error).message}`);
     }
