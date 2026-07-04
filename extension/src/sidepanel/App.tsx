@@ -78,6 +78,30 @@ export function App() {
     return () => ro.disconnect();
   }, []);
 
+  // `.agent-tab` gets a JS-measured min-height so the composer (margin-top:auto, see styles.css)
+  // sits at the true bottom of a short conversation instead of leaving a dead gap — a CSS vh/%
+  // height chain can't do this reliably in a Chrome side panel (see styles.css's html/body/#root
+  // comment), but window.innerHeight is a runtime read of the actual viewport, not a CSS unit
+  // resolved against an ambiguous reference — a different mechanism, not just a different value.
+  // Deliberately min-height, never height+overflow:hidden: if this measurement is ever wrong, the
+  // worst case is an imperfect gap (today's existing symptom), not clipped/inaccessible content.
+  const agentTabRef = useRef<HTMLDivElement>(null);
+  const [agentMinHeight, setAgentMinHeight] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    const measure = () => {
+      const el = agentTabRef.current;
+      if (!el) return;
+      // getBoundingClientRect().top is relative to the CURRENT scroll position; adding scrollY
+      // converts it to the element's fixed position in the document, so this is correct regardless
+      // of where the page happens to be scrolled when the measurement runs.
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      setAgentMinHeight(Math.max(0, window.innerHeight - top - 16)); // 16 = --sp-4, .content's own bottom padding
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [brandHeight, tab]);
+
   // ---- SW connection (contract: do not change message shapes) ----
   useEffect(() => {
     const c = (globalThis as { chrome?: typeof chrome }).chrome;
@@ -284,7 +308,7 @@ export function App() {
         )}
 
         {tab === 'agent' && (
-          <div className="agent-tab">
+          <div className="agent-tab" ref={agentTabRef} style={{ minHeight: agentMinHeight }}>
             <div className="agent-tab-header" style={{ top: brandHeight }}>
               {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
 
