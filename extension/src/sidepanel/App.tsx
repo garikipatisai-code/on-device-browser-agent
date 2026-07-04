@@ -4,6 +4,7 @@ import type {
   MetricsSnapshot,
   PanelCommand,
   RecipeView,
+  Session,
   Settings,
   SwUpdate,
   TimelineEvent,
@@ -16,6 +17,8 @@ import { latestFinish } from './view/result';
 import { Brand } from './components/Brand';
 import { Tabs, type TabId } from './components/Tabs';
 import { Composer } from './components/Composer';
+import { SessionSwitcher } from './components/SessionSwitcher';
+import { Transcript } from './components/Transcript';
 import { RunState } from './components/RunState';
 import { ResultCard } from './components/ResultCard';
 import { Timeline } from './components/Timeline';
@@ -42,6 +45,8 @@ export function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ msg: string; kind: 'warn' | 'error' } | null>(null);
   const [installedModels, setInstalledModels] = useState<string[]>([]);
   const [extractingProfile, setExtractingProfile] = useState(false);
@@ -82,6 +87,10 @@ export function App() {
           break;
         case 'recipes':
           setRecipes(msg.recipes);
+          break;
+        case 'sessions':
+          setSessions(msg.sessions);
+          setActiveSessionId(msg.activeSessionId);
           break;
         case 'models':
           if (msg.ok) {
@@ -130,6 +139,7 @@ export function App() {
     client.send({ type: 'settings.get' });
     client.send({ type: 'agent.status' });
     client.send({ type: 'models.list' });
+    client.send({ type: 'session.list' });
     client.send({ type: 'preflight' }); // connection check on launch → surface the down-state immediately
     return () => {
       client.disconnect();
@@ -152,6 +162,24 @@ export function App() {
   useEffect(() => {
     if (running) setActivityOpen(true);
   }, [running]);
+
+  // Session switches only ever happen while nothing is running (background guards session.select/
+  // session.new/session.delete-of-active against a live task), so it's safe to hard-reset the
+  // single-turn display the moment activeSessionId changes — this is what makes it structurally
+  // impossible to show turn data from the wrong session.
+  const prevSessionId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (prevSessionId.current === undefined) {
+      prevSessionId.current = activeSessionId; // first update on mount — nothing to reset yet
+      return;
+    }
+    if (prevSessionId.current !== activeSessionId) {
+      prevSessionId.current = activeSessionId;
+      setEvents([]);
+      setNotice(null);
+      setRunStartedAt(null);
+    }
+  }, [activeSessionId]);
 
   // While Ollama is down, poll the connection so the panel reconnects on its own the moment the
   // user starts `ollama serve` — no click needed. (The extension can't launch the process itself.)
@@ -194,10 +222,17 @@ export function App() {
   const handleAbort = () => send({ type: 'agent.abort' });
   const handleSteer = (text: string) => send({ type: 'agent.steer', text });
 
-  const finish = latestFinish(events);
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const pastTurns = (activeSession?.turns ?? []).slice(0, -1);
+  const lastTurn = activeSession?.turns.at(-1);
+  // Prefer live events (the turn just ran in THIS panel session); fall back to the session
+  // record's own copy for a turn that finished in a previous panel session (events not in memory).
+  const finish = latestFinish(events) ?? (lastTurn?.summary != null
+    ? { verdict: lastTurn.verdict ?? '', summary: lastTurn.summary, sources: [] }
+    : null);
   const elapsedMs = runStartedAt ? Math.max(0, now - runStartedAt) : 0;
   const stepCount = status.plan?.steps.length ?? null;
-  const showEmpty = !running && events.length === 0;
+  const showEmpty = !running && events.length === 0 && pastTurns.length === 0 && !finish;
 
   return (
     <div className="app">
@@ -212,6 +247,14 @@ export function App() {
         {tab === 'agent' && (
           <>
             {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
+
+            <SessionSwitcher
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onNew={() => send({ type: 'session.new' })}
+              onSelect={(id) => send({ type: 'session.select', sessionId: id })}
+              onDelete={(id) => send({ type: 'session.delete', sessionId: id })}
+            />
 
             <Composer
               running={running}
@@ -228,6 +271,8 @@ export function App() {
             />
 
             {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
+
+            <Transcript turns={pastTurns} />
 
             {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
 
