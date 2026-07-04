@@ -724,75 +724,40 @@ git commit -m "feat(background): instant reply for obvious chitchat, bypassing t
 
 ### Task 3: Bottom-anchored chat layout (Part A)
 
+**CORRECTED after Task 3 was first implemented and independently found to reintroduce a documented failure pattern** — see the note at the end of this task for what happened and why. The steps below are the corrected version; do not use a height-pinned flex shell (`height:100%` + `overflow:hidden` on `html`/`body`/`#root`/`.app`, `flex:1`+`overflow-y:auto` on an inner scroll region) for this layout. This exact pattern was tried three times in this codebase's own history (commits `c793cae`, `20f77dc`, `05f17dd`, `d651bf0` — including the SAME `100vh`→`height:100%` fix) and abandoned in `d0c77d1` ("Three attempts to make a height-pinned shell scroll inside a Chrome side panel all failed in the field... Stop fighting the shell") because Chrome side panels don't reliably resolve percentage-height chains the way a normal webpage does — a failure mode that only manifests in a real loaded side panel, never in typecheck/vitest. The proven, currently-shipping pattern lets the document scroll naturally (`min-height: 100%` only, no `overflow:hidden`, no inner flex-scroll region) and uses `position: sticky` to visually pin specific elements — already used successfully today by `.save-bar` in `SettingsPanel` (`position: sticky; bottom: calc(-1 * var(--sp-4));`).
+
 **Files:**
 - Modify: `extension/src/sidepanel/App.tsx`
 - Modify: `extension/src/sidepanel/styles.css`
 
-- [ ] **Step 1: Update the top-level layout CSS to fill the viewport**
+- [ ] **Step 1: Leave the top-level layout CSS untouched**
 
-In `extension/src/sidepanel/styles.css`, find:
+Do NOT modify `html, body, #root`, `.app`, or `.content` — they already have the correct, field-tested values (`min-height: 100%` on the root chain, no fixed height/overflow on `.app`, plain flex-column on `.content` with no scroll constraints). This step is a no-op by design; it's listed so nobody "fixes" these back to a height-pinned shell later without knowing why that's wrong.
 
-```css
-html, body, #root { margin: 0; padding: 0; min-height: 100%; background: var(--bg); color: var(--fg); }
-```
+- [ ] **Step 2: Add sticky header/footer CSS for the Agent tab**
 
-Replace with:
-
-```css
-html, body, #root { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); }
-```
-
-Find:
-
-```css
-.app { display: flex; flex-direction: column; background: var(--bg); }
-```
-
-Replace with:
-
-```css
-.app { display: flex; flex-direction: column; background: var(--bg); height: 100%; }
-```
-
-Find:
+In `extension/src/sidepanel/styles.css`, find the `.content` rule:
 
 ```css
 .content { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
 ```
 
-Replace with:
+Add immediately after it:
 
 ```css
-.content { flex: 1; min-height: 0; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); overflow-y: auto; }
+
+/* Agent tab: the document scrolls normally (see html/body/#root above — NOT a height-pinned
+   shell, see Task 3's own note for why). SessionSwitcher and Composer use position:sticky to
+   visually stay at the top/bottom while scrolling, the same technique .save-bar already uses
+   successfully in SettingsPanel below. */
+.agent-tab { display: flex; flex-direction: column; gap: var(--sp-3); }
+.agent-tab-header { position: sticky; top: 0; z-index: 5; background: var(--bg); padding-bottom: var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-3); }
+.agent-tab-composer { position: sticky; bottom: calc(-1 * var(--sp-4)); background: var(--bg); padding-top: var(--sp-3); }
 ```
 
-- [ ] **Step 2: Add the 3-region Agent tab layout CSS**
+- [ ] **Step 3: Restructure the Agent tab's JSX — flat flex column with two sticky islands**
 
-In `extension/src/sidepanel/styles.css`, immediately after the `.content` rule you just modified, add:
-
-```css
-.agent-tab { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: var(--sp-3); }
-.agent-tab-header { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
-.agent-tab-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-3); }
-.agent-tab-composer { flex-shrink: 0; }
-```
-
-- [ ] **Step 3: Restructure the Agent tab's JSX into the 3 regions**
-
-In `extension/src/sidepanel/App.tsx`, add a ref for the scrolling region. Find:
-
-```ts
-  const clientRef = useRef<PortClient | null>(null);
-```
-
-Add immediately after:
-
-```ts
-  const clientRef = useRef<PortClient | null>(null);
-  const agentScrollRef = useRef<HTMLDivElement>(null);
-```
-
-Add the auto-scroll effect. Find the existing reset-on-session-switch effect's closing:
+In `extension/src/sidepanel/App.tsx`, add the auto-scroll effect. Find the existing reset-on-session-switch effect's closing:
 
 ```ts
     if (prevSessionId.current !== activeSessionId) {
@@ -815,14 +780,15 @@ Add immediately after it:
     }
   }, [activeSessionId]);
 
-  // Auto-scroll the transcript/activity pane to the latest content — matches ordinary chat-app
-  // behavior so the user isn't stuck manually scrolling down while the composer stays pinned at
-  // the bottom.
+  // Auto-scroll to the latest content — matches ordinary chat-app behavior so the user isn't
+  // stuck manually scrolling down. Targets the document itself (window.scrollTo), not an inner
+  // ref: the panel scrolls as a normal document (see styles.css's html/body/#root comment for
+  // why an inner height-pinned scroll region doesn't reliably work in a Chrome side panel) — this
+  // is the same scroll container position:sticky above already anchors against, so it needs no
+  // CSS height-chain of its own and works regardless of how the side panel reports its viewport.
   const pastTurnsCountForScroll = (sessions.find((s) => s.id === activeSessionId)?.turns.length ?? 0);
   useEffect(() => {
-    const el = agentScrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    window.scrollTo({ top: document.documentElement.scrollHeight });
   }, [events, pastTurnsCountForScroll, running]);
 ```
 
@@ -909,39 +875,37 @@ Replace with:
               />
             </div>
 
-            <div className="agent-tab-scroll" ref={agentScrollRef}>
-              {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
+            {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
 
-              <Transcript turns={pastTurns} />
+            <Transcript turns={pastTurns} />
 
-              {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
+            {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
 
-              {!running && finish && (
-                <ResultCard
-                  verdict={finish.verdict}
-                  summary={finish.summary}
-                  steps={stepCount}
-                  elapsedMs={elapsedMs}
-                  replans={status.replanCount}
-                  sources={finish.sources}
-                />
-              )}
+            {!running && finish && (
+              <ResultCard
+                verdict={finish.verdict}
+                summary={finish.summary}
+                steps={stepCount}
+                elapsedMs={elapsedMs}
+                replans={status.replanCount}
+                sources={finish.sources}
+              />
+            )}
 
-              {showEmpty ? (
-                <div className="empty">
-                  <div className="empty-mark">
-                    <Icon name="spark" size={22} />
-                  </div>
-                  <div className="empty-title">Ready when you are</div>
-                  <div className="empty-text">
-                    State a goal and I'll handle the browsing — planning, reading pages, and reporting the
-                    answer. Everything runs on your machine.
-                  </div>
+            {showEmpty ? (
+              <div className="empty">
+                <div className="empty-mark">
+                  <Icon name="spark" size={22} />
                 </div>
-              ) : (
-                <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
-              )}
-            </div>
+                <div className="empty-title">Ready when you are</div>
+                <div className="empty-text">
+                  State a goal and I'll handle the browsing — planning, reading pages, and reporting the
+                  answer. Everything runs on your machine.
+                </div>
+              </div>
+            ) : (
+              <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
+            )}
 
             <div className="agent-tab-composer">
               <Composer
@@ -962,6 +926,8 @@ Replace with:
         )}
 ```
 
+Note the trade-off versus a true height-pinned shell: `position: sticky` keeps the composer visible once you'd otherwise scroll past it, but doesn't force it to the absolute bottom edge of an under-filled viewport (e.g. a brand-new empty chat) the way a flex-pinned footer would — it sits right below the last piece of content until there's enough content to scroll. This is the accepted cost of using the pattern this codebase has already field-verified to work, rather than the one it has field-verified NOT to work.
+
 - [ ] **Step 4: Typecheck**
 
 Run: `cd extension && npm run typecheck`
@@ -977,19 +943,21 @@ Expected: PASS — all tests green (this is a pure JSX/CSS restructuring; no com
 Run: `cd extension && npm run build`
 
 If you have a way to load the unpacked extension (`extension/dist`) in a real Chrome with `ollama serve` running (see the repo's own `python scripts/browser_smoke.py` or manual "Load unpacked" instructions in the README) — verify:
-1. The composer sits at the bottom of the panel; `SessionSwitcher` sits at the top, both stay visible without scrolling.
-2. Start a goal that produces enough activity to overflow the panel height. Confirm only the middle region scrolls — header and composer stay fixed.
-3. Confirm the middle region auto-scrolls to the bottom as new activity streams in, without needing to manually scroll.
+1. `SessionSwitcher` stays visible at the top and `Composer` stays visible at the bottom while scrolling through enough activity to overflow the panel.
+2. Confirm the page auto-scrolls to the latest content as new activity streams in, without needing to manually scroll.
+3. Confirm there's no double-scrollbar, no clipped content, and no visual overlap between the sticky header/footer and the scrolling content beneath them.
 4. Switch tabs to Settings/Recipes/Metrics — confirm they still scroll normally (unaffected by this change).
 
-If a live browser isn't available in your environment, report the build succeeded and that the manual walkthrough itself could not be performed, rather than fabricating a walkthrough you didn't do — this matches how this exact limitation was handled in the immediately-preceding chat-sessions-frontend cycle (a chrome-devtools MCP server with no way to load an unpacked extension into an already-running profile).
+If a live browser isn't available in your environment, report the build succeeded and that the manual walkthrough itself could not be performed, rather than fabricating a walkthrough you didn't do — this matches how this exact limitation was handled in the immediately-preceding chat-sessions-frontend cycle (a chrome-devtools MCP server with no way to load an unpacked extension into an already-running profile). Manual verification matters MORE than usual for this specific task, precisely because the failure mode this task is designed to avoid (height-pinned shells breaking in a real Chrome side panel) has never once been caught by typecheck or the automated test suite in this codebase's history — it was only ever caught by loading the extension for real. Flag this explicitly to the user rather than treating automated-green as equivalent to verified-working for this task specifically.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 cd extension && git add src/sidepanel/App.tsx src/sidepanel/styles.css
-git commit -m "feat(sidepanel): bottom-anchored chat layout — fixed header/composer, scrolling transcript"
+git commit -m "feat(sidepanel): bottom-anchored chat layout via position:sticky, not a height-pinned shell"
 ```
+
+**What happened the first time:** this task was originally written and implemented with a height-pinned flex shell (`height:100%`/`overflow:hidden` on the root chain, `flex:1`/`overflow-y:auto` for an inner scroll region) — a reasonable-looking, typecheck-clean, test-green design that turned out to reintroduce a pattern this exact codebase had already tried three times and abandoned, discovered only by reading `git log`/`git show` on `styles.css`'s history (specifically a comment on the `html, body, #root` rule warning about "three failed attempts") during post-implementation review — not by anything in the plan or spec, which didn't reference that history because it wasn't checked during brainstorming. Corrected before merging. If you're executing this plan fresh (not fixing an already-landed version), just follow the steps above as written — they already reflect the correction.
 
 ---
 
