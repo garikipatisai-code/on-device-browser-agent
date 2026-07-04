@@ -20,6 +20,8 @@ import { RecipesPanel } from '@/sidepanel/components/RecipesPanel';
 import type { RecipeView } from '@/shared/messages';
 import { SessionSwitcher } from '@/sidepanel/components/SessionSwitcher';
 import type { Session } from '@/shared/messages';
+import { Transcript } from '@/sidepanel/components/Transcript';
+import type { SessionTurn } from '@/shared/messages';
 
 const noop = () => undefined;
 const plan: Plan = {
@@ -265,5 +267,20 @@ describe('redesigned components render across states', () => {
     expect(html).toContain('find the population of Austin');
     expect(html).toContain('compare two laptops');
     expect(html).toMatch(/Delete/i); // active session has a delete affordance
+  });
+
+  it('Transcript renders each past turn as goal + verdict + summary, and nothing when empty', () => {
+    expect(renderToStaticMarkup(<Transcript turns={[]} />)).toBe('');
+
+    const turns: SessionTurn[] = [
+      { taskId: 't1', goal: 'find the population of Austin', verdict: 'success', summary: 'Austin has **961,855** residents.' },
+      { taskId: 't2', goal: 'now do Seattle too' }, // no result yet — still mid-run or never finished
+    ];
+    const html = renderToStaticMarkup(<Transcript turns={turns} />);
+    expect(html).toContain('find the population of Austin');
+    expect(html).toContain('Success');
+    expect(html).toContain('<strong>961,855</strong>');
+    expect(html).toContain('now do Seattle too');
+    expect(html).not.toMatch(/now do Seattle too[\s\S]*verdict/); // t2 has no result — no verdict/summary block should render for it
   });
 });
