@@ -137,6 +137,9 @@ export function App() {
           setSessions(msg.sessions);
           setActiveSessionId(msg.activeSessionId);
           break;
+        case 'turnEvents':
+          setEvents(msg.events);
+          break;
         case 'models':
           if (msg.ok) {
             setInstalledModels(msg.models);
@@ -211,18 +214,29 @@ export function App() {
   // Session switches only ever happen while nothing is running (background guards session.select/
   // session.new/session.delete-of-active against a live task), so it's safe to hard-reset the
   // single-turn display the moment activeSessionId changes — this is what makes it structurally
-  // impossible to show turn data from the wrong session.
+  // impossible to show turn data from the wrong session. Both branches below request the real
+  // trace instead of clearing to empty, covering the cold-open case (mount) and the switch-while-
+  // open case identically. `sessions` is guaranteed current by the time either branch runs here:
+  // both `sessions` and `activeSessionId` arrive together in one `case 'sessions':` broadcast, and
+  // React batches same-event state updates, so this effect never sees a stale/empty `sessions` for
+  // a just-arrived `activeSessionId`.
   const prevSessionId = useRef<string | null | undefined>(undefined);
   useEffect(() => {
+    const lastTaskId = sessions.find((s) => s.id === activeSessionId)?.turns.at(-1)?.taskId;
     if (prevSessionId.current === undefined) {
-      prevSessionId.current = activeSessionId; // first update on mount — nothing to reset yet
+      prevSessionId.current = activeSessionId; // first update on mount
+      if (lastTaskId) send({ type: 'session.turnEvents', taskId: lastTaskId });
       return;
     }
     if (prevSessionId.current !== activeSessionId) {
       prevSessionId.current = activeSessionId;
-      setEvents([]);
       setNotice(null);
       setRunStartedAt(null);
+      if (lastTaskId) {
+        send({ type: 'session.turnEvents', taskId: lastTaskId });
+      } else {
+        setEvents([]); // a session with no turns yet — nothing to restore
+      }
     }
   }, [activeSessionId]);
 
