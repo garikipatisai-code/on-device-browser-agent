@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, type TimelineEvent } from '@/shared/messages';
 import type { Orchestrator } from '@/agent/orchestrator';
 import { _testing as bg } from '@/background/index';
-import { _setHot, loadHot, patchHot } from '@/background/state_store';
+import { _setHot, listSessions, loadHot, patchHot } from '@/background/state_store';
 import { resetStorage } from '../helpers';
 
 // Drain pending micro+macrotasks so a detached handleStart can advance to its parked
@@ -156,5 +156,75 @@ describe('crash-resume: SW restart finds an in-flight task', () => {
       globalThis.fetch = origFetch;
       bg.setOrchestratorFactory(null);
     }
+  });
+});
+
+describe('session commands', () => {
+  beforeEach(async () => {
+    await resetStorage();
+    bg.reset();
+  });
+
+  it('handleSessionNew creates a session and makes it active', async () => {
+    await bg.handleSessionNew();
+    const sessions = await listSessions();
+    expect(sessions.length).toBe(1);
+    expect(bg.state().activeSessionId).toBe(sessions[0].id);
+  });
+
+  it('handleSessionSelect switches the active session', async () => {
+    await bg.handleSessionNew();
+    const first = bg.state().activeSessionId;
+    await bg.handleSessionNew();
+    const second = bg.state().activeSessionId;
+    expect(second).not.toBe(first);
+
+    await bg.handleSessionSelect(first!);
+    expect(bg.state().activeSessionId).toBe(first);
+  });
+
+  it('handleSessionSelect refuses to switch while a task is running', async () => {
+    await bg.handleSessionNew();
+    const first = bg.state().activeSessionId;
+    await bg.handleSessionNew();
+    const second = bg.state().activeSessionId;
+
+    // Simulate a running task the way the existing lifecycle tests do (a fake orchestrator
+    // that never resolves runUntilTerminal until finishRun() is called, and a fetch stub so
+    // handleStart's preflight — ping + listModels, both real fetch() calls — succeeds).
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    void bg.handleStart('a goal');
+    await flush();
+    expect(bg.state().orchSet).toBe(true);
+
+    await bg.handleSessionSelect(first!);
+    expect(bg.state().activeSessionId).toBe(second); // unchanged — refused while orchSet
+
+    liveOrch!.finishRun();
+    await flush();
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
+
+  it('handleSessionDelete removes it and clears activeSessionId if it was active', async () => {
+    await bg.handleSessionNew();
+    const id = bg.state().activeSessionId!;
+    await bg.handleSessionDelete(id);
+    expect(await listSessions()).toEqual([]);
+    expect(bg.state().activeSessionId).toBeNull();
   });
 });

@@ -127,7 +127,11 @@ export type PanelCommand =
   | { type: 'recipes.save'; input: UserRecipeDraft }
   | { type: 'recipes.delete'; id: string }
   | { type: 'models.list' }
-  | { type: 'preflight' };
+  | { type: 'preflight' }
+  | { type: 'session.new' }
+  | { type: 'session.list' }
+  | { type: 'session.select'; sessionId: string }
+  | { type: 'session.delete'; sessionId: string };
 
 /** A chat-style session: an ordered list of turns (each turn is one Orchestrator run,
  *  its own taskId) sharing carried-forward context (facts + last summary). */
@@ -183,7 +187,8 @@ export type SwUpdate =
   | { type: 'resumeStored'; ok: boolean; name?: string; error?: string }
   | { type: 'recipes'; recipes: RecipeView[] }
   | { type: 'metrics'; metrics: MetricsSnapshot }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'sessions'; sessions: Session[]; activeSessionId: string | null };
 
 export interface MetricsSnapshot {
   ops: Array<{

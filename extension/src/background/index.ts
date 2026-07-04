@@ -3,6 +3,9 @@
 
 import { OllamaClient } from './ollama';
 import {
+  createSession,
+  deleteSession,
+  listSessions,
   loadHot,
   loadSettings,
   patchHot,
@@ -39,6 +42,7 @@ let _abortController: AbortController | null = null;
 let _keepAlive: ReturnType<typeof setInterval> | null = null;
 let _events: TimelineEvent[] = [];
 const _panels = new Set<chrome.runtime.Port>();
+let _activeSessionId: string | null = null;
 
 // Orchestrator factory — overridable in tests to drive the run lifecycle (start/abort/finish
 // overlap) without a real model. Production always builds a real Orchestrator.
@@ -106,6 +110,31 @@ async function pushMetrics() {
 
 async function pushRecipes() {
   broadcast({ type: 'recipes', recipes: await listRecipeViews() });
+}
+
+async function pushSessions() {
+  broadcast({ type: 'sessions', sessions: await listSessions(), activeSessionId: _activeSessionId });
+}
+
+async function handleSessionNew() {
+  const s = await createSession();
+  _activeSessionId = s.id;
+  await pushSessions();
+}
+
+async function handleSessionSelect(sessionId: string) {
+  if (_orch) {
+    broadcast({ type: 'error', message: 'A task is already running. Stop it first.' });
+    return;
+  }
+  _activeSessionId = sessionId;
+  await pushSessions();
+}
+
+async function handleSessionDelete(sessionId: string) {
+  await deleteSession(sessionId);
+  if (_activeSessionId === sessionId) _activeSessionId = null;
+  await pushSessions();
 }
 
 if (typeof chrome !== 'undefined' && chrome.sidePanel?.setPanelBehavior) {
@@ -231,7 +260,7 @@ async function handleStart(goal: string, seedPlan?: OrchestratorOpts['seedPlan']
 
   startKeepAlive(); // keep the SW alive across long (>30s) Ollama generations
   try {
-    const initial = await _orch.start(goal);
+    const initial = await _orch.start(goal, _activeSessionId);
     await pushStatus();
     const result = await _orch.runUntilTerminal(initial);
     console.log('[browser-agent] task complete:', result);
@@ -411,6 +440,18 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
           case 'agent.status':
             await pushStatus();
             break;
+          case 'session.new':
+            await handleSessionNew();
+            break;
+          case 'session.list':
+            await pushSessions();
+            break;
+          case 'session.select':
+            await handleSessionSelect(cmd.sessionId);
+            break;
+          case 'session.delete':
+            await handleSessionDelete(cmd.sessionId);
+            break;
           case 'settings.get':
             broadcast({ type: 'settings', settings: await loadSettings() });
             break;
@@ -470,17 +511,28 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
 export const _testing = {
   handleStart,
   handleAbort,
+  handleSessionNew,
+  handleSessionSelect,
+  handleSessionDelete,
   crashResume,
   setOrchestratorFactory(fn: ((opts: OrchestratorOpts) => Orchestrator) | null) {
     _makeOrchestrator = fn ?? ((opts) => new Orchestrator(opts));
   },
-  state: () => ({ orchSet: _orch !== null, runId: _runId, starting: _starting, keepAlive: _keepAlive !== null, events: _events.length }),
+  state: () => ({
+    orchSet: _orch !== null,
+    runId: _runId,
+    starting: _starting,
+    keepAlive: _keepAlive !== null,
+    events: _events.length,
+    activeSessionId: _activeSessionId,
+  }),
   reset() {
     _orch = null;
     _abortController = null;
     _starting = false;
     _runId = 0;
     _events = [];
+    _activeSessionId = null;
     stopKeepAlive();
   },
 };
