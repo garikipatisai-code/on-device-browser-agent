@@ -1,19 +1,6 @@
-import { Fragment, type ReactNode, useState } from 'react';
-import { describeVerdict, formatElapsed } from '../view/format';
+import { useState } from 'react';
+import { describeVerdict, formatElapsed, renderRich } from '../view/format';
 import { Icon, type IconName } from './Icon';
-
-/** Lightweight rich rendering of an answer (no markdown dependency): normalize literal "\n"/"\t"
- *  some models emit as text, render **bold**, and keep real newlines (the container is pre-wrap). */
-function renderRich(text: string): ReactNode {
-  const normalized = text.replace(/\\n/g, '\n').replace(/\\t/g, '  ');
-  return normalized.split(/(\*\*[^*\n]+\*\*)/g).map((part, i) =>
-    /^\*\*[^*\n]+\*\*$/.test(part) ? (
-      <strong key={i}>{part.slice(2, -2)}</strong>
-    ) : (
-      <Fragment key={i}>{part}</Fragment>
-    ),
-  );
-}
 
 /** Heroes the agent's answer when a run finishes: verdict badge + summary + copy + meta. */
 export function ResultCard({

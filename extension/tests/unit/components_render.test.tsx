@@ -18,6 +18,8 @@ import { SettingsPanel } from '@/sidepanel/components/SettingsPanel';
 import { MetricsPanel } from '@/sidepanel/components/MetricsPanel';
 import { RecipesPanel } from '@/sidepanel/components/RecipesPanel';
 import type { RecipeView } from '@/shared/messages';
+import { SessionSwitcher } from '@/sidepanel/components/SessionSwitcher';
+import type { Session } from '@/shared/messages';
 
 const noop = () => undefined;
 const plan: Plan = {
@@ -245,5 +247,23 @@ describe('redesigned components render across states', () => {
     expect(html).toContain('[tool: search]'); // the live planner preview is shown
     expect(html).toMatch(/Built-in/); // origin label
     expect(html).toMatch(/New/); // the author-new affordance
+  });
+
+  it('SessionSwitcher shows "New chat" when nothing is active, and lists past sessions once one exists', () => {
+    const noneActive = renderToStaticMarkup(
+      <SessionSwitcher sessions={[]} activeSessionId={null} onNew={noop} onSelect={noop} onDelete={noop} />,
+    );
+    expect(noneActive).toContain('New chat');
+
+    const sessions: Session[] = [
+      { id: 's1', title: 'find the population of Austin', createdAt: 1, lastActiveAt: 2, turns: [] },
+      { id: 's2', title: 'compare two laptops', createdAt: 3, lastActiveAt: 4, turns: [] },
+    ];
+    const html = renderToStaticMarkup(
+      <SessionSwitcher sessions={sessions} activeSessionId="s1" onNew={noop} onSelect={noop} onDelete={noop} />,
+    );
+    expect(html).toContain('find the population of Austin');
+    expect(html).toContain('compare two laptops');
+    expect(html).toMatch(/Delete/i); // active session has a delete affordance
   });
 });
