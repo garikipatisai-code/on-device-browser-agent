@@ -2,6 +2,7 @@
 // streams updates back via long-lived port. Pre-flight Ollama on agent.start.
 
 import { OllamaClient } from './ollama';
+import { isTrivialChitchat, quickChatReply, QUICK_CHAT_FALLBACK } from './quick_chat';
 import {
   createSession,
   deleteSession,
@@ -114,6 +115,21 @@ async function pushRecipes() {
 
 async function pushSessions() {
   broadcast({ type: 'sessions', sessions: await listSessions(), activeSessionId: _activeSessionId });
+}
+
+/** Fast path for chitchat (see quick_chat.ts) — no session, no Orchestrator, one lightweight
+ *  model call. Falls back to a static reply if the call fails (Ollama down, timeout, etc.) rather
+ *  than surfacing an error for what's supposed to be the most forgiving path in the app. */
+async function handleQuickChat(goal: string) {
+  const settings = await loadSettings();
+  const ollama = new OllamaClient(settings.ollamaBaseUrl);
+  let summary: string;
+  try {
+    summary = await quickChatReply(ollama, settings.executorModel, goal);
+  } catch {
+    summary = QUICK_CHAT_FALLBACK;
+  }
+  broadcast({ type: 'append', event: { kind: 'finish', ts: Date.now(), verdict: 'chat', summary } });
 }
 
 async function handleSessionNew() {
@@ -445,6 +461,11 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
       try {
         switch (cmd.type) {
           case 'agent.start':
+            if (isTrivialChitchat(cmd.goal)) {
+              // No session, no Orchestrator — this is chitchat, not a chat turn.
+              void handleQuickChat(cmd.goal);
+              break;
+            }
             // Detached on purpose (NOT awaited). Chrome force-kills a single
             // onMessage handler at the 5-minute event-execution cap; a long
             // multi-step run (12b at ~14 t/s) blows past that. Returning from the
@@ -547,6 +568,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
 // Production never touches this; the real path always uses `new Orchestrator`.
 export const _testing = {
   handleStart,
+  handleQuickChat,
   handleAbort,
   handleSessionNew,
   handleSessionSelect,

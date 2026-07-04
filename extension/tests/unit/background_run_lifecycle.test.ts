@@ -438,4 +438,30 @@ describe('session commands', () => {
     globalThis.fetch = origFetch;
     bg.setOrchestratorFactory(null);
   });
+
+  it('a chitchat message never creates a session or touches the orchestrator — it gets a quick reply instead', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, opts?: RequestInit) => {
+      const body = JSON.parse((opts?.body as string) ?? '{}');
+      // /api/chat (quickChatReply) — anything else in this test hitting fetch is unexpected.
+      if (body.messages) {
+        return { ok: true, status: 200, json: async () => ({ message: { role: 'assistant', content: 'Hi there!' }, done: true }) } as Response;
+      }
+      throw new Error(`unexpected fetch in this test: ${JSON.stringify(body)}`);
+    }) as typeof globalThis.fetch;
+    let orchestratorFactoryCalled = false;
+    bg.setOrchestratorFactory(() => {
+      orchestratorFactoryCalled = true;
+      throw new Error('orchestrator should never be constructed for chitchat');
+    });
+
+    await bg.handleQuickChat('hi');
+
+    expect(orchestratorFactoryCalled).toBe(false);
+    expect(bg.state().activeSessionId).toBeNull();
+    expect((await listSessions()).length).toBe(0);
+
+    globalThis.fetch = origFetch;
+    bg.setOrchestratorFactory(null);
+  });
 });
