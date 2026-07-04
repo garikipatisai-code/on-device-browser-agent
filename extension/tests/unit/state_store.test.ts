@@ -204,6 +204,15 @@ describe('sessions', () => {
     expect(relisted[0].turns[0].summary).not.toContain('jane.doe@example.com');
   });
 
+  it('redacts PII that straddles the 500-char cap, not just PII well within it', async () => {
+    const s = await createSession();
+    await appendTurnToSession(s.id, 'task-1', 'goal one');
+    const straddling = 'x'.repeat(490) + 'jane.doe@example.com'; // email starts at index 490, past the cap
+    await updateSessionTurnResult(s.id, 'task-1', 'success', straddling);
+    const listed = await listSessions();
+    expect(listed[0].turns[0].summary).not.toMatch(/jane\.doe|@example\.com/); // no raw fragment leaked
+  });
+
   it('updateSessionTurnResult is a no-op when the session or turn does not exist', async () => {
     await expect(updateSessionTurnResult('missing-session', 'task-1', 'success', 'x')).resolves.toBeUndefined();
     const s = await createSession();
@@ -246,6 +255,14 @@ describe('sessionContext', () => {
     expect(ctx.facts[0].text).not.toContain('jane.doe@example.com');
     expect(ctx.lastSummary).toContain('[REDACTED: EMAIL]');
     expect(ctx.lastSummary).not.toContain('jane.doe@example.com');
+  });
+
+  it('redacts PII that straddles the 500-char cap, not just PII well within it', async () => {
+    const s = await createSession();
+    const straddling = 'x'.repeat(490) + 'jane.doe@example.com'; // email starts at index 490, past the cap
+    await saveSessionContext(s.id, [], straddling);
+    const ctx = await loadSessionContext(s.id);
+    expect(ctx.lastSummary).not.toMatch(/jane\.doe|@example\.com/); // no raw fragment leaked
   });
 });
 

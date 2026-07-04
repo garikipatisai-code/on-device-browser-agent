@@ -480,7 +480,7 @@ export async function updateSessionTurnResult(
     if (!cur) return;
     const turns = (cur.turns ?? []).map((t) =>
       t.taskId === taskId
-        ? { ...t, verdict, summary: redact(summary.slice(0, SESSION_SUMMARY_MAX)) }
+        ? { ...t, verdict, summary: redact(summary).slice(0, SESSION_SUMMARY_MAX) }
         : t,
     );
     await d.put('sessions', { ...cur, turns });
@@ -508,7 +508,7 @@ export async function saveSessionContext(sessionId: string, facts: Fact[], lastS
     await d.put('sessionContext', {
       sessionId,
       facts: redactDeep(facts),
-      lastSummary: redact(lastSummary.slice(0, SESSION_SUMMARY_MAX)),
+      lastSummary: redact(lastSummary).slice(0, SESSION_SUMMARY_MAX),
       updatedAt: Date.now(),
     });
   } catch {
