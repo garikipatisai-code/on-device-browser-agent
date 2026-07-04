@@ -59,6 +59,7 @@ export function App() {
   // only makes that gap visible instead of the panel silently freezing at the last-seen phase).
   const [connectionLost, setConnectionLost] = useState(false);
   const clientRef = useRef<PortClient | null>(null);
+  const agentScrollRef = useRef<HTMLDivElement>(null);
 
   // ---- SW connection (contract: do not change message shapes) ----
   useEffect(() => {
@@ -181,6 +182,16 @@ export function App() {
     }
   }, [activeSessionId]);
 
+  // Auto-scroll the transcript/activity pane to the latest content — matches ordinary chat-app
+  // behavior so the user isn't stuck manually scrolling down while the composer stays pinned at
+  // the bottom.
+  const pastTurnsCountForScroll = (sessions.find((s) => s.id === activeSessionId)?.turns.length ?? 0);
+  useEffect(() => {
+    const el = agentScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [events, pastTurnsCountForScroll, running]);
+
   // While Ollama is down, poll the connection so the panel reconnects on its own the moment the
   // user starts `ollama serve` — no click needed. (The extension can't launch the process itself.)
   useEffect(() => {
@@ -245,63 +256,69 @@ export function App() {
         )}
 
         {tab === 'agent' && (
-          <>
-            {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
+          <div className="agent-tab">
+            <div className="agent-tab-header">
+              {ollamaDown && <ConnectionCard baseUrl={settings.ollamaBaseUrl} onRetry={handleRetry} />}
 
-            <SessionSwitcher
-              sessions={sessions}
-              activeSessionId={activeSessionId}
-              onNew={() => send({ type: 'session.new' })}
-              onSelect={(id) => send({ type: 'session.select', sessionId: id })}
-              onDelete={(id) => send({ type: 'session.delete', sessionId: id })}
-            />
-
-            <Composer
-              running={running}
-              goal={goal}
-              onGoalChange={setGoal}
-              onRun={handleStart}
-              applyUrl={applyUrl}
-              onApplyUrlChange={setApplyUrl}
-              onApply={handleApply}
-              onAskPage={handleAskPage}
-              onSteer={handleSteer}
-              onStop={handleAbort}
-              showExamples={events.length === 0 && status.phase === 'IDLE'}
-            />
-
-            {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
-
-            <Transcript turns={pastTurns} />
-
-            {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
-
-            {!running && finish && (
-              <ResultCard
-                verdict={finish.verdict}
-                summary={finish.summary}
-                steps={stepCount}
-                elapsedMs={elapsedMs}
-                replans={status.replanCount}
-                sources={finish.sources}
+              <SessionSwitcher
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                onNew={() => send({ type: 'session.new' })}
+                onSelect={(id) => send({ type: 'session.select', sessionId: id })}
+                onDelete={(id) => send({ type: 'session.delete', sessionId: id })}
               />
-            )}
+            </div>
 
-            {showEmpty ? (
-              <div className="empty">
-                <div className="empty-mark">
-                  <Icon name="spark" size={22} />
+            <div className="agent-tab-scroll" ref={agentScrollRef}>
+              {notice && !ollamaDown && <Alert kind={notice.kind}>{notice.msg}</Alert>}
+
+              <Transcript turns={pastTurns} />
+
+              {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
+
+              {!running && finish && (
+                <ResultCard
+                  verdict={finish.verdict}
+                  summary={finish.summary}
+                  steps={stepCount}
+                  elapsedMs={elapsedMs}
+                  replans={status.replanCount}
+                  sources={finish.sources}
+                />
+              )}
+
+              {showEmpty ? (
+                <div className="empty">
+                  <div className="empty-mark">
+                    <Icon name="spark" size={22} />
+                  </div>
+                  <div className="empty-title">Ready when you are</div>
+                  <div className="empty-text">
+                    State a goal and I'll handle the browsing — planning, reading pages, and reporting the
+                    answer. Everything runs on your machine.
+                  </div>
                 </div>
-                <div className="empty-title">Ready when you are</div>
-                <div className="empty-text">
-                  State a goal and I'll handle the browsing — planning, reading pages, and reporting the
-                  answer. Everything runs on your machine.
-                </div>
-              </div>
-            ) : (
-              <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
-            )}
-          </>
+              ) : (
+                <Timeline events={events} open={activityOpen} onToggle={() => setActivityOpen((o) => !o)} />
+              )}
+            </div>
+
+            <div className="agent-tab-composer">
+              <Composer
+                running={running}
+                goal={goal}
+                onGoalChange={setGoal}
+                onRun={handleStart}
+                applyUrl={applyUrl}
+                onApplyUrlChange={setApplyUrl}
+                onApply={handleApply}
+                onAskPage={handleAskPage}
+                onSteer={handleSteer}
+                onStop={handleAbort}
+                showExamples={events.length === 0 && status.phase === 'IDLE'}
+              />
+            </div>
+          </div>
         )}
 
         {tab === 'settings' && (
