@@ -198,6 +198,17 @@ describe('sessionContext', () => {
     const ctx = await loadSessionContext(s.id);
     expect(ctx.lastSummary.length).toBe(500);
   });
+
+  it('redacts PII in facts and the summary before persisting — sessionContext is durable across turns, not scoped to one run', async () => {
+    const s = await createSession();
+    const facts = [{ step: 'step-1', text: 'Contact: jane.doe@example.com' }];
+    await saveSessionContext(s.id, facts, 'success: reach them at jane.doe@example.com');
+    const ctx = await loadSessionContext(s.id);
+    expect(ctx.facts[0].text).toContain('[REDACTED: EMAIL]');
+    expect(ctx.facts[0].text).not.toContain('jane.doe@example.com');
+    expect(ctx.lastSummary).toContain('[REDACTED: EMAIL]');
+    expect(ctx.lastSummary).not.toContain('jane.doe@example.com');
+  });
 });
 
 describe('mutex serialization', () => {

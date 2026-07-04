@@ -109,7 +109,9 @@ The one new, real bound: does carried context grow unboundedly across many turns
 
 ## Trade-off
 
-None beyond what already exists: carrying facts forward means a session's later turns can be grounded in something read in an *earlier* turn, not just the current one — this is the intended behavior (that's what "continuation" means), not a new privacy or safety exposure. Nothing about domain tiers, redaction, or the circuit breaker changes; those are per-turn concerns already, untouched by this spec.
+Carrying facts forward means a session's later turns can be grounded in something read in an *earlier* turn, not just the current one — this is the intended behavior (that's what "continuation" means), not a new privacy or safety exposure. Nothing about domain tiers or the circuit breaker changes; those are per-turn concerns already, untouched by this spec.
+
+Redaction *does* need one addition beyond what already exists, caught during implementation review: this is the first data in this codebase that persists to IndexedDB across independent runs rather than living only in one run's memory for one run's duration, so `saveSessionContext` redacts `facts`/`lastSummary` before the write — the same `redact`/`redactDeep` boundary every other disk write in `orchestrator.ts` already respects (findings, scratchpad notes, timeline events), applied here for the first time to something that outlives a single turn.
 
 ## Explicitly NOT doing
 

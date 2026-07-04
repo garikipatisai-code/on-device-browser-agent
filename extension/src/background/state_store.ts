@@ -16,6 +16,7 @@ import type {
 } from '@/shared/messages';
 import { DEFAULT_SETTINGS } from '@/shared/messages';
 import type { Fact } from '@/agent/facts';
+import { redact, redactDeep } from '@/agent/safety/redact';
 
 export interface AgentStateHot {
   goal: string; // IMMUTABLE after set
@@ -473,13 +474,16 @@ export async function loadSessionContext(sessionId: string): Promise<SessionCont
   }
 }
 
+/** Redacts before persisting — sessionContext is IndexedDB-durable across turns (unlike a single
+ *  run's in-memory facts), so it must go through the same redaction boundary every other disk
+ *  write in this codebase respects (redactEvent for the timeline, redactDeep for findings). */
 export async function saveSessionContext(sessionId: string, facts: Fact[], lastSummary: string): Promise<void> {
   try {
     const d = await db();
     await d.put('sessionContext', {
       sessionId,
-      facts,
-      lastSummary: lastSummary.slice(0, SESSION_SUMMARY_MAX),
+      facts: redactDeep(facts),
+      lastSummary: redact(lastSummary.slice(0, SESSION_SUMMARY_MAX)),
       updatedAt: Date.now(),
     });
   } catch {
