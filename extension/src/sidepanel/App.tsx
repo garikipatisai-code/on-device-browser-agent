@@ -85,6 +85,9 @@ export function App() {
   // resolved against an ambiguous reference — a different mechanism, not just a different value.
   // Deliberately min-height, never height+overflow:hidden: if this measurement is ever wrong, the
   // worst case is an imperfect gap (today's existing symptom), not clipped/inaccessible content.
+  // Re-measures on `connectionLost` too: that Alert renders as a sibling directly above .agent-tab,
+  // so it shifts .agent-tab's top exactly like Brand wrapping to two lines would — missing it would
+  // leave a stale (too-large, but still safe/gap-only) min-height until the next window resize.
   const agentTabRef = useRef<HTMLDivElement>(null);
   const [agentMinHeight, setAgentMinHeight] = useState<number | undefined>(undefined);
   useEffect(() => {
@@ -100,7 +103,7 @@ export function App() {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [brandHeight, tab]);
+  }, [brandHeight, tab, connectionLost]);
 
   // ---- SW connection (contract: do not change message shapes) ----
   useEffect(() => {
