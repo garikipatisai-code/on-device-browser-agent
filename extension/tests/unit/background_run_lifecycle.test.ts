@@ -4,6 +4,7 @@ import type { Orchestrator } from '@/agent/orchestrator';
 import { _testing as bg } from '@/background/index';
 import {
   _setHot,
+  appendEvent,
   createSession,
   listSessions,
   loadActiveSessionId,
@@ -489,5 +490,18 @@ describe('session commands', () => {
 
     globalThis.fetch = origFetch;
     bg.setOrchestratorFactory(null);
+  });
+
+  it('handleSessionTurnEvents broadcasts loadEvents(taskId)\'s actual content for an arbitrary taskId, not just the live run\'s', async () => {
+    await appendEvent('a-past-task', { kind: 'log', ts: 1, level: 'info', message: 'from a past run' });
+    const messages = bg.addTestPanel();
+
+    await bg.handleSessionTurnEvents('a-past-task');
+
+    expect(messages).toContainEqual({
+      type: 'turnEvents',
+      taskId: 'a-past-task',
+      events: [{ kind: 'log', ts: 1, level: 'info', message: 'from a past run' }],
+    });
   });
 });

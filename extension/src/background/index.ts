@@ -8,6 +8,7 @@ import {
   deleteSession,
   listSessions,
   loadActiveSessionId,
+  loadEvents,
   loadHot,
   loadSettings,
   patchHot,
@@ -178,6 +179,14 @@ async function handleSessionDelete(sessionId: string) {
   await deleteSession(sessionId);
   if (_activeSessionId === sessionId) await setActiveSessionId(null);
   await pushSessions();
+}
+
+/** Thin wrapper — loadEvents already exists and already does exactly this read; today it's only
+ *  ever called implicitly for the live run's own taskId (via the running Orchestrator's own event
+ *  emission). This exposes the same read for ANY taskId, so the panel can restore a past turn's
+ *  full trace after a session switch or a fresh panel open. */
+async function handleSessionTurnEvents(taskId: string) {
+  broadcast({ type: 'turnEvents', taskId, events: await loadEvents(taskId) });
 }
 
 if (typeof chrome !== 'undefined' && chrome.sidePanel?.setPanelBehavior) {
@@ -536,6 +545,9 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
           case 'session.delete':
             await handleSessionDelete(cmd.sessionId);
             break;
+          case 'session.turnEvents':
+            await handleSessionTurnEvents(cmd.taskId);
+            break;
           case 'settings.get':
             broadcast({ type: 'settings', settings: await loadSettings() });
             break;
@@ -599,9 +611,15 @@ export const _testing = {
   handleSessionNew,
   handleSessionSelect,
   handleSessionDelete,
+  handleSessionTurnEvents,
   crashResume,
   setOrchestratorFactory(fn: ((opts: OrchestratorOpts) => Orchestrator) | null) {
     _makeOrchestrator = fn ?? ((opts) => new Orchestrator(opts));
+  },
+  addTestPanel(): SwUpdate[] {
+    const messages: SwUpdate[] = [];
+    _panels.add({ postMessage: (m: SwUpdate) => messages.push(m) } as unknown as chrome.runtime.Port);
+    return messages;
   },
   state: () => ({
     orchSet: _orch !== null,
@@ -618,6 +636,7 @@ export const _testing = {
     _runId = 0;
     _events = [];
     _activeSessionId = null;
+    _panels.clear();
     stopKeepAlive();
   },
 };

@@ -131,7 +131,8 @@ export type PanelCommand =
   | { type: 'session.new' }
   | { type: 'session.list' }
   | { type: 'session.select'; sessionId: string }
-  | { type: 'session.delete'; sessionId: string };
+  | { type: 'session.delete'; sessionId: string }
+  | { type: 'session.turnEvents'; taskId: string };
 
 /** One turn's identity + outcome inside a session's transcript. `verdict`/`summary` are
  *  undefined until the turn reaches a terminal state (set by updateSessionTurnResult). */
@@ -197,7 +198,8 @@ export type SwUpdate =
   | { type: 'recipes'; recipes: RecipeView[] }
   | { type: 'metrics'; metrics: MetricsSnapshot }
   | { type: 'error'; message: string }
-  | { type: 'sessions'; sessions: Session[]; activeSessionId: string | null };
+  | { type: 'sessions'; sessions: Session[]; activeSessionId: string | null }
+  | { type: 'turnEvents'; taskId: string; events: TimelineEvent[] };
 
 export interface MetricsSnapshot {
   ops: Array<{
