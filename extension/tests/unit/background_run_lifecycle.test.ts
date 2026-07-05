@@ -514,3 +514,47 @@ describe('session commands', () => {
     });
   });
 });
+
+describe('status broadcasts stay fresh during a run — not just IDLE-at-start, DONE-at-finish', () => {
+  beforeEach(async () => {
+    await resetStorage();
+    bg.reset();
+  });
+  afterEach(() => {
+    bg.setOrchestratorFactory(null);
+    bg.reset();
+  });
+
+  it('a mid-run emitted event also pushes a fresh status broadcast, so the panel can see phase !== IDLE/DONE while a task is actually in flight', async () => {
+    const origFetch = globalThis.fetch;
+    const models = [
+      DEFAULT_SETTINGS.executorModel,
+      DEFAULT_SETTINGS.plannerModel,
+      DEFAULT_SETTINGS.evaluatorModel,
+      DEFAULT_SETTINGS.compactorModel,
+    ].map((name) => ({ name }));
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
+    let liveOrch: FakeOrch | null = null;
+    bg.setOrchestratorFactory((opts) => {
+      liveOrch = fakeOrch();
+      liveOrch.emit = opts.emit;
+      return liveOrch as unknown as Orchestrator;
+    });
+
+    void bg.handleStart('a goal');
+    await flush();
+
+    // Register the panel AFTER start's own initial push, so this only captures what happens
+    // in response to the mid-run event below -- isolating the exact gap this test targets.
+    const messages = bg.addTestPanel();
+    liveOrch!.emit?.({ kind: 'log', ts: 1, level: 'info', message: 'mid-run event' });
+    await flush();
+
+    expect(messages.some((m) => m.type === 'status')).toBe(true);
+
+    liveOrch!.finishRun();
+    await flush();
+    globalThis.fetch = origFetch;
+  });
+});
+

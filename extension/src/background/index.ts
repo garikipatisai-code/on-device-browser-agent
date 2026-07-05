@@ -101,6 +101,13 @@ function appendEventLocal(ev: TimelineEvent) {
   if (_events.length > 1_000) _events = _events.slice(-1_000);
   persistTimeline(_events); // mirror to storage.session so the trace survives an SW kill
   broadcast({ type: 'append', event: ev });
+  // Also refresh status here: pushStatus() otherwise only fires right after start() (still
+  // IDLE) and once more in handleStart's finally (already DONE/ABORTED) -- every real phase
+  // transition in between (PLANNING/EXECUTING/EVALUATING/...) happens via patchHot() deep
+  // inside runUntilTerminal with no broadcast of its own, so the panel never saw a "running"
+  // phase at all. Piggybacking on the same per-event cadence the Activity log already uses
+  // keeps status exactly as fresh as events, with no new plumbing.
+  pushStatus();
 }
 
 async function pushStatus() {
