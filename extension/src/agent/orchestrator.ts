@@ -43,6 +43,7 @@ import { timed } from './metrics';
 import { redact, redactDeep, redactEvent } from './safety/redact';
 import { mentionsMissing } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
+import { detectAntiBotBlock } from './tools/browser/antibot';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
 import { sleep } from '@/background/signal';
 import { waitForTabSettled } from './tools/browser/tab';
@@ -79,6 +80,9 @@ export interface OrchestratorOpts {
   maxStepTurns?: number;
   /** A pre-built plan that bypasses the planner LLM call (fast path, e.g. "Ask this page"). */
   seedPlan?: Array<{ description: string; successCriteria: string; toolHint?: string }>;
+  /** How often to re-check for an anti-bot block clearing while paused. Default 5000ms in
+   *  production; tests override this to keep the polling loop fast. */
+  antiBotPollMs?: number;
 }
 
 export interface RunResult {
@@ -577,7 +581,7 @@ export class Orchestrator {
       });
       return;
     }
-    const obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
+    let obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
     this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, this.caps.page) };
     this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
     this.recordObserved(obs.content, obsUrl);
@@ -587,6 +591,35 @@ export class Orchestrator {
       level: 'info',
       message: `auto-read page after navigation${obsUrl ? ` (${obsUrl})` : ''} — ${obs.content.length} chars`,
     });
+
+    // Anti-bot block (captcha/interstitial/access-denied wall)? Pause and wait for the human to
+    // resolve it in the visible tab — never attempt to solve it. No timeout: this can
+    // legitimately take minutes, and the existing Stop control is the escape hatch if the user
+    // wants to abandon the run instead of waiting. detectAntiBotBlock is a deterministic,
+    // pattern-based check (not exhaustive) — a miss just means no pause, never a wrong action;
+    // a false positive here is fully recoverable via Stop, never a silent hang.
+    let block = detectAntiBotBlock(obs.content);
+    if (block) {
+      this.emit({ kind: 'antibot.blocked', ts: Date.now(), label: block.label });
+      await patchHot({ phase: 'BLOCKED' });
+      const pollMs = this.opts.antiBotPollMs ?? 5_000;
+      let resolved = obs; // obs is non-null here (guarded above); only ever reassigned below from
+                           // an already-non-null `polled`, so `resolved` stays provably non-null
+                           // throughout the loop — no non-null assertions needed anywhere.
+      while (block) {
+        await sleep(pollMs, this.signal);
+        const polled = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
+        if (!(polled && polled.ok && polled.content)) continue; // inconclusive read — keep polling, don't resolve
+        resolved = polled;
+        block = detectAntiBotBlock(polled.content);
+      }
+      obsUrl = resolved.data && typeof resolved.data.url === 'string' ? (resolved.data.url as string) : obsUrl;
+      this.lastRead = { tool: 'aria.extract', url: obsUrl, content: resolved.content.slice(0, this.caps.page) };
+      this.recordObserved(resolved.content, obsUrl);
+      this.emit({ kind: 'antibot.resolved', ts: Date.now() });
+      await patchHot({ phase: 'EXECUTING' });
+      return;
+    }
 
     // Consent/cookie wall? Dismiss it (privacy-preferring) so the model reads the
     // real page — but only where the user upgraded this domain to act.
