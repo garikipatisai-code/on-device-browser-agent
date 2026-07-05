@@ -2078,3 +2078,101 @@ describe('orchestrator — non-actionable input', () => {
     expect(result.verdict).toBe('success');
   });
 });
+
+describe('orchestrator — anti-bot block detect-and-pause', () => {
+  it('pauses on an anti-bot block, polls, and resumes once it clears', async () => {
+    let ariaCallCount = 0;
+    const registry = buildRegistry();
+    registry.register({
+      name: 'tab.open',
+      description: 'open a tab',
+      argsSchema: z.object({ url: z.string() }),
+      async dispatch() {
+        return { ok: true, content: 'opened', data: { tabId: 7 } };
+      },
+    });
+    registry.register({
+      name: 'aria.extract',
+      description: 'read the page',
+      argsSchema: z.object({ tabId: z.number() }),
+      async dispatch() {
+        ariaCallCount += 1;
+        if (ariaCallCount <= 2) {
+          return {
+            ok: true,
+            content: '   heading "Just a moment..."\n   text "checking your browser before accessing the site."',
+            data: { url: 'https://example.com/' },
+          };
+        }
+        return { ok: true, content: '[1] button "Continue"', data: { url: 'https://example.com/' } };
+      },
+    });
+
+    const planJson = JSON.stringify({ steps: [{ description: 'open the page', successCriteria: 'opened' }] });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: planJson })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://example.com' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+      ],
+    });
+
+    const events: TimelineEvent[] = [];
+    const orch = new Orchestrator({
+      ollama,
+      registry,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: (e) => events.push(e),
+      antiBotPollMs: 1,
+    });
+    const result = await orch.runUntilTerminal(await orch.start('open the page'));
+
+    expect(result.phase).toBe('DONE');
+    expect(events.some((e) => e.kind === 'antibot.blocked')).toBe(true);
+    expect(events.some((e) => e.kind === 'antibot.resolved')).toBe(true);
+    expect(ariaCallCount).toBeGreaterThanOrEqual(3); // 1 initial read + at least 2 polls before it clears
+  });
+
+  it('never emits antibot.blocked when the page has no block signal', async () => {
+    const registry = buildRegistry();
+    registry.register({
+      name: 'tab.open',
+      description: 'open a tab',
+      argsSchema: z.object({ url: z.string() }),
+      async dispatch() {
+        return { ok: true, content: 'opened', data: { tabId: 7 } };
+      },
+    });
+    registry.register({
+      name: 'aria.extract',
+      description: 'read the page',
+      argsSchema: z.object({ tabId: z.number() }),
+      async dispatch() {
+        return { ok: true, content: '[1] button "Continue"', data: { url: 'https://example.com/' } };
+      },
+    });
+
+    const planJson = JSON.stringify({ steps: [{ description: 'open the page', successCriteria: 'opened' }] });
+    const ollama = makeFakeOllama({
+      planner: [rawResponse({ content: planJson })],
+      executor: [
+        rawResponse({ toolCalls: [{ name: 'tab.open', args: { url: 'https://example.com' } }] }),
+        rawResponse({ toolCalls: [{ name: 'finish', args: { verdict: 'success', summary: 'done' } }] }),
+      ],
+    });
+
+    const events: TimelineEvent[] = [];
+    const orch = new Orchestrator({
+      ollama,
+      registry,
+      settings: { ...DEFAULT_SETTINGS },
+      emit: (e) => events.push(e),
+      antiBotPollMs: 1,
+    });
+    const result = await orch.runUntilTerminal(await orch.start('open the page'));
+
+    expect(result.phase).toBe('DONE');
+    expect(events.some((e) => e.kind === 'antibot.blocked')).toBe(false);
+    expect(events.some((e) => e.kind === 'antibot.resolved')).toBe(false);
+  });
+});
