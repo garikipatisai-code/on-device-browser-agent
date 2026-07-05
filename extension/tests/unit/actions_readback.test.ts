@@ -133,6 +133,18 @@ describe('action tools — read-back verification (no phantom success)', () => {
     expect(res.content).toMatch(/typed/i);
   });
 
+  it('tab.type clears via the native value setter, not a plain assignment', async () => {
+    const seen: string[] = [];
+    const origSend = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = ((t: unknown, method: string, p: { functionDeclaration?: string } | undefined, cb: (r?: unknown) => void) => {
+      if (method === 'Runtime.callFunctionOn' && p?.functionDeclaration) seen.push(p.functionDeclaration);
+      return (origSend as unknown as (t: unknown, m: string, p: unknown, cb: (r?: unknown) => void) => void)(t, method, p, cb);
+    }) as unknown as typeof chrome.debugger.sendCommand;
+    await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: 'hello', clear: true }, ctx());
+    const clearCall = seen.find((fn) => fn.includes('getOwnPropertyDescriptor'));
+    expect(clearCall).toBeDefined();
+  });
+
   // AR-L8: at the page bottom scrollBy is a no-op; the tool must say so instead of claiming it
   // scrolled, or the model loops trying to reach content that isn't there.
   it('tab.scroll reports no movement when the viewport did not move', async () => {

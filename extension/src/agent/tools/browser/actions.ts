@@ -155,6 +155,20 @@ async function isPointOccluded(
   }
 }
 
+// Plain `this.value = ""` is a raw property assignment; a framework-controlled field (React
+// and similar) can silently revert it on the next render since it bypasses the framework's
+// tracked-value setter. Going through the property descriptor's own setter — the same one the
+// framework itself would call — makes the clear (and later, direct value assignment) actually
+// stick.
+const SET_NATIVE_VALUE_FN = `function(v){
+  try {
+    var proto = this.tagName==='TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) { desc.set.call(this, v); } else { this.value = v; }
+    this.dispatchEvent(new Event('input', {bubbles:true}));
+  } catch(e) { try { this.value = v; } catch(e2) {} }
+}`;
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -247,7 +261,8 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
       if (clear && objectId) {
         await send('Runtime.callFunctionOn', {
           objectId,
-          functionDeclaration: 'function() { try { this.value = ""; this.dispatchEvent(new Event("input", {bubbles:true})); } catch(e) {} }',
+          functionDeclaration: SET_NATIVE_VALUE_FN,
+          arguments: [{ value: '' }],
           returnByValue: true,
         });
       }
