@@ -60,6 +60,8 @@ function title(e: TimelineEvent): string {
       return `Finished · ${e.verdict}`;
     case 'log':
       return cap(e.level);
+    default:
+      return cap(e.kind);
   }
 }
 

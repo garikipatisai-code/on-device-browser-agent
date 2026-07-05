@@ -18,6 +18,8 @@ export function describePhase(phase: TaskPhase): PhaseInfo {
       return { label: 'Checking the result', tone: 'busy', busy: true };
     case 'COMPACTING':
       return { label: 'Summarizing context', tone: 'busy', busy: true };
+    case 'BLOCKED':
+      return { label: 'Waiting for you to resolve a check on the page', tone: 'error', busy: true };
     case 'DONE':
       return { label: 'Done', tone: 'done', busy: false };
     case 'ABORTED':

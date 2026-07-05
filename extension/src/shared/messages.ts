@@ -7,6 +7,7 @@ export type TaskPhase =
   | 'EXECUTING'
   | 'EVALUATING'
   | 'COMPACTING'
+  | 'BLOCKED'
   | 'ABORTED'
   | 'DONE';
 
@@ -105,6 +106,8 @@ export type TimelineEvent =
   | { kind: 'tool.result'; ts: number; tool: string; ok: boolean; content: string }
   | { kind: 'evaluator.verdict'; ts: number; verdict: 'PASS' | 'FAIL'; reason: string }
   | { kind: 'breaker.trip'; ts: number; reason: string }
+  | { kind: 'antibot.blocked'; ts: number; label: string }
+  | { kind: 'antibot.resolved'; ts: number }
   | { kind: 'compaction'; ts: number; before: number; after: number }
   | { kind: 'log'; ts: number; level: 'info' | 'warn' | 'error'; message: string }
   | { kind: 'finish'; ts: number; verdict: string; summary: string; sources?: string[] };
