@@ -6,7 +6,7 @@ vi.mock('@/agent/tools/browser/aria_tool', () => ({
   clearExtractionCache: vi.fn(),
 }));
 
-import { tabClickTool, tabSelectTool, tabTypeTool, tabScrollTool } from '@/agent/tools/browser/actions';
+import { tabClickTool, tabSelectTool, tabTypeTool, tabScrollTool, SELECT_ARIA_COMBOBOX_FN } from '@/agent/tools/browser/actions';
 import type { ToolContext } from '@/agent/tools/registry';
 
 // Configurable CDP responses so each test can model a different page outcome.
@@ -327,5 +327,105 @@ describe('action tools — read-back verification (no phantom success)', () => {
     const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
     expect(res.ok).toBe(false);
     expect(res.content).toMatch(/covered by another element/);
+  });
+});
+
+describe('SELECT_ARIA_COMBOBOX_FN — injected JS logic', () => {
+  // Materializes the real in-page function string and runs it against a real (happy-dom)
+  // DOM — unlike the CDP-mocked tests above, which stub Runtime.callFunctionOn's *result* and
+  // never evaluate this function's actual source. This is the only place the expand → match →
+  // click → verify → collapse logic (including its two setTimeout waits) is genuinely exercised.
+  const selectCombobox = new Function('return ' + SELECT_ARIA_COMBOBOX_FN)() as (
+    this: HTMLElement,
+    value: string,
+  ) => Promise<{ ok: boolean; options: string[] }>;
+
+  // Builds a combobox + its referenced listbox, wired with just enough behavior to stand in for
+  // a real component library (React-Select/MUI/Radix): clicking the trigger expands it (sets
+  // aria-expanded), clicking a matched option marks it aria-selected and updates the trigger's
+  // displayed text, mirroring what a real onChange handler would do.
+  function buildCombobox(optionTexts: string[]): { combobox: HTMLElement; options: HTMLElement[] } {
+    document.body.innerHTML = '';
+    const combobox = document.createElement('div');
+    combobox.setAttribute('role', 'combobox');
+    combobox.setAttribute('aria-controls', 'lb1');
+    combobox.setAttribute('aria-expanded', 'false');
+    combobox.textContent = 'Choose…';
+    const listbox = document.createElement('ul');
+    listbox.id = 'lb1';
+    const options = optionTexts.map((text) => {
+      const opt = document.createElement('li');
+      opt.setAttribute('role', 'option');
+      opt.textContent = text;
+      opt.addEventListener('click', () => {
+        opt.setAttribute('aria-selected', 'true');
+        combobox.textContent = text;
+        combobox.setAttribute('aria-expanded', 'false');
+      });
+      listbox.appendChild(opt);
+      return opt;
+    });
+    combobox.addEventListener('click', () => combobox.setAttribute('aria-expanded', 'true'));
+    combobox.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Escape') combobox.setAttribute('aria-expanded', 'false');
+    });
+    document.body.appendChild(combobox);
+    document.body.appendChild(listbox);
+    return { combobox, options };
+  }
+
+  it('expands, matches case-insensitively/trimmed, clicks the option, and confirms the selection stuck', async () => {
+    const { combobox, options } = buildCombobox(['Large', 'Small']);
+    const result = await selectCombobox.call(combobox, '  large ');
+    expect(result.ok).toBe(true);
+    expect(result.options).toEqual(['Large', 'Small']);
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+    expect(combobox.textContent).toBe('Large');
+    expect(combobox.getAttribute('aria-expanded')).toBe('false'); // collapsed, not left open
+  });
+
+  it('reports the available options and collapses when no option matches', async () => {
+    const { combobox } = buildCombobox(['Large', 'Small']);
+    const result = await selectCombobox.call(combobox, 'Medium');
+    expect(result.ok).toBe(false);
+    expect(result.options).toEqual(['Large', 'Small']);
+    expect(combobox.getAttribute('aria-expanded')).toBe('false'); // Escape collapsed it
+  });
+
+  it('reports failure (not a phantom success) when the click does not make the selection stick', async () => {
+    // Simulates a disabled option / debounced onChange / detached node: the option is
+    // "clickable" but its click handler never fires the state update a real selection would.
+    const { combobox, options } = buildCombobox(['Large', 'Small']);
+    const inert = document.createElement('li');
+    inert.setAttribute('role', 'option');
+    inert.textContent = 'Large';
+    // Replace the wired-up option with one that has no onChange side effect at all.
+    options[0].replaceWith(inert);
+    const result = await selectCombobox.call(combobox, 'Large');
+    expect(result.ok).toBe(false); // matched the text, but the read-back proves it never stuck
+    expect(combobox.textContent).toBe('Choose…'); // unchanged — the phantom-success case this guards against
+  });
+
+  it('resolves cleanly (does not hang) when an exception is thrown inside the first setTimeout callback', async () => {
+    const { combobox } = buildCombobox(['Large', 'Small']);
+    const listbox = document.getElementById('lb1') as HTMLElement;
+    // Force the exact failure mode Issue 2 guards against: an internal exception thrown from
+    // inside the (originally unguarded) setTimeout body, instead of a clean resolve.
+    listbox.querySelectorAll = () => {
+      throw new Error('simulated hostile/broken page');
+    };
+    const result = await selectCombobox.call(combobox, 'Large');
+    expect(result).toEqual({ ok: false, options: [] });
+  });
+
+  it('resolves cleanly (does not hang) when an exception is thrown inside the second setTimeout callback', async () => {
+    const { combobox, options } = buildCombobox(['Large', 'Small']);
+    // Force the option's own getAttribute (read during the post-click verification) to throw,
+    // exercising the second setTimeout's own try/catch specifically.
+    options[0].getAttribute = () => {
+      throw new Error('simulated hostile/broken page');
+    };
+    const result = await selectCombobox.call(combobox, 'Large');
+    expect(result).toEqual({ ok: false, options: [] });
   });
 });

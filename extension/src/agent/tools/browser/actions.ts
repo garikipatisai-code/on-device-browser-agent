@@ -221,7 +221,7 @@ async function readTagAndRole(
       {
         objectId,
         functionDeclaration:
-          "function(){ try { var r=(this.getAttribute&&this.getAttribute('role'))||''; var lbId=this.getAttribute('aria-controls')||this.getAttribute('aria-owns'); return {tag:this.tagName, role:r, hasListbox: r==='combobox' && !!lbId}; } catch(e){ return {tag:'', role:'', hasListbox:false}; } }",
+          "function(){ try { var r=(this.getAttribute&&this.getAttribute('role'))||''; var lbId=this.getAttribute('aria-controls')||this.getAttribute('aria-owns'); return {tag:this.tagName, hasListbox: r==='combobox' && !!lbId}; } catch(e){ return {tag:'', hasListbox:false}; } }",
         returnByValue: true,
       },
     );
@@ -236,7 +236,17 @@ async function readTagAndRole(
 // <option> does), clicks the match, then collapses the popup again. Runs entirely in-page as
 // one Promise-returning function so the render delay after expanding doesn't need a second
 // round-trip.
-const SELECT_ARIA_COMBOBOX_FN = `function(value){
+//
+// Two separate waits, not one: the first (400ms) gives the popup time to render after
+// expanding — nothing to read before that finishes. The second (150ms) gives the click's own
+// side effect (the framework's onChange/state update closing the popup, updating the
+// combobox's displayed text) time to settle before it's read back.
+//
+// Each setTimeout callback has its own try/catch: an exception thrown by either would
+// otherwise escape uncaught in a detached macrotask, leaving the outer Promise forever
+// unsettled and the CDP call (awaitPromise: true) hanging for the full 20s command timeout
+// instead of failing fast.
+export const SELECT_ARIA_COMBOBOX_FN = `function(value){
   var el = this;
   return new Promise(function(resolve){
     try {
@@ -244,24 +254,39 @@ const SELECT_ARIA_COMBOBOX_FN = `function(value){
       el.focus();
       el.click();
       setTimeout(function(){
-        var listbox = document.getElementById(listboxId);
-        var opts = listbox ? Array.prototype.slice.call(listbox.querySelectorAll('[role="option"]')) : [];
-        var texts = opts.map(function(o){ return (o.textContent||'').trim(); });
-        var want = String(value).trim().toLowerCase();
-        var matchIndex = -1;
-        for (var i=0;i<texts.length;i++){ if (texts[i].toLowerCase()===want){ matchIndex=i; break; } }
-        if (matchIndex===-1){
-          el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
-          resolve({ok:false, options:texts});
-          return;
-        }
-        opts[matchIndex].click();
-        setTimeout(function(){
-          if (el.getAttribute('aria-expanded')==='true'){
+        try {
+          var listbox = document.getElementById(listboxId);
+          var opts = listbox ? Array.prototype.slice.call(listbox.querySelectorAll('[role="option"]')) : [];
+          var texts = opts.map(function(o){ return (o.textContent||'').trim(); });
+          var want = String(value).trim().toLowerCase();
+          var matchIndex = -1;
+          for (var i=0;i<texts.length;i++){ if (texts[i].toLowerCase()===want){ matchIndex=i; break; } }
+          if (matchIndex===-1){
             el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+            resolve({ok:false, options:texts});
+            return;
           }
-          resolve({ok:true, options:texts});
-        }, 150);
+          var matchedText = texts[matchIndex];
+          var matchedOption = opts[matchIndex];
+          matchedOption.click();
+          setTimeout(function(){
+            try {
+              // A click alone isn't proof the selection stuck — a disabled option, a debounced
+              // onChange slower than this wait, or a listbox that detached the node mid-flight
+              // would all otherwise report success on a selection that didn't actually take.
+              // Read back the combobox's own state: either it now displays the selected text,
+              // or (for a combobox whose visible text doesn't change, e.g. an icon-only trigger)
+              // the option itself is marked selected.
+              var displayed = (el.textContent||'').trim().toLowerCase();
+              var selectedAttr = matchedOption.getAttribute('aria-selected')==='true';
+              var stuck = displayed.indexOf(matchedText.toLowerCase())!==-1 || selectedAttr;
+              if (el.getAttribute('aria-expanded')==='true'){
+                el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+              }
+              resolve({ok:stuck, options:texts});
+            } catch(e2){ resolve({ok:false, options:[]}); }
+          }, 150);
+        } catch(e1){ resolve({ok:false, options:[]}); }
       }, 400);
     } catch(e){ resolve({ok:false, options:[]}); }
   });
