@@ -89,19 +89,26 @@ async function isEditable(
 // resolved node isn't the thing a real user would click (a visually-hidden real <input> with a
 // styled sibling handling the actual toggle is a common pattern). Read the toggle state before
 // and after so that case is caught instead of reported as a phantom success. Returns null for
-// anything that isn't a checkbox/radio/switch — no verification applies to those.
+// anything that isn't a checkbox/radio/switch — no verification applies to those. Also reports
+// `type` ('checkbox' | 'radio' | 'switch') so the caller can special-case a radio that was
+// already checked before the click: clicking an already-checked radio is a legitimate browser
+// no-op (state can't go both directions the way a checkbox/switch can), not a failure to verify.
 async function readToggleState(
   send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
   objectId: string,
-): Promise<boolean | null> {
+): Promise<{ checked: boolean; type: string } | null> {
   try {
-    const { result } = await send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration:
-        "function(){ try { var t=(this.type||'').toLowerCase(); if(t==='checkbox'||t==='radio') return this.checked; var r=(this.getAttribute&&this.getAttribute('role'))||''; if(r==='switch'||r==='checkbox'||r==='menuitemcheckbox') return this.getAttribute('aria-checked')==='true'; return null; } catch(e){ return null; } }",
-      returnByValue: true,
-    });
-    return (result?.value as boolean | null) ?? null;
+    const { result } = await send<{ result?: { value?: { checked?: boolean; type?: string } | null } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration:
+          "function(){ try { var t=(this.type||'').toLowerCase(); if(t==='checkbox'||t==='radio') return {checked:this.checked, type:t}; var r=(this.getAttribute&&this.getAttribute('role'))||''; if(r==='switch'||r==='checkbox'||r==='menuitemcheckbox') return {checked:this.getAttribute('aria-checked')==='true', type:r}; return null; } catch(e){ return null; } }",
+        returnByValue: true,
+      },
+    );
+    const v = result?.value;
+    return v ? { checked: v.checked === true, type: v.type ?? '' } : null;
   } catch {
     return null;
   }
@@ -153,9 +160,14 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
           functionDeclaration: 'function() { this.click(); }',
           returnByValue: true,
         });
-        if (before !== null) {
+        // A radio already checked before the click can never meaningfully fail this check —
+        // re-clicking an already-checked radio is a browser no-op (no state change, no `change`
+        // event), unlike a checkbox/switch which toggles both directions on every click. Skip
+        // the read-and-retry entirely so that no-op isn't misreported as "direct click didn't
+        // toggle it."
+        if (before !== null && !(before.type === 'radio' && before.checked)) {
           const after = await readToggleState(send, objectId);
-          if (after === before && (await clickAssociatedLabel(send, objectId))) {
+          if (after !== null && after.checked === before.checked && (await clickAssociatedLabel(send, objectId))) {
             retriedViaLabel = true;
           }
         }

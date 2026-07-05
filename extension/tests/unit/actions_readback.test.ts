@@ -20,6 +20,7 @@ interface CdpState {
   scrollAfter: number;
   toggleSequence: (boolean | null)[];
   labelClickWorked: boolean;
+  toggleType: string;
 }
 
 describe('action tools — read-back verification (no phantom success)', () => {
@@ -42,6 +43,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
       scrollAfter: 600,
       toggleSequence: [],
       labelClickWorked: false,
+      toggleType: 'checkbox',
     };
     chrome.tabs.get = ((id: number, cb: (t: unknown) => void) =>
       cb({ id, url: 'https://shop.example/', status: 'complete' })) as unknown as typeof chrome.tabs.get;
@@ -61,7 +63,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
           if (fn.includes('aria-checked')) {
             const v = s.toggleSequence[toggleReadIndex] ?? null;
             toggleReadIndex += 1;
-            return cb({ result: { value: v } });
+            return cb({ result: { value: v === null ? null : { checked: v, type: s.toggleType } } });
           }
           if (fn.includes('labels[i]')) return cb({ result: { value: s.labelClickWorked } });
           if (fn.includes('isContentEditable')) return cb({ result: { value: s.editable } });
@@ -171,6 +173,15 @@ describe('action tools — read-back verification (no phantom success)', () => {
 
   it('does not attempt toggle verification on a non-toggle element (link/button)', async () => {
     s.toggleSequence = []; // readToggleState returns null (no entries) — not a checkbox/radio/switch
+    const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).not.toMatch(/via associated label/);
+  });
+
+  it('reports success plainly for an already-checked radio (click is a browser no-op, not a failure)', async () => {
+    s.toggleType = 'radio';
+    s.toggleSequence = [true, true]; // already checked before the click; still checked after (no-op)
+    s.labelClickWorked = true; // would "succeed" if the retry fired — proves the guard, not just a failing fallback, skips it
     const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
     expect(res.ok).toBe(true);
     expect(res.content).not.toMatch(/via associated label/);
