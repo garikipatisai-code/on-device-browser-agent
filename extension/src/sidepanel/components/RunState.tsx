@@ -5,15 +5,20 @@ import { planProgress } from '../view/result';
 import { Icon } from './Icon';
 
 /** Live status while the agent works: friendly phase + elapsed + a step-completion progress
- *  meter + the plan as a checklist. */
+ *  meter (with a live activity count, since a short plan can sit at one step for a long,
+ *  event-heavy stretch) + the plan as a checklist. */
 export function RunState({
   phase,
   plan,
   elapsedMs,
+  eventCount,
 }: {
   phase: TaskPhase;
   plan: Plan | null;
   elapsedMs: number;
+  /** Count of timeline events so far this run — ticks up on every tool call/result, not just
+   *  step completions, so it visibly moves even while a single step is doing a lot of work. */
+  eventCount: number;
 }) {
   const info = describePhase(phase);
   const progress = planProgress(plan);
@@ -36,15 +41,18 @@ export function RunState({
           aria-valuemin={0}
           aria-valuemax={progress.total}
           aria-valuenow={progress.done}
-          aria-valuetext={`${progress.done} of ${progress.total} steps complete`}
+          aria-valuetext={`${progress.done} of ${progress.total} steps complete, ${eventCount} actions taken`}
         >
           <div className="progress-track">
             <div className="progress-fill" style={{ width: `${(progress.done / progress.total) * 100}%` }}>
-              {progress.activeIndex !== -1 && <span className="progress-fill-pulse" />}
+              {/* `key` forces a remount on every new event, replaying the (single-shot, non-looping)
+                  pulse animation — so this flashes once per real event instead of looping on its own
+                  schedule, which would look "alive" even if the agent had actually stalled. */}
+              {progress.activeIndex !== -1 && <span className="progress-fill-pulse" key={eventCount} />}
             </div>
           </div>
           <span className="progress-label">
-            {progress.done} of {progress.total} steps
+            {progress.done} of {progress.total} steps · {eventCount} actions
           </span>
         </div>
       )}

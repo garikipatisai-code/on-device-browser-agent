@@ -350,7 +350,7 @@ export function App() {
 
             <Transcript turns={pastTurns} />
 
-            {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} />}
+            {running && <RunState phase={status.phase} plan={status.plan} elapsedMs={elapsedMs} eventCount={events.length} />}
 
             {!running && finish && (
               <ResultCard

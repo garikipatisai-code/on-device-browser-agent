@@ -227,7 +227,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .progress-meter { display: flex; align-items: center; gap: var(--sp-2); }
 .progress-track { flex: 1; height: 6px; border-radius: var(--r-pill); background: var(--surface-2); }
 .progress-fill { position: relative; height: 100%; border-radius: var(--r-pill); background: var(--accent); transition: width 300ms ease; }
-.progress-fill-pulse { position: absolute; right: -3px; top: 50%; transform: translateY(-50%); width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.progress-fill-pulse { position: absolute; right: -3px; top: 50%; transform: translateY(-50%); width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 0.5s ease-in-out 1; }
 .progress-label { flex: none; font-size: 11.5px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
 
 /* plan checklist */
