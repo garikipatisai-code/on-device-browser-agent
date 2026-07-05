@@ -24,6 +24,9 @@ interface CdpState {
   toggleType: string;
   pointBackendNodeId: number | undefined;
   typedValueReadback: string;
+  comboboxHasListbox: boolean;
+  comboboxOk: boolean;
+  comboboxOptions: string[];
 }
 
 describe('action tools — read-back verification (no phantom success)', () => {
@@ -50,6 +53,9 @@ describe('action tools — read-back verification (no phantom success)', () => {
       toggleType: 'checkbox',
       pointBackendNodeId: 42,
       typedValueReadback: '',
+      comboboxHasListbox: false,
+      comboboxOk: true,
+      comboboxOptions: ['Large', 'Small'],
     };
     chrome.tabs.get = ((id: number, cb: (t: unknown) => void) =>
       cb({ id, url: 'https://shop.example/', status: 'complete' })) as unknown as typeof chrome.tabs.get;
@@ -77,6 +83,8 @@ describe('action tools — read-back verification (no phantom success)', () => {
           if (fn.includes('labels[i]')) return cb({ result: { value: s.labelClickWorked } });
           if (fn.includes('this.value||')) return cb({ result: { value: s.typedValueReadback } });
           if (fn.includes('isContentEditable')) return cb({ result: { value: { editable: s.editable, type: s.inputType } } });
+          if (fn.includes('hasListbox')) return cb({ result: { value: { tag: 'DIV', role: 'combobox', hasListbox: s.comboboxHasListbox } } });
+          if (fn.includes('matchIndex')) return cb({ result: { value: { ok: s.comboboxOk, options: s.comboboxOptions } } });
           if (fn.includes('options')) return cb({ result: { value: { ok: s.selectApplied, options: s.selectOptions } } });
           return cb({ result: {} });
         }
@@ -120,6 +128,25 @@ describe('action tools — read-back verification (no phantom success)', () => {
     const res = await tabSelectTool.dispatch({ tabId: 5, elementIndex: 3, value: 'lg' }, ctx());
     expect(res.ok).toBe(false);
     expect(res.content).toMatch(/stale|refresh|changed/i);
+  });
+
+  it('tab.select expands and picks an option on an ARIA combobox', async () => {
+    s.comboboxHasListbox = true;
+    s.comboboxOk = true;
+    s.comboboxOptions = ['Large', 'Small'];
+    const res = await tabSelectTool.dispatch({ tabId: 5, elementIndex: 3, value: 'Large' }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).toMatch(/selected/i);
+  });
+
+  it('tab.select reports the available options when no combobox option matches', async () => {
+    s.comboboxHasListbox = true;
+    s.comboboxOk = false;
+    s.comboboxOptions = ['Large', 'Small'];
+    const res = await tabSelectTool.dispatch({ tabId: 5, elementIndex: 3, value: 'Medium' }, ctx());
+    expect(res.ok).toBe(false);
+    expect(res.content).toMatch(/Large/);
+    expect(res.content).toMatch(/Small/);
   });
 
   // AR-M4: typing into a button/link/heading (all indexed) sends keystrokes nowhere; the tool

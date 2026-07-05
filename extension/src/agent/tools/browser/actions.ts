@@ -208,6 +208,65 @@ async function submitViaJs(send: <T>(m: string, p?: Record<string, unknown>) => 
   });
 }
 
+// Distinguishes a real <select> from an ARIA-combobox-shaped custom dropdown (React-Select,
+// MUI, Radix, and similar component libraries render this pattern) before deciding which
+// selection strategy to use.
+async function readTagAndRole(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  objectId: string,
+): Promise<{ tag: string; hasListbox: boolean }> {
+  try {
+    const { result } = await send<{ result?: { value?: { tag?: string; hasListbox?: boolean } } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration:
+          "function(){ try { var r=(this.getAttribute&&this.getAttribute('role'))||''; var lbId=this.getAttribute('aria-controls')||this.getAttribute('aria-owns'); return {tag:this.tagName, role:r, hasListbox: r==='combobox' && !!lbId}; } catch(e){ return {tag:'', role:'', hasListbox:false}; } }",
+        returnByValue: true,
+      },
+    );
+    return { tag: result?.value?.tag ?? '', hasListbox: result?.value?.hasListbox === true };
+  } catch {
+    return { tag: '', hasListbox: false };
+  }
+}
+
+// Expands an ARIA combobox, matches `value` against its referenced listbox's option text
+// (case-insensitive, trimmed — ARIA listbox options have no native `value` attribute the way
+// <option> does), clicks the match, then collapses the popup again. Runs entirely in-page as
+// one Promise-returning function so the render delay after expanding doesn't need a second
+// round-trip.
+const SELECT_ARIA_COMBOBOX_FN = `function(value){
+  var el = this;
+  return new Promise(function(resolve){
+    try {
+      var listboxId = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+      el.focus();
+      el.click();
+      setTimeout(function(){
+        var listbox = document.getElementById(listboxId);
+        var opts = listbox ? Array.prototype.slice.call(listbox.querySelectorAll('[role="option"]')) : [];
+        var texts = opts.map(function(o){ return (o.textContent||'').trim(); });
+        var want = String(value).trim().toLowerCase();
+        var matchIndex = -1;
+        for (var i=0;i<texts.length;i++){ if (texts[i].toLowerCase()===want){ matchIndex=i; break; } }
+        if (matchIndex===-1){
+          el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+          resolve({ok:false, options:texts});
+          return;
+        }
+        opts[matchIndex].click();
+        setTimeout(function(){
+          if (el.getAttribute('aria-expanded')==='true'){
+            el.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+          }
+          resolve({ok:true, options:texts});
+        }, 150);
+      }, 400);
+    } catch(e){ resolve({ok:false, options:[]}); }
+  });
+}`;
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -374,15 +433,32 @@ export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: num
       // actionable refresh guidance the other action tools give, not a bare throw.
       if (!objectId) return { stale: true } as const;
       if (!(await isElementConnected(send, objectId))) return { stale: true } as const;
+      const { tag, hasListbox } = await readTagAndRole(send, objectId);
+      if (tag !== 'SELECT' && hasListbox) {
+        const { result } = await send<{ result?: { value?: { ok?: boolean; options?: string[] } } }>(
+          'Runtime.callFunctionOn',
+          {
+            objectId,
+            functionDeclaration: SELECT_ARIA_COMBOBOX_FN,
+            arguments: [{ value }],
+            returnByValue: true,
+            awaitPromise: true,
+          },
+        );
+        return { stale: false, applied: result?.value?.ok === true, options: result?.value?.options ?? [] } as const;
+      }
       // A <select> ignores assignment of a value that isn't one of its options, so read the
       // value back: if it didn't take, the model passed a label/guess instead of the real value.
-      const { result } = await send<{ result?: { value?: { ok?: boolean; options?: string[] } } }>('Runtime.callFunctionOn', {
-        objectId,
-        functionDeclaration:
-          "function(v){ try { if(this.tagName!=='SELECT') return {ok:false, options:[]}; var opts=Array.from(this.options).map(function(o){return o.value;}); this.value=v; var ok=this.value===v; if(ok) this.dispatchEvent(new Event('change',{bubbles:true})); return {ok:ok, options:opts}; } catch(e){ return {ok:false, options:[]}; } }",
-        arguments: [{ value }],
-        returnByValue: true,
-      });
+      const { result } = await send<{ result?: { value?: { ok?: boolean; options?: string[] } } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId,
+          functionDeclaration:
+            "function(v){ try { if(this.tagName!=='SELECT') return {ok:false, options:[]}; var opts=Array.from(this.options).map(function(o){return o.value;}); this.value=v; var ok=this.value===v; if(ok) this.dispatchEvent(new Event('change',{bubbles:true})); return {ok:ok, options:opts}; } catch(e){ return {ok:false, options:[]}; } }",
+          arguments: [{ value }],
+          returnByValue: true,
+        },
+      );
       return { stale: false, applied: result?.value?.ok === true, options: result?.value?.options ?? [] } as const;
     });
     if (outcome.stale) return { ok: false, content: staleMsg(elementIndex) };
