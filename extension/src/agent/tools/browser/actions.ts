@@ -67,21 +67,26 @@ async function isElementConnected(
 // keystrokes vanish but the action still looks like success. Verify the target is editable so a
 // mis-indexed button/link/heading is reported, not silently typed into. Kept permissive (any
 // input/textarea/contenteditable + textbox/searchbox/combobox/spinbutton roles) to avoid
-// rejecting a legitimate field.
-async function isEditable(
+// rejecting a legitimate field. Also reports the element's HTML `type` (date/color/range/etc.)
+// so the caller can branch to a different value-assignment strategy for input shapes that
+// Input.insertText does not handle correctly.
+async function checkEditableAndType(
   send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
   objectId: string,
-): Promise<boolean> {
+): Promise<{ editable: boolean; type: string }> {
   try {
-    const { result } = await send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration:
-        "function(){ try { var r=(this.getAttribute&&this.getAttribute('role'))||''; return !!(this && (this.isContentEditable || this.tagName==='INPUT' || this.tagName==='TEXTAREA' || r==='textbox' || r==='searchbox' || r==='combobox' || r==='spinbutton')); } catch(e){ return false; } }",
-      returnByValue: true,
-    });
-    return result?.value === true;
+    const { result } = await send<{ result?: { value?: { editable?: boolean; type?: string } } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration:
+          "function(){ try { var r=(this.getAttribute&&this.getAttribute('role'))||''; var editable=!!(this.isContentEditable || this.tagName==='INPUT' || this.tagName==='TEXTAREA' || r==='textbox' || r==='searchbox' || r==='combobox' || r==='spinbutton'); return {editable:editable, type:(this.type||'').toLowerCase()}; } catch(e){ return {editable:true, type:''}; } }",
+        returnByValue: true,
+      },
+    );
+    return { editable: result?.value?.editable ?? true, type: result?.value?.type ?? '' };
   } catch {
-    return true; // can't tell → don't block a possibly-valid field
+    return { editable: true, type: '' }; // can't tell → don't block a possibly-valid field
   }
 }
 
@@ -169,6 +174,10 @@ const SET_NATIVE_VALUE_FN = `function(v){
   } catch(e) { try { this.value = v; } catch(e2) {} }
 }`;
 
+// Input.insertText does not reliably work on these input shapes — they need direct value
+// assignment via the native setter instead (see SET_NATIVE_VALUE_FN above).
+const SPECIAL_VALUE_TYPES = new Set(['date', 'time', 'datetime-local', 'month', 'week', 'color', 'range']);
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -254,11 +263,35 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
       await focusNode(send, backendNodeId);
       const objectId = await resolveObjectId(send, backendNodeId);
       if (objectId && !(await isElementConnected(send, objectId))) return true; // detached → stale
-      if (objectId && !(await isEditable(send, objectId))) {
+      if (!objectId) {
+        await send('Input.insertText', { text });
+        return false;
+      }
+      const { editable, type } = await checkEditableAndType(send, objectId);
+      if (!editable) {
         notEditable = true;
         return false;
       }
-      if (clear && objectId) {
+      if (SPECIAL_VALUE_TYPES.has(type)) {
+        // Direct assignment replaces whatever was there — there's no meaningful "clear then
+        // type" for a date/color/range control, so `clear` is not consulted on this branch.
+        await send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: SET_NATIVE_VALUE_FN,
+          arguments: [{ value: text }],
+          returnByValue: true,
+        });
+        if (submit) {
+          await send('Runtime.callFunctionOn', {
+            objectId,
+            functionDeclaration:
+              'function(){ var f=this.form||this.closest("form"); if(f){ if(f.requestSubmit) f.requestSubmit(); else f.submit(); return; } this.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,which:13,bubbles:true})); this.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",keyCode:13,which:13,bubbles:true})); }',
+            returnByValue: true,
+          });
+        }
+        return false;
+      }
+      if (clear) {
         await send('Runtime.callFunctionOn', {
           objectId,
           functionDeclaration: SET_NATIVE_VALUE_FN,
@@ -267,7 +300,7 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
         });
       }
       await send('Input.insertText', { text });
-      if (submit && objectId) {
+      if (submit) {
         // Submit via JS — a synthetic Enter/mouse event hangs on a background tab.
         await send('Runtime.callFunctionOn', {
           objectId,

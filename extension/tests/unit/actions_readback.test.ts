@@ -16,6 +16,7 @@ interface CdpState {
   selectApplied: boolean;
   selectOptions: string[];
   editable: boolean;
+  inputType: string;
   scrollBefore: number;
   scrollAfter: number;
   toggleSequence: (boolean | null)[];
@@ -40,6 +41,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
       selectApplied: true,
       selectOptions: ['lg', 'sm'],
       editable: true,
+      inputType: '',
       scrollBefore: 0,
       scrollAfter: 600,
       toggleSequence: [],
@@ -71,7 +73,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
             return cb({ result: { value: v === null ? null : { checked: v, type: s.toggleType } } });
           }
           if (fn.includes('labels[i]')) return cb({ result: { value: s.labelClickWorked } });
-          if (fn.includes('isContentEditable')) return cb({ result: { value: s.editable } });
+          if (fn.includes('isContentEditable')) return cb({ result: { value: { editable: s.editable, type: s.inputType } } });
           if (fn.includes('options')) return cb({ result: { value: { ok: s.selectApplied, options: s.selectOptions } } });
           return cb({ result: {} });
         }
@@ -143,6 +145,32 @@ describe('action tools — read-back verification (no phantom success)', () => {
     await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: 'hello', clear: true }, ctx());
     const clearCall = seen.find((fn) => fn.includes('getOwnPropertyDescriptor'));
     expect(clearCall).toBeDefined();
+  });
+
+  it('tab.type assigns a date value via the native setter instead of Input.insertText', async () => {
+    s.inputType = 'date';
+    const seenMethods: string[] = [];
+    const origSend = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = ((t: unknown, method: string, p: unknown, cb: (r?: unknown) => void) => {
+      seenMethods.push(method);
+      return (origSend as unknown as (t: unknown, m: string, p: unknown, cb: (r?: unknown) => void) => void)(t, method, p, cb);
+    }) as unknown as typeof chrome.debugger.sendCommand;
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: '2026-07-04' }, ctx());
+    expect(res.ok).toBe(true);
+    expect(seenMethods).not.toContain('Input.insertText');
+  });
+
+  it('tab.type still uses Input.insertText for a plain text field', async () => {
+    s.inputType = '';
+    const seenMethods: string[] = [];
+    const origSend = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = ((t: unknown, method: string, p: unknown, cb: (r?: unknown) => void) => {
+      seenMethods.push(method);
+      return (origSend as unknown as (t: unknown, m: string, p: unknown, cb: (r?: unknown) => void) => void)(t, method, p, cb);
+    }) as unknown as typeof chrome.debugger.sendCommand;
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: 'hello' }, ctx());
+    expect(res.ok).toBe(true);
+    expect(seenMethods).toContain('Input.insertText');
   });
 
   // AR-L8: at the page bottom scrollBy is a no-op; the tool must say so instead of claiming it
