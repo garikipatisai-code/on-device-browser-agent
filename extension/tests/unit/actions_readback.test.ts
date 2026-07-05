@@ -21,6 +21,7 @@ interface CdpState {
   toggleSequence: (boolean | null)[];
   labelClickWorked: boolean;
   toggleType: string;
+  pointBackendNodeId: number | undefined;
 }
 
 describe('action tools — read-back verification (no phantom success)', () => {
@@ -44,6 +45,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
       toggleSequence: [],
       labelClickWorked: false,
       toggleType: 'checkbox',
+      pointBackendNodeId: 42,
     };
     chrome.tabs.get = ((id: number, cb: (t: unknown) => void) =>
       cb({ id, url: 'https://shop.example/', status: 'complete' })) as unknown as typeof chrome.tabs.get;
@@ -57,6 +59,9 @@ describe('action tools — read-back verification (no phantom success)', () => {
         cb: (r?: unknown) => void,
       ) => {
         if (method === 'DOM.resolveNode') return cb(s.objectId ? { object: { objectId: s.objectId } } : {});
+        if (method === 'DOM.getNodeForLocation') return cb({ backendNodeId: s.pointBackendNodeId });
+        // Coordinate-fallback path (no objectId) needs a box model to compute a click point.
+        if (method === 'DOM.getBoxModel') return cb({ model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } });
         if (method === 'Runtime.callFunctionOn') {
           const fn = String(params?.functionDeclaration ?? '');
           if (fn.includes('isConnected')) return cb({ result: { value: s.connected } });
@@ -185,5 +190,20 @@ describe('action tools — read-back verification (no phantom success)', () => {
     const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
     expect(res.ok).toBe(true);
     expect(res.content).not.toMatch(/via associated label/);
+  });
+
+  it('tab.click dispatches a coordinate click when the point is not occluded', async () => {
+    s.objectId = undefined; // forces the coordinate-fallback branch
+    s.pointBackendNodeId = 42; // matches resolveBackendId's mocked return — not occluded
+    const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
+    expect(res.ok).toBe(true);
+  });
+
+  it('tab.click refuses a coordinate click when the point is occluded by another element', async () => {
+    s.objectId = undefined; // forces the coordinate-fallback branch
+    s.pointBackendNodeId = 999; // a different node is actually at that point
+    const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
+    expect(res.ok).toBe(false);
+    expect(res.content).toMatch(/covered by another element/);
   });
 });

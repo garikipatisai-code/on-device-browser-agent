@@ -133,6 +133,28 @@ async function clickAssociatedLabel(
   }
 }
 
+// Checked only on the coordinate-fallback path (no resolvable JS object reference exists for
+// the target, so an in-page elementFromPoint-vs-object comparison isn't possible). Uses CDP's
+// own "what's actually at this point" primitive instead. Fails open — an inconclusive check
+// must never block a click that would otherwise have worked.
+async function isPointOccluded(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  x: number,
+  y: number,
+  targetBackendNodeId: number,
+): Promise<boolean> {
+  try {
+    const { backendNodeId } = await send<{ backendNodeId?: number }>('DOM.getNodeForLocation', {
+      x: Math.round(x),
+      y: Math.round(y),
+    });
+    if (typeof backendNodeId !== 'number') return false;
+    return backendNodeId !== targetBackendNodeId;
+  } catch {
+    return false;
+  }
+}
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -145,6 +167,7 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
     assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
     let retriedViaLabel = false;
+    let occluded = false;
     const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       await scrollIntoView(send, backendNodeId);
@@ -173,12 +196,22 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
         }
       } else {
         const { x, y } = await elementCenter(send, backendNodeId);
+        if (await isPointOccluded(send, x, y, backendNodeId)) {
+          occluded = true;
+          return false;
+        }
         await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
         await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
       }
       return false;
     });
     if (stale) return { ok: false, content: staleMsg(elementIndex) };
+    if (occluded) {
+      return {
+        ok: false,
+        content: `Element [${elementIndex}] is covered by another element at that position — call aria.extract to see what's on top, or scroll it into view.`,
+      };
+    }
     clearExtractionCache(tabId);
     const via = retriedViaLabel ? ' (via associated label — direct click did not toggle it)' : '';
     return { ok: true, content: `Clicked element [${elementIndex}] on tab ${tabId}${via}` };
