@@ -61,13 +61,38 @@ describe('redesigned components render across states', () => {
     expect(html).toMatch(/Stop/); // and the stop button
   });
 
-  it('RunState renders the human phase label + every plan step', () => {
+  it('RunState renders the human phase label + every plan step + the progress meter', () => {
     const html = renderToStaticMarkup(<RunState phase="EXECUTING" plan={plan} elapsedMs={95_000} />);
     expect(html).toContain('Working in the page'); // not the raw "EXECUTING"
     expect(html).not.toContain('EXECUTING');
     expect(html).toContain('Search for the product');
     expect(html).toContain('Report the price');
     expect(html).toContain('1m 35s');
+    expect(html).toContain('1 of 3 steps');
+    expect(html).toMatch(/role="progressbar"/);
+    expect(html).toMatch(/aria-valuenow="1"/);
+    expect(html).toMatch(/aria-valuemax="3"/);
+  });
+
+  it('RunState shows no progress meter before a plan exists', () => {
+    const html = renderToStaticMarkup(<RunState phase="PLANNING" plan={null} elapsedMs={2_000} />);
+    expect(html).not.toMatch(/role="progressbar"/);
+    expect(html).not.toContain('steps');
+  });
+
+  it('RunState progress meter is full width with no pulse once every step is resolved', () => {
+    const donePlan: Plan = {
+      created: 0,
+      steps: [
+        { id: 'a', description: 'Search for the product', successCriteria: 'results', status: 'completed' },
+        { id: 'b', description: 'Open the first result', successCriteria: 'opened', status: 'completed' },
+      ],
+    };
+    const html = renderToStaticMarkup(<RunState phase="EVALUATING" plan={donePlan} elapsedMs={1_000} />);
+    expect(html).toContain('2 of 2 steps');
+    expect(html).toMatch(/aria-valuenow="2"/);
+    expect(html).toMatch(/width:100%/);
+    expect(html).not.toContain('progress-fill-pulse');
   });
 
   it('ResultCard heroes the verdict + summary + cites sources', () => {
