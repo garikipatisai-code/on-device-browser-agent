@@ -199,6 +199,15 @@ describe('session commands', () => {
     expect(bg.state().activeSessionId).toBe(sessions[0].id);
   });
 
+  it('handleSessionSelect actually persists the pointer, not just the in-memory variable', async () => {
+    // bg.state().activeSessionId only proves the in-memory write; loadActiveSessionId() reads the
+    // same chrome.storage.local key crashResume() restores from, proving the WRITE path a real SW
+    // restart depends on — not just crashResume's own READ side (already covered above).
+    const s = await createSession();
+    await bg.handleSessionSelect(s.id);
+    expect(await loadActiveSessionId()).toBe(s.id);
+  });
+
   it('handleSessionSelect switches the active session', async () => {
     await bg.handleSessionNew();
     const first = bg.state().activeSessionId;
