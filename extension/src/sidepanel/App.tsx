@@ -391,6 +391,9 @@ export function App() {
                 onSteer={handleSteer}
                 onStop={handleAbort}
                 showExamples={events.length === 0 && status.phase === 'IDLE'}
+                phase={status.phase}
+                plan={status.plan}
+                eventCount={events.length}
               />
             </div>
           </div>

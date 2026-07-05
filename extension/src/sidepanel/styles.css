@@ -157,6 +157,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 /* ---------- composer ---------- */
 .composer { display: flex; flex-direction: column; gap: var(--sp-2); }
 .composer-field { display: flex; gap: var(--sp-2); align-items: flex-end; }
+/* Status readout pinned to the always-visible composer (see Composer.tsx's Props comment) —
+   reuses .phase/.phase-dot/.phase-label as-is so it matches RunState's own status row. */
+.composer-status { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.composer-status-detail { font-size: 11.5px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
 /* Live "steer" input shown while a task runs — a subtle accent marks it as redirect-in-flight. */
 .steer-row { padding-left: var(--sp-2); border-left: 2px solid var(--accent); }
 .steer-row .composer-input { font-size: 12.5px; }

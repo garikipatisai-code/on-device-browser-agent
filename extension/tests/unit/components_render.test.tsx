@@ -44,7 +44,7 @@ describe('redesigned components render across states', () => {
 
   it('Composer renders the goal field, an example chip, and the mode toggles', () => {
     const html = renderToStaticMarkup(
-      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples />,
+      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples phase="IDLE" plan={null} eventCount={0} />,
     );
     expect(html).toContain('State a goal');
     expect(html).toContain('Run');
@@ -55,10 +55,25 @@ describe('redesigned components render across states', () => {
 
   it('Composer shows the steer input while a task is running (mid-run redirect)', () => {
     const html = renderToStaticMarkup(
-      <Composer running goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples={false} />,
+      <Composer running goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples={false} phase="EXECUTING" plan={null} eventCount={0} />,
     );
     expect(html).toMatch(/Steer the running task/i); // the steer field
     expect(html).toMatch(/Stop/); // and the stop button
+  });
+
+  it('Composer surfaces a status line (phase + step fraction + live action count) while running, since RunState scrolls out of view but the composer never does', () => {
+    const running_html = renderToStaticMarkup(
+      <Composer running goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples={false} phase="EXECUTING" plan={plan} eventCount={18} />,
+    );
+    expect(running_html).toContain('Working in the page');
+    expect(running_html).toContain('1 of 3 steps');
+    expect(running_html).toContain('18 actions');
+
+    const idle_html = renderToStaticMarkup(
+      <Composer running={false} goal="" onGoalChange={noop} onRun={noop} applyUrl="" onApplyUrlChange={noop} onApply={noop} onAskPage={noop} onSteer={noop} onStop={noop} showExamples={false} phase="IDLE" plan={plan} eventCount={18} />,
+    );
+    expect(idle_html).not.toContain('Working in the page');
+    expect(idle_html).not.toContain('18 actions');
   });
 
   it('RunState renders the human phase label + every plan step + the progress meter', () => {

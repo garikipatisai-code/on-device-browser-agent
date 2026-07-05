@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import type { Plan, TaskPhase } from '@/shared/messages';
+import { describePhase } from '../view/phase';
+import { planProgress } from '../view/result';
 import { Icon } from './Icon';
 
 const EXAMPLES = [
@@ -21,6 +24,12 @@ interface Props {
   onSteer: (text: string) => void;
   onStop: () => void;
   showExamples: boolean;
+  /** Below, so a status readout can live right next to the always-reachable Stop button — the
+   *  composer is the one part of the page that's guaranteed visible regardless of scroll position
+   *  or how long the Activity log has grown, unlike RunState above it. */
+  phase: TaskPhase;
+  plan: Plan | null;
+  eventCount: number;
 }
 
 export function Composer({
@@ -35,11 +44,16 @@ export function Composer({
   onSteer,
   onStop,
   showExamples,
+  phase,
+  plan,
+  eventCount,
 }: Props) {
   const [mode, setMode] = useState<Mode>('goal');
   const [question, setQuestion] = useState('');
   const [steerText, setSteerText] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
+  const info = describePhase(phase);
+  const progress = planProgress(plan);
 
   // Auto-grow the goal textarea (1→~4 lines) as the user types.
   useEffect(() => {
@@ -61,6 +75,7 @@ export function Composer({
     <div className="composer-field steer-row">
       <input
         className="composer-input"
+        aria-label="Steer the running task"
         placeholder="Steer the running task — e.g. search each city separately"
         value={steerText}
         onChange={(e) => setSteerText(e.target.value)}
@@ -80,12 +95,32 @@ export function Composer({
     </button>
   );
 
+  // The one status readout guaranteed visible regardless of scroll position — see the Props
+  // comment on `phase`/`plan`/`eventCount` above for why it lives here rather than only in
+  // RunState. `eventCount` (not just step completion) so a single long-running step still shows
+  // real, moving evidence of work instead of sitting silent.
+  const StatusLine = running ? (
+    <div className="composer-status">
+      <span className={`phase ${info.tone}`}>
+        <span className="phase-dot" />
+        <span className="phase-label">{info.label}</span>
+      </span>
+      {progress.total > 0 && (
+        <span className="composer-status-detail">
+          {progress.done} of {progress.total} steps · {eventCount} actions
+        </span>
+      )}
+    </div>
+  ) : null;
+
   if (mode === 'askpage') {
     return (
       <div className="composer card">
+        {StatusLine}
         <div className="composer-field">
           <input
             className="composer-input"
+            aria-label="Question about this page"
             placeholder="Ask about the page you're on — e.g. what's the key takeaway?"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
@@ -114,9 +149,11 @@ export function Composer({
   if (mode === 'apply') {
     return (
       <div className="composer card">
+        {StatusLine}
         <div className="composer-field">
           <input
             className="composer-input"
+            aria-label="Job URL"
             placeholder="Paste a Greenhouse / Lever job URL"
             value={applyUrl}
             onChange={(e) => onApplyUrlChange(e.target.value)}
@@ -143,11 +180,13 @@ export function Composer({
 
   return (
     <div className="composer card">
+      {StatusLine}
       <div className="composer-field">
         <textarea
           ref={ref}
           rows={1}
           className="composer-input"
+          aria-label="Goal"
           placeholder="State a goal — e.g. find a wireless mouse under $30"
           value={goal}
           onChange={(e) => onGoalChange(e.target.value)}
