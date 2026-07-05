@@ -570,7 +570,7 @@ export class Orchestrator {
     }
 
     await waitForTabSettled(navTabId); // condition-based wait, not a fixed delay
-    let obs = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
+    const obs = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
     if (!(obs && obs.ok && obs.content)) {
       this.emit({
         kind: 'log',
