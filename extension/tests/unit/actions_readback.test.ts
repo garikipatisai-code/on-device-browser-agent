@@ -23,6 +23,7 @@ interface CdpState {
   labelClickWorked: boolean;
   toggleType: string;
   pointBackendNodeId: number | undefined;
+  typedValueReadback: string;
 }
 
 describe('action tools — read-back verification (no phantom success)', () => {
@@ -48,6 +49,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
       labelClickWorked: false,
       toggleType: 'checkbox',
       pointBackendNodeId: 42,
+      typedValueReadback: '',
     };
     chrome.tabs.get = ((id: number, cb: (t: unknown) => void) =>
       cb({ id, url: 'https://shop.example/', status: 'complete' })) as unknown as typeof chrome.tabs.get;
@@ -73,6 +75,7 @@ describe('action tools — read-back verification (no phantom success)', () => {
             return cb({ result: { value: v === null ? null : { checked: v, type: s.toggleType } } });
           }
           if (fn.includes('labels[i]')) return cb({ result: { value: s.labelClickWorked } });
+          if (fn.includes('this.value||')) return cb({ result: { value: s.typedValueReadback } });
           if (fn.includes('isContentEditable')) return cb({ result: { value: { editable: s.editable, type: s.inputType } } });
           if (fn.includes('options')) return cb({ result: { value: { ok: s.selectApplied, options: s.selectOptions } } });
           return cb({ result: {} });
@@ -171,6 +174,58 @@ describe('action tools — read-back verification (no phantom success)', () => {
     const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: 'hello' }, ctx());
     expect(res.ok).toBe(true);
     expect(seenMethods).toContain('Input.insertText');
+  });
+
+  it('tab.type retries the clear when leftover content is detected after typing', async () => {
+    s.typedValueReadback = 'oldhello'; // leftover "old" + newly typed "hello"
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: 'hello', clear: true }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).toMatch(/retried/i);
+  });
+
+  it('tab.type does not report a retry when the typed value matches exactly', async () => {
+    s.typedValueReadback = 'hello';
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: 'hello', clear: true }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).not.toMatch(/retried/i);
+  });
+
+  it('tab.type does not report a retry when a reformatted value merely differs (not concatenation)', async () => {
+    s.typedValueReadback = '555-123-4567'; // shorter than or same length as typed digits-only text — not concatenation
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: '5551234567', clear: true }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).not.toMatch(/retried/i);
+  });
+
+  it('tab.type submits via JS for a special-value-type input when submit=true', async () => {
+    s.inputType = 'date';
+    const seenMethods: string[] = [];
+    const origSend = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = ((t: unknown, method: string, p: unknown, cb: (r?: unknown) => void) => {
+      seenMethods.push(method);
+      return (origSend as unknown as (t: unknown, m: string, p: unknown, cb: (r?: unknown) => void) => void)(t, method, p, cb);
+    }) as unknown as typeof chrome.debugger.sendCommand;
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: '2026-07-04', submit: true }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).toMatch(/submitted/i);
+  });
+
+  it('tab.type ignores clear=true for a special-value-type input (no meaningful clear-then-type)', async () => {
+    s.inputType = 'date';
+    const seen: string[] = [];
+    const origSend = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = ((t: unknown, method: string, p: { functionDeclaration?: string; arguments?: Array<{ value?: string }> } | undefined, cb: (r?: unknown) => void) => {
+      if (method === 'Runtime.callFunctionOn' && p?.functionDeclaration?.includes('getOwnPropertyDescriptor')) {
+        seen.push(JSON.stringify(p.arguments));
+      }
+      return (origSend as unknown as (t: unknown, m: string, p: unknown, cb: (r?: unknown) => void) => void)(t, method, p, cb);
+    }) as unknown as typeof chrome.debugger.sendCommand;
+    const res = await tabTypeTool.dispatch({ tabId: 5, elementIndex: 3, text: '2026-07-04', clear: true }, ctx());
+    expect(res.ok).toBe(true);
+    // Only one native-setter call should have happened (the direct value assignment) — never a
+    // separate clear-to-empty-string call, since `clear` isn't consulted on this branch.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('2026-07-04');
   });
 
   // AR-L8: at the page bottom scrollBy is a no-op; the tool must say so instead of claiming it

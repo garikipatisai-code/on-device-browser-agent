@@ -178,6 +178,36 @@ const SET_NATIVE_VALUE_FN = `function(v){
 // assignment via the native setter instead (see SET_NATIVE_VALUE_FN above).
 const SPECIAL_VALUE_TYPES = new Set(['date', 'time', 'datetime-local', 'month', 'week', 'color', 'range']);
 
+// Input.insertText is appended at the caret, not assigned — if `clear` didn't fully wipe prior
+// content (e.g. a framework re-populated the field between the clear and the insert), the typed
+// text lands concatenated onto the leftover rather than replacing it. Read the field back so that
+// case is caught instead of reported as a phantom "Typed N chars".
+async function readValue(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  objectId: string,
+): Promise<string> {
+  try {
+    const { result } = await send<{ result?: { value?: string } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: "function(){ try { return String(this.value||''); } catch(e){ return ''; } }",
+      returnByValue: true,
+    });
+    return result?.value ?? '';
+  } catch {
+    return '';
+  }
+}
+
+// Submit via JS — a synthetic Enter/mouse event hangs on a background tab.
+async function submitViaJs(send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>, objectId: string): Promise<void> {
+  await send('Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration:
+      'function(){ var f=this.form||this.closest("form"); if(f){ if(f.requestSubmit) f.requestSubmit(); else f.submit(); return; } this.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,which:13,bubbles:true})); this.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",keyCode:13,which:13,bubbles:true})); }',
+    returnByValue: true,
+  });
+}
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -257,6 +287,7 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
     assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
     let notEditable = false;
+    let retriedClear = false;
     const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       await scrollIntoView(send, backendNodeId);
@@ -281,14 +312,7 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
           arguments: [{ value: text }],
           returnByValue: true,
         });
-        if (submit) {
-          await send('Runtime.callFunctionOn', {
-            objectId,
-            functionDeclaration:
-              'function(){ var f=this.form||this.closest("form"); if(f){ if(f.requestSubmit) f.requestSubmit(); else f.submit(); return; } this.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,which:13,bubbles:true})); this.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",keyCode:13,which:13,bubbles:true})); }',
-            returnByValue: true,
-          });
-        }
+        if (submit) await submitViaJs(send, objectId);
         return false;
       }
       if (clear) {
@@ -300,15 +324,19 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
         });
       }
       await send('Input.insertText', { text });
-      if (submit) {
-        // Submit via JS — a synthetic Enter/mouse event hangs on a background tab.
+      const actual = await readValue(send, objectId);
+      if (actual !== text && actual.length > text.length && actual.includes(text)) {
+        // Leftover content wasn't fully cleared before typing — retry once via a hard clear.
         await send('Runtime.callFunctionOn', {
           objectId,
-          functionDeclaration:
-            'function(){ var f=this.form||this.closest("form"); if(f){ if(f.requestSubmit) f.requestSubmit(); else f.submit(); return; } this.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,which:13,bubbles:true})); this.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",keyCode:13,which:13,bubbles:true})); }',
+          functionDeclaration: SET_NATIVE_VALUE_FN,
+          arguments: [{ value: '' }],
           returnByValue: true,
         });
+        await send('Input.insertText', { text });
+        retriedClear = true;
       }
+      if (submit) await submitViaJs(send, objectId);
       return false;
     });
     if (stale) return { ok: false, content: staleMsg(elementIndex) };
@@ -319,7 +347,11 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
       };
     }
     clearExtractionCache(tabId);
-    return { ok: true, content: `Typed ${text.length} chars into element [${elementIndex}]${submit ? ' and submitted' : ''}` };
+    const retryNote = retriedClear ? ' (retried after leftover content was detected)' : '';
+    return {
+      ok: true,
+      content: `Typed ${text.length} chars into element [${elementIndex}]${submit ? ' and submitted' : ''}${retryNote}`,
+    };
   },
 };
 
