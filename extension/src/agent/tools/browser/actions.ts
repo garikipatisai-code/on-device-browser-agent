@@ -85,6 +85,47 @@ async function isEditable(
   }
 }
 
+// A click that should have toggled a checkbox/radio/switch but silently didn't often means the
+// resolved node isn't the thing a real user would click (a visually-hidden real <input> with a
+// styled sibling handling the actual toggle is a common pattern). Read the toggle state before
+// and after so that case is caught instead of reported as a phantom success. Returns null for
+// anything that isn't a checkbox/radio/switch — no verification applies to those.
+async function readToggleState(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  objectId: string,
+): Promise<boolean | null> {
+  try {
+    const { result } = await send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration:
+        "function(){ try { var t=(this.type||'').toLowerCase(); if(t==='checkbox'||t==='radio') return this.checked; var r=(this.getAttribute&&this.getAttribute('role'))||''; if(r==='switch'||r==='checkbox'||r==='menuitemcheckbox') return this.getAttribute('aria-checked')==='true'; return null; } catch(e){ return null; } }",
+      returnByValue: true,
+    });
+    return (result?.value as boolean | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Fallback when a direct click on the resolved node didn't toggle it: click whatever <label>
+// is actually wired to it instead.
+async function clickAssociatedLabel(
+  send: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  objectId: string,
+): Promise<boolean> {
+  try {
+    const { result } = await send<{ result?: { value?: boolean } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration:
+        "function(){ try { var l=null; if(this.id){ var labels=document.querySelectorAll('label'); for(var i=0;i<labels.length;i++){ if(labels[i].getAttribute('for')===this.id){ l=labels[i]; break; } } } if(!l){ l=this.closest('label'); } if(l){ l.click(); return true; } return false; } catch(e){ return false; } }",
+      returnByValue: true,
+    });
+    return result?.value === true;
+  } catch {
+    return false;
+  }
+}
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -96,12 +137,14 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
+    let retriedViaLabel = false;
     const stale = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
       await scrollIntoView(send, backendNodeId);
       const objectId = await resolveObjectId(send, backendNodeId);
       if (objectId) {
         if (!(await isElementConnected(send, objectId))) return true; // detached → stale
+        const before = await readToggleState(send, objectId);
         // Native element.click() reliably follows links, fires handlers, and
         // submits forms even on a background tab. Synthetic mouse coordinates
         // often did NOT navigate (a product-link click left the URL unchanged).
@@ -110,6 +153,12 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
           functionDeclaration: 'function() { this.click(); }',
           returnByValue: true,
         });
+        if (before !== null) {
+          const after = await readToggleState(send, objectId);
+          if (after === before && (await clickAssociatedLabel(send, objectId))) {
+            retriedViaLabel = true;
+          }
+        }
       } else {
         const { x, y } = await elementCenter(send, backendNodeId);
         await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
@@ -119,7 +168,8 @@ export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: numb
     });
     if (stale) return { ok: false, content: staleMsg(elementIndex) };
     clearExtractionCache(tabId);
-    return { ok: true, content: `Clicked element [${elementIndex}] on tab ${tabId}` };
+    const via = retriedViaLabel ? ' (via associated label — direct click did not toggle it)' : '';
+    return { ok: true, content: `Clicked element [${elementIndex}] on tab ${tabId}${via}` };
   },
 };
 

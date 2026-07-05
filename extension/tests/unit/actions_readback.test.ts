@@ -6,7 +6,7 @@ vi.mock('@/agent/tools/browser/aria_tool', () => ({
   clearExtractionCache: vi.fn(),
 }));
 
-import { tabSelectTool, tabTypeTool, tabScrollTool } from '@/agent/tools/browser/actions';
+import { tabClickTool, tabSelectTool, tabTypeTool, tabScrollTool } from '@/agent/tools/browser/actions';
 import type { ToolContext } from '@/agent/tools/registry';
 
 // Configurable CDP responses so each test can model a different page outcome.
@@ -18,16 +18,20 @@ interface CdpState {
   editable: boolean;
   scrollBefore: number;
   scrollAfter: number;
+  toggleSequence: (boolean | null)[];
+  labelClickWorked: boolean;
 }
 
 describe('action tools — read-back verification (no phantom success)', () => {
   let origDebugger: typeof chrome.debugger;
   let origGet: typeof chrome.tabs.get;
   let s: CdpState;
+  let toggleReadIndex = 0;
 
   beforeEach(() => {
     origDebugger = chrome.debugger;
     origGet = chrome.tabs.get;
+    toggleReadIndex = 0;
     s = {
       connected: true,
       objectId: 'o1',
@@ -36,6 +40,8 @@ describe('action tools — read-back verification (no phantom success)', () => {
       editable: true,
       scrollBefore: 0,
       scrollAfter: 600,
+      toggleSequence: [],
+      labelClickWorked: false,
     };
     chrome.tabs.get = ((id: number, cb: (t: unknown) => void) =>
       cb({ id, url: 'https://shop.example/', status: 'complete' })) as unknown as typeof chrome.tabs.get;
@@ -52,6 +58,12 @@ describe('action tools — read-back verification (no phantom success)', () => {
         if (method === 'Runtime.callFunctionOn') {
           const fn = String(params?.functionDeclaration ?? '');
           if (fn.includes('isConnected')) return cb({ result: { value: s.connected } });
+          if (fn.includes('aria-checked')) {
+            const v = s.toggleSequence[toggleReadIndex] ?? null;
+            toggleReadIndex += 1;
+            return cb({ result: { value: v } });
+          }
+          if (fn.includes('labels[i]')) return cb({ result: { value: s.labelClickWorked } });
           if (fn.includes('isContentEditable')) return cb({ result: { value: s.editable } });
           if (fn.includes('options')) return cb({ result: { value: { ok: s.selectApplied, options: s.selectOptions } } });
           return cb({ result: {} });
@@ -140,5 +152,27 @@ describe('action tools — read-back verification (no phantom success)', () => {
     const res = await tabScrollTool.dispatch({ tabId: 5, direction: 'down' }, readOnly);
     expect(res.ok).toBe(true);
     expect(res.content).toMatch(/600/);
+  });
+
+  it('reports success plainly when a checkbox toggles on the first click', async () => {
+    s.toggleSequence = [false, true]; // before: unchecked, after: checked
+    const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).not.toMatch(/via associated label/);
+  });
+
+  it('retries via the associated label when a checkbox does not toggle on direct click', async () => {
+    s.toggleSequence = [false, false]; // before: unchecked, after (post-click): still unchecked
+    s.labelClickWorked = true;
+    const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).toMatch(/via associated label/);
+  });
+
+  it('does not attempt toggle verification on a non-toggle element (link/button)', async () => {
+    s.toggleSequence = []; // readToggleState returns null (no entries) — not a checkbox/radio/switch
+    const res = await tabClickTool.dispatch({ tabId: 5, elementIndex: 3 }, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.content).not.toMatch(/via associated label/);
   });
 });
