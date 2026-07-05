@@ -25,6 +25,10 @@ function classify(e: TimelineEvent): { cls: string; icon: IconName } {
       return e.verdict === 'PASS' ? { cls: 'ok', icon: 'check' } : { cls: 'bad', icon: 'x' };
     case 'breaker.trip':
       return { cls: 'bad', icon: 'alert' };
+    case 'antibot.blocked':
+      return { cls: 'bad', icon: 'alert' };
+    case 'antibot.resolved':
+      return { cls: 'ok', icon: 'check' };
     case 'compaction':
       return { cls: '', icon: 'plan' };
     case 'finish':
@@ -54,6 +58,10 @@ function title(e: TimelineEvent): string {
       return `Evaluated · ${e.verdict}`;
     case 'breaker.trip':
       return `Circuit breaker · ${e.reason}`;
+    case 'antibot.blocked':
+      return `Blocked · ${e.label}`;
+    case 'antibot.resolved':
+      return 'Resolved, continuing';
     case 'compaction':
       return `Compacted (${e.before}→${e.after})`;
     case 'finish':
@@ -61,7 +69,7 @@ function title(e: TimelineEvent): string {
     case 'log':
       return cap(e.level);
     default:
-      return cap(e.kind);
+      return cap((e as TimelineEvent).kind);
   }
 }
 
@@ -75,6 +83,8 @@ function body(e: TimelineEvent): string | null {
       return e.content;
     case 'evaluator.verdict':
       return e.reason;
+    case 'antibot.blocked':
+      return 'Waiting for you to resolve this in the tab.';
     case 'finish':
       return e.summary;
     case 'log':
