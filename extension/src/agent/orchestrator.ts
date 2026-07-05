@@ -603,19 +603,19 @@ export class Orchestrator {
       this.emit({ kind: 'antibot.blocked', ts: Date.now(), label: block.label });
       await patchHot({ phase: 'BLOCKED' });
       const pollMs = this.opts.antiBotPollMs ?? 5_000;
+      let resolved = obs; // obs is non-null here (guarded above); only ever reassigned below from
+                           // an already-non-null `polled`, so `resolved` stays provably non-null
+                           // throughout the loop — no non-null assertions needed anywhere.
       while (block) {
         await sleep(pollMs, this.signal);
-        obs = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
-        if (!(obs && obs.ok && obs.content)) continue; // inconclusive read — keep polling, don't resolve
-        block = detectAntiBotBlock(obs.content);
+        const polled = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
+        if (!(polled && polled.ok && polled.content)) continue; // inconclusive read — keep polling, don't resolve
+        resolved = polled;
+        block = detectAntiBotBlock(polled.content);
       }
-      // The loop can only exit with block falsy, which is only ever set right after the
-      // `obs && obs.ok && obs.content` guard above — so obs is non-null here. TS can't see that
-      // invariant across the while/continue, hence the assertion.
-      const resolved = obs!;
       obsUrl = resolved.data && typeof resolved.data.url === 'string' ? (resolved.data.url as string) : obsUrl;
-      this.lastRead = { tool: 'aria.extract', url: obsUrl, content: resolved.content!.slice(0, this.caps.page) };
-      this.recordObserved(resolved.content!, obsUrl);
+      this.lastRead = { tool: 'aria.extract', url: obsUrl, content: resolved.content.slice(0, this.caps.page) };
+      this.recordObserved(resolved.content, obsUrl);
       this.emit({ kind: 'antibot.resolved', ts: Date.now() });
       await patchHot({ phase: 'EXECUTING' });
       return;
