@@ -4,5 +4,11 @@ node_modules/
 # a stray root lockfile (the real one is extension/package-lock.json)
 /package-lock.json
 
+# externally-sourced Claude Code skill content (regenerable from skills-lock.json, which IS
+# tracked) -- the .claude/skills/ symlink pointing into this cache is excluded for the same
+# reason: it would dangle on a fresh clone since its target here is gitignored.
+/.agents/
+/.claude/skills/frontend-design
+
 # os
 .DS_Store
