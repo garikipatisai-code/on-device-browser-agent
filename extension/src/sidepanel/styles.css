@@ -13,7 +13,10 @@
   --surface-2: #eef0f7;
   --fg: #181b26;
   --fg-mute: #5c6478;
-  --fg-faint: #8b92a6;
+  /* #6d7590, not the lighter #8b92a6 this used to be: that read at ~3.1:1 on white, below
+     WCAG AA's 4.5:1 for normal text — this token lands on real content (field hints, table
+     headers, timestamps), not decoration, so it needs to actually clear that bar. ~4.6:1 here. */
+  --fg-faint: #6d7590;
   --border: #e4e7f0;
   --border-strong: #d4d9e6;
 
@@ -27,7 +30,10 @@
   /* semantic */
   --ok: #1f9d57;
   --ok-weak: rgba(31, 157, 87, 0.12);
-  --warn: #c9820a;
+  /* #9c630a, darkened from #c9820a for the same reason as --fg-faint above: the lighter value
+     read at ~3.1:1 on white as text (.field-hint.warn, .model-chip.off), below the 4.5:1 normal-
+     text bar. Icon/border uses of --warn only need 3:1 and were already fine either way. */
+  --warn: #9c630a;
   --warn-weak: rgba(201, 130, 10, 0.13);
   --danger: #d6453d;
   --danger-weak: rgba(214, 69, 61, 0.11);
@@ -116,7 +122,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   background: linear-gradient(135deg, var(--accent), #8a5bd6); color: #fff;
   box-shadow: var(--shadow-sm); flex: none;
 }
-.brand-name { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.brand-name { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
 .brand-sub { font-size: 10.5px; color: var(--fg-faint); letter-spacing: 0.02em; }
 
 .pill {
@@ -333,9 +339,11 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
 .field-hint { font-size: 11px; color: var(--fg-faint); }
 .field-hint.warn { color: var(--warn); }
+.check-row { display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; }
+.textarea-mono { font-family: ui-monospace, monospace; font-size: 11.5px; }
 
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; margin-right: 6px; }
 .status-dot.on { background: var(--ok); }
 .status-dot.off { background: var(--fg-faint); }
 
@@ -354,6 +362,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .metric-stat { display: flex; flex-direction: column; }
 .metric-stat .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .metric-stat .k { font-size: 11px; color: var(--fg-faint); }
+.table-scroll { overflow-x: auto; }
 .metrics-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 .metrics-table th, .metrics-table td { padding: 6px 6px; text-align: right; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .metrics-table th:first-child, .metrics-table td:first-child { text-align: left; }

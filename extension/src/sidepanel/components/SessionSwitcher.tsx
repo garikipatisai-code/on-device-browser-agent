@@ -18,6 +18,7 @@ export function SessionSwitcher({ sessions, activeSessionId, onNew, onSelect, on
       <div className="row-between">
         <select
           className="recipe-select"
+          aria-label="Chat session"
           value={activeSessionId ?? ''}
           onChange={(e) => onSelect(e.target.value)}
         >

@@ -76,7 +76,7 @@ function body(e: TimelineEvent): string | null {
     case 'planner.plan':
       return e.plan.steps.map((s, i) => `${i + 1}. ${s.description}`).join('\n');
     case 'tool.call':
-      return JSON.stringify(e.args);
+      return JSON.stringify(e.args, null, 2);
     case 'tool.result':
       return e.content;
     case 'evaluator.verdict':
@@ -114,7 +114,7 @@ function Event({ e }: { e: TimelineEvent }) {
         {text &&
           (long ? (
             <>
-              <button className="detail-toggle" onClick={() => setOpen((o) => !o)}>
+              <button className="detail-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
                 {open ? 'Hide details' : 'Show details'}
               </button>
               {open && <pre>{text}</pre>}

@@ -60,9 +60,9 @@ export function RecipesPanel({ recipes, onRefresh, onSave, onDelete }: Props) {
     return (
       <div className="recipes">
         <div className="card setting-group">
-          <div className="card-title">
+          <h2 className="card-title">
             <Icon name="plan" size={13} /> {editor.id ? 'Edit recipe' : 'New recipe'}
-          </div>
+          </h2>
           <div className="field-hint">
             A recipe should be <b>broad but concrete</b>: it should fit a whole class of tasks (any comparison,
             any local search) yet every step must be something the small model can do. Keep it short.
@@ -83,10 +83,10 @@ export function RecipesPanel({ recipes, onRefresh, onSave, onDelete }: Props) {
             <span className="field-label">Steps — one per line; optionally end a line with [tool: search | open_result | finish]</span>
             <textarea
               rows={6}
+              className="textarea-mono"
               value={editor.stepsText}
               onChange={(e) => setEditor({ ...editor, stepsText: e.target.value })}
               placeholder={'For each item, search one query "<item> <metric>"   [tool: search]\nRead the value from the result snippet\nUse the same basis for all; report which wins   [tool: finish]'}
-              style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}
             />
           </div>
           <div className="field">
@@ -118,9 +118,9 @@ export function RecipesPanel({ recipes, onRefresh, onSave, onDelete }: Props) {
     <div className="recipes">
       <div className="card setting-group">
         <div className="row-between">
-          <div className="card-title" style={{ margin: 0 }}>
+          <h2 className="card-title" style={{ margin: 0 }}>
             <Icon name="plan" size={13} /> Recipes
-          </div>
+          </h2>
           <button className="btn btn-sm btn-primary" onClick={() => setEditor({ ...BLANK })}>
             <Icon name="plus" size={12} /> New
           </button>

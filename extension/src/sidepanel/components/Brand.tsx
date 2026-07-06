@@ -12,7 +12,7 @@ export function Brand() {
           <Icon name="spark" size={15} />
         </div>
         <div>
-          <div className="brand-name">Browser Agent</div>
+          <h1 className="brand-name">Browser Agent</h1>
           <div className="brand-sub" title={`build ${BUILD}`}>on-device · build {BUILD}</div>
         </div>
       </div>

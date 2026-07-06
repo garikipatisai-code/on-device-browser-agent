@@ -39,28 +39,30 @@ export function MetricsPanel({ metrics }: { metrics: MetricsSnapshot | null }) {
             <span className="k">slowest mean</span>
           </div>
         </div>
-        <table className="metrics-table">
-          <thead>
-            <tr>
-              <th>Op</th>
-              <th>N</th>
-              <th>OK</th>
-              <th>p50</th>
-              <th>Mean</th>
-            </tr>
-          </thead>
-          <tbody>
-            {metrics.ops.map((o) => (
-              <tr key={o.op}>
-                <td>{o.op}</td>
-                <td>{o.n}</td>
-                <td>{o.ok}</td>
-                <td>{fmtMs(o.p50)}</td>
-                <td>{fmtMs(o.mean)}</td>
+        <div className="table-scroll">
+          <table className="metrics-table">
+            <thead>
+              <tr>
+                <th>Op</th>
+                <th>N</th>
+                <th>OK</th>
+                <th>p50</th>
+                <th>Mean</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {metrics.ops.map((o) => (
+                <tr key={o.op}>
+                  <td>{o.op}</td>
+                  <td>{o.n}</td>
+                  <td>{o.ok}</td>
+                  <td>{fmtMs(o.p50)}</td>
+                  <td>{fmtMs(o.mean)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

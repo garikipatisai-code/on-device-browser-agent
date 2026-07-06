@@ -87,12 +87,13 @@ export function SettingsPanel({
     return (
       <div className="field" key={key}>
         <div className="row-between">
-          <span className="field-label">{label}</span>
+          <label className="field-label" htmlFor={key}>{label}</label>
           <span className={`model-chip ${known ? 'on' : 'off'}`}>
             <Icon name={known ? 'check' : 'alert'} size={10} /> {known ? 'installed' : 'not pulled'}
           </span>
         </div>
         <input
+          id={key}
           list="installed-models"
           value={value}
           onChange={(e) => update(key, e.target.value as Settings[ModelKey])}
@@ -106,16 +107,16 @@ export function SettingsPanel({
     <div className="settings">
       {/* Connection */}
       <div className="card setting-group">
-        <div className="card-title">
+        <h2 className="card-title">
           <Icon name="globe" size={13} /> Connection
-        </div>
+        </h2>
         <div className="field">
-          <span className="field-label">Ollama base URL</span>
-          <input value={local.ollamaBaseUrl} onChange={(e) => update('ollamaBaseUrl', e.target.value)} />
+          <label className="field-label" htmlFor="ollama-base-url">Ollama base URL</label>
+          <input id="ollama-base-url" value={local.ollamaBaseUrl} onChange={(e) => update('ollamaBaseUrl', e.target.value)} />
         </div>
         <div className="row-between">
           <span className="field-hint">
-            <span className={`status-dot ${connected ? 'on' : 'off'}`} style={{ display: 'inline-block', marginRight: 6 }} />
+            <span className={`status-dot ${connected ? 'on' : 'off'}`} />
             {connected ? `${installedModels.length} model(s) installed` : 'No models detected — start "ollama serve"'}
           </span>
           <button className="btn btn-sm" onClick={onRefreshModels}>
@@ -126,9 +127,9 @@ export function SettingsPanel({
 
       {/* Models */}
       <div className="card setting-group">
-        <div className="card-title">
+        <h2 className="card-title">
           <Icon name="spark" size={13} /> Models
-        </div>
+        </h2>
         <datalist id="installed-models">
           {installedModels.map((m) => (
             <option value={m} key={m} />
@@ -141,8 +142,9 @@ export function SettingsPanel({
         {modelField('visionModel', 'Vision (multimodal)')}
         {modelField('embeddingModel', 'Embeddings')}
         <div className="field">
-          <span className="field-label">Context window (num_ctx)</span>
+          <label className="field-label" htmlFor="num-ctx">Context window (num_ctx)</label>
           <input
+            id="num-ctx"
             type="number"
             value={local.numCtx ?? DEFAULT_NUM_CTX}
             min={MIN_NUM_CTX}
@@ -164,9 +166,9 @@ export function SettingsPanel({
 
       {/* Profile */}
       <div className="card setting-group">
-        <div className="card-title">
+        <h2 className="card-title">
           <Icon name="flag" size={13} /> Profile (for filling forms)
-        </div>
+        </h2>
         <div className="field-hint">
           Upload a résumé (.pdf / .docx / .txt) and the model fills this in — or edit the JSON. The file is
           also stored so the agent can attach it to an application.
@@ -203,19 +205,20 @@ export function SettingsPanel({
         <div className="field">
           <textarea
             rows={6}
+            className="textarea-mono"
+            aria-label="Profile JSON"
             value={local.profileJson ?? ''}
             onChange={(e) => update('profileJson', e.target.value)}
             placeholder={'{\n  "name": "Jane Doe",\n  "email": "jane@example.com",\n  "phone": "555-0100"\n}'}
-            style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}
           />
         </div>
       </div>
 
       {/* Standing preferences */}
       <div className="card setting-group">
-        <div className="card-title">
+        <h2 className="card-title">
           <Icon name="plan" size={13} /> Standing preferences
-        </div>
+        </h2>
         <div className="field-hint">
           Persistent guidance the agent honors on every task (planner, executor, and evaluator) — e.g. "use
           city-proper population, not metro", "prefer official/primary sources", "I'm in the UK: use £ and UK
@@ -224,6 +227,7 @@ export function SettingsPanel({
         <div className="field">
           <textarea
             rows={4}
+            aria-label="Standing preferences"
             value={local.preferences ?? ''}
             onChange={(e) => update('preferences', e.target.value)}
             placeholder={'e.g.\n- Use city-proper population, not metro\n- Prefer official or primary sources'}
@@ -249,13 +253,13 @@ export function SettingsPanel({
 
       {/* Domain access */}
       <div className="card setting-group">
-        <div className="card-title">
+        <h2 className="card-title">
           <Icon name="lock" size={13} /> Domain access
-        </div>
+        </h2>
         <div className="field-hint">
           Unknown hosts are <code>read-only</code>. The agent cannot click or type until you upgrade a host.
         </div>
-        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
+        <label className="field-hint check-row">
           <input
             type="checkbox"
             checked={!!local.bypassDomainTiers}
@@ -269,8 +273,9 @@ export function SettingsPanel({
         </label>
         {Object.entries(local.domainTiers).map(([host, tier]) => (
           <div className="domain-row" key={host}>
-            <input value={host} readOnly />
+            <input value={host} readOnly aria-label="Domain" />
             <select
+              aria-label={`Access tier for ${host}`}
               value={migrateLegacyTier(tier)}
               onChange={(e) => {
                 const t = e.target.value as DomainTier;
@@ -287,8 +292,8 @@ export function SettingsPanel({
           </div>
         ))}
         <div className="domain-row">
-          <input placeholder="example.com" value={newHost} onChange={(e) => setNewHost(e.target.value)} />
-          <select value={newTier} onChange={(e) => setNewTier(e.target.value as DomainTier)}>
+          <input placeholder="example.com" aria-label="New domain" value={newHost} onChange={(e) => setNewHost(e.target.value)} />
+          <select aria-label="Access tier for new domain" value={newTier} onChange={(e) => setNewTier(e.target.value as DomainTier)}>
             {TIERS.map((t) => (
               <option key={t} value={t}>
                 {t}
@@ -312,14 +317,14 @@ export function SettingsPanel({
 
       {/* Frontier model (optional) */}
       <div className="card setting-group">
-        <div className="card-title">
+        <h2 className="card-title">
           <Icon name="spark" size={13} /> Frontier model (optional)
-        </div>
+        </h2>
         <div className="field-hint">
           Let the planner and evaluator use a frontier model instead of the local one. Everything
           else (reading pages, clicking, typing) always stays local. Off by default.
         </div>
-        <label className="field-hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8 }}>
+        <label className="field-hint check-row">
           <input
             type="checkbox"
             checked={!!local.hybridMode}
@@ -334,8 +339,9 @@ export function SettingsPanel({
         {local.hybridMode && (
           <>
             <div className="field">
-              <span className="field-label">Provider</span>
+              <label className="field-label" htmlFor="frontier-provider">Provider</label>
               <select
+                id="frontier-provider"
                 value={local.frontier?.provider ?? 'anthropic'}
                 onChange={(e) => updateFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
               >
@@ -344,8 +350,9 @@ export function SettingsPanel({
               </select>
             </div>
             <div className="field">
-              <span className="field-label">Model</span>
+              <label className="field-label" htmlFor="frontier-model">Model</label>
               <input
+                id="frontier-model"
                 placeholder={local.frontier?.provider === 'openai-compatible' ? 'gpt-5.1' : 'claude-opus-4-8'}
                 value={local.frontier?.model ?? ''}
                 onChange={(e) => updateFrontier({ model: e.target.value })}
@@ -353,8 +360,9 @@ export function SettingsPanel({
             </div>
             {local.frontier?.provider === 'openai-compatible' && (
               <div className="field">
-                <span className="field-label">Base URL</span>
+                <label className="field-label" htmlFor="frontier-base-url">Base URL</label>
                 <input
+                  id="frontier-base-url"
                   placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
                   value={local.frontier.baseUrl}
                   onChange={(e) => updateFrontier({ baseUrl: e.target.value })}
@@ -367,8 +375,9 @@ export function SettingsPanel({
               </div>
             )}
             <div className="field">
-              <span className="field-label">API key</span>
+              <label className="field-label" htmlFor="frontier-api-key">API key</label>
               <input
+                id="frontier-api-key"
                 type="password"
                 placeholder={local.frontier?.provider === 'openai-compatible' ? 'sk-...' : 'sk-ant-...'}
                 value={local.frontier?.apiKey ?? ''}
@@ -378,8 +387,9 @@ export function SettingsPanel({
           </>
         )}
         <div className="field">
-          <span className="field-label">Thinking (lead seat)</span>
+          <label className="field-label" htmlFor="thinking-mode">Thinking (lead seat)</label>
           <select
+            id="thinking-mode"
             value={local.leadThinking === undefined ? 'default' : local.leadThinking ? 'on' : 'off'}
             onChange={(e) => {
               const v = e.target.value;
