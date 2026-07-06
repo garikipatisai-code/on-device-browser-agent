@@ -21,6 +21,7 @@ import { ariaExtractTool } from './browser/aria_tool';
 import { visionReadTool } from './browser/vision';
 import {
   tabClickTool,
+  tabFillManyTool,
   tabScrollTool,
   tabSelectTool,
   tabTypeTool,
@@ -51,6 +52,7 @@ export function buildRegistry(): ToolRegistry {
   // browser — act (domain-tier gated inside the tool)
   r.register(tabClickTool);
   r.register(tabTypeTool);
+  r.register(tabFillManyTool);
   r.register(tabSelectTool);
   r.register(tabScrollTool);
   r.register(tabUploadFileTool);
