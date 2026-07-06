@@ -452,6 +452,43 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
   },
 };
 
+export const tabFillManyTool: ToolDefDescriptor<{
+  tabId: number;
+  fields: Array<{ elementIndex: number; text: string }>;
+}> = {
+  name: 'tab.fill_many',
+  description:
+    'Fill MULTIPLE text fields in one call when you can see several empty fields in CURRENT PAGE CONTENT and already know every value to put in them (e.g. a multi-field form matched against USER PROFILE). Each field is filled and verified the same way tab.type does. Do NOT use this if you are unsure of a value, if fields might not all be visible yet, or for anything that also needs to submit — call tab.type individually for those.',
+  argsSchema: z.object({
+    tabId: z.number().int(),
+    fields: z.array(z.object({
+      elementIndex: z.number().int().positive(),
+      text: z.string(),
+    })).min(2),
+  }),
+  async dispatch({ tabId, fields }, ctx) {
+    const url = await tabUrl(tabId);
+    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    const results = await withCdp(tabId, async (send) => {
+      await send('DOM.enable');
+      const out: Array<{ ok: boolean; content: string }> = [];
+      for (const f of fields) {
+        const backendNodeId = await resolveBackendId(tabId, f.elementIndex);
+        out.push(await fillOneFieldWithSend(send, backendNodeId, f.elementIndex, f.text));
+      }
+      return out;
+    });
+    if (results.some((r) => r.ok)) clearExtractionCache(tabId); // at least one field actually changed the page
+    const failed = results.filter((r) => !r.ok);
+    return {
+      ok: failed.length === 0,
+      content: results
+        .map((r, i) => `[${fields[i].elementIndex}] ${r.ok ? 'filled' : `FAILED: ${r.content}`}`)
+        .join('\n'),
+    };
+  },
+};
+
 export const tabSelectTool: ToolDefDescriptor<{ tabId: number; elementIndex: number; value: string }> = {
   name: 'tab.select',
   description: 'Choose an option on a <select> element by value. Requires click-only tier.',

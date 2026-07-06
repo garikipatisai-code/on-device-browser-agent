@@ -6,7 +6,7 @@ vi.mock('@/agent/tools/browser/aria_tool', () => ({
   clearExtractionCache: vi.fn(),
 }));
 
-import { tabClickTool, tabSelectTool, tabTypeTool, tabScrollTool, SELECT_ARIA_COMBOBOX_FN } from '@/agent/tools/browser/actions';
+import { tabClickTool, tabSelectTool, tabTypeTool, tabScrollTool, tabFillManyTool, SELECT_ARIA_COMBOBOX_FN } from '@/agent/tools/browser/actions';
 import type { ToolContext } from '@/agent/tools/registry';
 
 // Configurable CDP responses so each test can model a different page outcome.
@@ -427,5 +427,85 @@ describe('SELECT_ARIA_COMBOBOX_FN — injected JS logic', () => {
     };
     const result = await selectCombobox.call(combobox, 'Large');
     expect(result).toEqual({ ok: false, options: [] });
+  });
+});
+
+describe('tab.fill_many — batches known fields into one dispatch', () => {
+  let origDebugger: typeof chrome.debugger;
+  let origGet: typeof chrome.tabs.get;
+
+  beforeEach(() => {
+    origDebugger = chrome.debugger;
+    origGet = chrome.tabs.get;
+    chrome.tabs.get = ((id: number, cb: (t: unknown) => void) =>
+      cb({ id, url: 'https://shop.example/', status: 'complete' })) as unknown as typeof chrome.tabs.get;
+    chrome.debugger = {
+      attach: (_t: unknown, _v: unknown, cb: () => void) => cb(),
+      detach: (_t: unknown, cb: () => void) => cb(),
+      sendCommand: (
+        _t: unknown,
+        method: string,
+        params: { functionDeclaration?: string } | undefined,
+        cb: (r?: unknown) => void,
+      ) => {
+        if (method === 'DOM.resolveNode') return cb({ object: { objectId: 'o1' } });
+        if (method === 'Runtime.callFunctionOn') {
+          const fn = String(params?.functionDeclaration ?? '');
+          if (fn.includes('isConnected')) return cb({ result: { value: true } });
+          if (fn.includes('isContentEditable')) return cb({ result: { value: { editable: true, type: '' } } });
+          if (fn.includes('this.value||')) return cb({ result: { value: '' } });
+          return cb({ result: {} });
+        }
+        cb({});
+      },
+    } as unknown as typeof chrome.debugger;
+  });
+  afterEach(() => {
+    chrome.debugger = origDebugger;
+    chrome.tabs.get = origGet;
+  });
+
+  const ctx = () =>
+    ({ settings: { domainTiers: { 'shop.example': 'click-only' } }, signal: undefined }) as unknown as ToolContext;
+
+  it('fills every field and reports aggregate success', async () => {
+    const res = await tabFillManyTool.dispatch(
+      { tabId: 5, fields: [{ elementIndex: 1, text: 'Jane Doe' }, { elementIndex: 2, text: 'jane@example.com' }] },
+      ctx(),
+    );
+    expect(res.ok).toBe(true);
+    expect(res.content).toMatch(/\[1\] filled/);
+    expect(res.content).toMatch(/\[2\] filled/);
+  });
+
+  it('rejects a single-field array at the schema level (tab.type is the right tool below 2 fields)', () => {
+    const parsed = tabFillManyTool.argsSchema.safeParse({ tabId: 5, fields: [{ elementIndex: 1, text: 'x' }] });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('refuses on a read-only domain before touching any field', async () => {
+    const readOnlyCtx = { settings: { domainTiers: { 'shop.example': 'read-only' } }, signal: undefined } as unknown as ToolContext;
+    await expect(
+      tabFillManyTool.dispatch({ tabId: 5, fields: [{ elementIndex: 1, text: 'a' }, { elementIndex: 2, text: 'b' }] }, readOnlyCtx),
+    ).rejects.toThrow();
+  });
+
+  it('keeps filling the rest of the batch after one field is stale, and reports which one failed', async () => {
+    let call = 0;
+    const origSend = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = ((t: unknown, method: string, params: unknown, cb: (r?: unknown) => void) => {
+      if (method === 'Runtime.callFunctionOn' && String((params as { functionDeclaration?: string })?.functionDeclaration ?? '').includes('isConnected')) {
+        call += 1;
+        return cb({ result: { value: call !== 1 } }); // first field's connectivity check reports detached; rest report connected
+      }
+      return (origSend as typeof chrome.debugger.sendCommand)(t as chrome.debugger.Debuggee, method, params as never, cb);
+    }) as typeof chrome.debugger.sendCommand;
+    const res = await tabFillManyTool.dispatch(
+      { tabId: 5, fields: [{ elementIndex: 1, text: 'a' }, { elementIndex: 2, text: 'b' }] },
+      ctx(),
+    );
+    expect(res.ok).toBe(false); // aggregate fails since not every field succeeded
+    expect(res.content).toMatch(/\[1\].*FAILED/s);
+    expect(res.content).toMatch(/\[2\] filled/);
   });
 });
