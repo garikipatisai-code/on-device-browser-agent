@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import type { ToolDefDescriptor } from '../registry';
-import { withCdp } from './lifecycle';
+import { withCdp, type SendCmd } from './lifecycle';
 import { assertCanAct } from '@/agent/safety/domain_tiers';
 import { resolveBackendId, clearExtractionCache } from './aria_tool';
 
@@ -292,6 +292,78 @@ export const SELECT_ARIA_COMBOBOX_FN = `function(value){
   });
 }`;
 
+// Shared by tab.type (one field, its own withCdp) and tab.fill_many (N fields, one shared
+// withCdp) -- takes an already-open CDP connection so a caller filling several fields can do it
+// inside a single attach/detach cycle instead of racing N concurrent ones (chrome.debugger is
+// exclusive per tab; withCdp's own finally-detach would otherwise fire while a sibling call was
+// still mid-command). This is exactly the per-field body tab.type already had; nothing about
+// the read-back-verify/native-setter/date-type logic changed, only where the withCdp lives.
+async function fillOneFieldWithSend(
+  send: SendCmd,
+  backendNodeId: number,
+  elementIndex: number,
+  text: string,
+  opts: { clear?: boolean; submit?: boolean } = {},
+): Promise<{ ok: boolean; content: string }> {
+  await scrollIntoView(send, backendNodeId);
+  await focusNode(send, backendNodeId);
+  const objectId = await resolveObjectId(send, backendNodeId);
+  if (objectId && !(await isElementConnected(send, objectId))) {
+    return { ok: false, content: staleMsg(elementIndex) };
+  }
+  if (!objectId) {
+    await send('Input.insertText', { text });
+    return { ok: true, content: `Typed ${text.length} chars into element [${elementIndex}]` };
+  }
+  const { editable, type } = await checkEditableAndType(send, objectId);
+  if (!editable) {
+    return {
+      ok: false,
+      content: `Element [${elementIndex}] is not a text field — keystrokes would go nowhere. Use tab.click for buttons/links, or call aria.extract to find the actual input.`,
+    };
+  }
+  if (SPECIAL_VALUE_TYPES.has(type)) {
+    await send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: SET_NATIVE_VALUE_FN,
+      arguments: [{ value: text }],
+      returnByValue: true,
+    });
+    if (opts.submit) await submitViaJs(send, objectId);
+    return {
+      ok: true,
+      content: `Typed ${text.length} chars into element [${elementIndex}]${opts.submit ? ' and submitted' : ''}`,
+    };
+  }
+  if (opts.clear) {
+    await send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: SET_NATIVE_VALUE_FN,
+      arguments: [{ value: '' }],
+      returnByValue: true,
+    });
+  }
+  await send('Input.insertText', { text });
+  let retriedClear = false;
+  const actual = await readValue(send, objectId);
+  if (actual !== text && actual.length > text.length && actual.includes(text)) {
+    await send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: SET_NATIVE_VALUE_FN,
+      arguments: [{ value: '' }],
+      returnByValue: true,
+    });
+    await send('Input.insertText', { text });
+    retriedClear = true;
+  }
+  if (opts.submit) await submitViaJs(send, objectId);
+  const retryNote = retriedClear ? ' (retried after leftover content was detected)' : '';
+  return {
+    ok: true,
+    content: `Typed ${text.length} chars into element [${elementIndex}]${opts.submit ? ' and submitted' : ''}${retryNote}`,
+  };
+}
+
 export const tabClickTool: ToolDefDescriptor<{ tabId: number; elementIndex: number }> = {
   name: 'tab.click',
   description: 'Click an interactive element by its ARIA tree index. Requires click-only tier or higher.',
@@ -370,72 +442,13 @@ export const tabTypeTool: ToolDefDescriptor<{ tabId: number; elementIndex: numbe
     const url = await tabUrl(tabId);
     assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
     const backendNodeId = await resolveBackendId(tabId, elementIndex);
-    let notEditable = false;
-    let retriedClear = false;
-    const stale = await withCdp(tabId, async (send) => {
+    const result = await withCdp(tabId, async (send) => {
       await send('DOM.enable');
-      await scrollIntoView(send, backendNodeId);
-      await focusNode(send, backendNodeId);
-      const objectId = await resolveObjectId(send, backendNodeId);
-      if (objectId && !(await isElementConnected(send, objectId))) return true; // detached → stale
-      if (!objectId) {
-        await send('Input.insertText', { text });
-        return false;
-      }
-      const { editable, type } = await checkEditableAndType(send, objectId);
-      if (!editable) {
-        notEditable = true;
-        return false;
-      }
-      if (SPECIAL_VALUE_TYPES.has(type)) {
-        // Direct assignment replaces whatever was there — there's no meaningful "clear then
-        // type" for a date/color/range control, so `clear` is not consulted on this branch.
-        await send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: SET_NATIVE_VALUE_FN,
-          arguments: [{ value: text }],
-          returnByValue: true,
-        });
-        if (submit) await submitViaJs(send, objectId);
-        return false;
-      }
-      if (clear) {
-        await send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: SET_NATIVE_VALUE_FN,
-          arguments: [{ value: '' }],
-          returnByValue: true,
-        });
-      }
-      await send('Input.insertText', { text });
-      const actual = await readValue(send, objectId);
-      if (actual !== text && actual.length > text.length && actual.includes(text)) {
-        // Leftover content wasn't fully cleared before typing — retry once via a hard clear.
-        await send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: SET_NATIVE_VALUE_FN,
-          arguments: [{ value: '' }],
-          returnByValue: true,
-        });
-        await send('Input.insertText', { text });
-        retriedClear = true;
-      }
-      if (submit) await submitViaJs(send, objectId);
-      return false;
+      return fillOneFieldWithSend(send, backendNodeId, elementIndex, text, { clear, submit });
     });
-    if (stale) return { ok: false, content: staleMsg(elementIndex) };
-    if (notEditable) {
-      return {
-        ok: false,
-        content: `Element [${elementIndex}] is not a text field — keystrokes would go nowhere. Use tab.click for buttons/links, or call aria.extract to find the actual input.`,
-      };
-    }
+    if (!result.ok) return result;
     clearExtractionCache(tabId);
-    const retryNote = retriedClear ? ' (retried after leftover content was detected)' : '';
-    return {
-      ok: true,
-      content: `Typed ${text.length} chars into element [${elementIndex}]${submit ? ' and submitted' : ''}${retryNote}`,
-    };
+    return result;
   },
 };
 
