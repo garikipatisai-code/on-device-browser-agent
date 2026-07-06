@@ -1,8 +1,8 @@
 # On-Device Browser Agent
 
-A goal-anchored autonomous browser agent that runs **entirely on your device** — a Chrome (MV3) extension driven by a **local LLM via [Ollama](https://ollama.com)** (default: `gemma4:e4b`). Give it a goal in plain language; it plans, reads pages via the accessibility tree, clicks/types/searches, and reports back. No cloud, no API keys, no telemetry — your browsing and your data stay local **by default**.
+A goal-anchored autonomous browser agent — a Chrome (MV3) extension driven by a **local LLM via [Ollama](https://ollama.com)** (default: `gemma4:e4b`). Give it a goal in plain language; it plans, reads pages via the accessibility tree, clicks/types/searches, and reports back. No cloud or API keys **by default**, and no telemetry, ever — an optional, off-by-default hybrid mode can hand planning/evaluation to a frontier model if you configure one, but everything that actually touches the browser (reading, clicking, typing) always stays local and on-device regardless.
 
-It's built around not breaking or bluffing: answers are checked against what was actually read on the page, not asserted; every site starts read-only until you explicitly allow it to act; an anti-bot wall pauses the run for you instead of trying to solve or click through it; and individual browser actions (clicks, typed text, dropdowns) verify they actually landed rather than reporting success on faith. An optional, off-by-default hybrid mode can hand planning/evaluation to a frontier model if you choose to configure one — everything that actually touches the browser always stays local regardless. See "What it does" below for the full feature list.
+It's also built around not breaking or bluffing: answers are checked against what was actually read on the page, not asserted; every site starts read-only until you explicitly allow it to act; an anti-bot wall pauses the run for you instead of trying to solve or click through it; and individual browser actions (clicks, typed text, dropdowns) verify they actually landed rather than reporting success on faith. See "What it does" below for the full feature list.
 
 ## What it does
 
