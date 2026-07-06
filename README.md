@@ -41,8 +41,6 @@ npm run build          # tsc + vite build → extension/dist
 
 Then load it in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `extension/dist`. It opens in the side panel from the toolbar.
 
-
-
 ## Usage
 
 1. **Settings → Models:** confirm Ollama is reachable and the models are installed (Refresh).
