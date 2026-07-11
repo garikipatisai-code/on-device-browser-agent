@@ -12,3 +12,4 @@ node_modules/
 
 # os
 .DS_Store
+docs/turboquant-integration.md
