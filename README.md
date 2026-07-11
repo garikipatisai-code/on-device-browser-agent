@@ -1,4 +1,4 @@
-# On-Device Browser Agent
+# On-Device Browser Agent [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 A goal-anchored autonomous browser agent — a Chrome (MV3) extension driven by a **local LLM via [Ollama](https://ollama.com)** (default: `gemma4:e4b`). Give it a goal in plain language; it plans, reads pages via the accessibility tree, clicks/types/searches, and reports back. No cloud or API keys **by default**, and no telemetry, ever — an optional, off-by-default hybrid mode can hand planning/evaluation to a frontier model if you configure one, but everything that actually touches the browser (reading, clicking, typing) always stays local and on-device regardless.
 
@@ -86,4 +86,4 @@ Override the model or trial count with `OLLAMA_BENCH_MODEL` / `OLLAMA_BENCH_TRIA
 
 ## License
 
-Personal project. No warranty.
+[AGPL-3.0-or-later](./LICENSE) — free software: you can use, modify, and distribute it, but if you run a modified version as a network service you must publish your changes. No warranty.
