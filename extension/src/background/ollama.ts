@@ -36,6 +36,7 @@ export interface ChatOptions {
   tools?: ToolDef[];
   toolChoice?: 'auto' | 'none' | 'required';
   thinking?: boolean;
+  thinkingEffort?: 'low' | 'medium' | 'high';
   format?: 'json'; // never pass a schema object — see blueprint §03
   temperature?: number;
   topP?: number;
@@ -102,7 +103,7 @@ export class OllamaClient {
   async chatOnce(opts: ChatOptions): Promise<ChatResponse> {
     const body = this.buildBody(opts, /*stream*/ false);
     return this.withRetry(async () => {
-      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 120_000, opts.signal);
+      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 300_000, opts.signal);
       try {
         const res = await fetch(`${this.baseUrl}/api/chat`, {
           method: 'POST',
@@ -121,7 +122,7 @@ export class OllamaClient {
 
   async *chatStream(opts: ChatOptions): AsyncGenerator<ChatResponse> {
     const body = this.buildBody(opts, /*stream*/ true);
-    const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 120_000, opts.signal);
+    const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 300_000, opts.signal);
     try {
       const res = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',

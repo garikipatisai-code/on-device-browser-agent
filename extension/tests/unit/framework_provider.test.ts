@@ -102,7 +102,7 @@ describe('frontierProvider', () => {
       json: async () => ({ content: [], stop_reason: 'end_turn', usage: {} }),
     }));
     const provider = frontierProvider({ provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' });
-    await expect(provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/no text content/);
+    await expect(provider.chatOnce({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/no text or tool call content/);
     vi.unstubAllGlobals();
   });
 });
@@ -162,7 +162,7 @@ describe('openAICompatibleProvider', () => {
     });
     await provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }], thinking: true });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.reasoning_effort).toBe('high');
+    expect(body.reasoning_effort).toBe('medium');
     vi.unstubAllGlobals();
   });
 
@@ -201,7 +201,7 @@ describe('openAICompatibleProvider', () => {
     });
     await expect(
       provider.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'x' }] }),
-    ).rejects.toThrow(/no text content/);
+    ).rejects.toThrow(/no text or tool call content/);
     vi.unstubAllGlobals();
   });
 });

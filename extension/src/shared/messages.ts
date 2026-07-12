@@ -66,6 +66,16 @@ export interface Settings {
    *  whichever provider serves it. undefined = today's unchanged per-role
    *  defaults; true/false forces it either way, regardless of provider. */
   leadThinking?: boolean;
+  /** Reasoning effort level when lead thinking is on. 'low' | 'medium' | 'high'.
+   *  Maps to OpenAI-compatible reasoning_effort. On Anthropic this is set by the
+   *  thinking.type field ('adaptive'), so effort only matters on non-Anthropic paths.
+   *  Default 'medium'. */
+  leadThinkingEffort?: 'low' | 'medium' | 'high';
+  /** When true AND hybridMode is on, the helper seat (executor, compactor)
+   *  also runs on the frontier model, not just the lead seats. Off by default:
+   *  everything that touches the browser stays local. Turn on only when you
+   *  trust the frontier provider with full browser access. */
+  hybridHelpers?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

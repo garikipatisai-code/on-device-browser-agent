@@ -45,7 +45,7 @@ export async function runExecutor(input: ExecutorInput): Promise<ExecutorOutput>
     tools,
     toolChoice: 'auto',
     thinking: true,
-    timeoutMs: input.timeoutMs ?? 120_000,
+    timeoutMs: input.timeoutMs ?? 300_000,
     signal: input.signal,
     numCtx: input.numCtx ?? NUM_CTX,
   });
@@ -71,7 +71,7 @@ export async function runExecutor(input: ExecutorInput): Promise<ExecutorOutput>
     tools,
     toolChoice: 'required',
     thinking: true,
-    timeoutMs: input.timeoutMs ?? 120_000,
+    timeoutMs: input.timeoutMs ?? 300_000,
     signal: input.signal,
     numCtx: input.numCtx ?? NUM_CTX,
   });

@@ -27,6 +27,23 @@ function planText(plan: Plan | null, currentStepId: string | null): string {
   return `PLAN:\n${lines.join('\n')}`;
 }
 
+/** Persona directives — narrows the executor's focus per step to prevent it from
+ *  hallucinating outside its lane. The planner can tag a step with [persona: X]
+ *  in its description or toolHint. Three built-in personas cover the main modes. */
+const PERSONAS: Record<string, string> = {
+  navigator:
+    'ROLE: Navigator — focus on opening and navigating between pages. Read enough to find the next target, then move on. Do NOT fill forms or extract detailed data — leave that for the extractor.',
+  extractor:
+    'ROLE: Extractor — focus on reading page content literally. Report numbers, names, prices, and ratings EXACTLY as they appear. If a value is missing from the page, say so — do NOT infer, calculate, or invent. Do NOT navigate or submit unless it reveals more data.',
+  'form-filler':
+    'ROLE: Form Filler — focus on filling form fields with profile data. Use tab.fill_many when possible. Verify each field after filling. Do NOT submit. Do NOT navigate away from the form.',
+};
+
+function personaBlock(persona?: string): string {
+  if (!persona || !PERSONAS[persona]) return '';
+  return `\n${PERSONAS[persona]}`;
+}
+
 export interface CommonContext {
   goal: string;
   toolCatalog: string;
@@ -44,6 +61,10 @@ export interface CommonContext {
   preferences?: string;
   /** The prior turn's finish summary, carried forward within the same chat session. */
   priorSummary?: string;
+  /** Role persona for the executor this turn. Narrows focus: navigator, extractor, form-filler. */
+  persona?: string;
+  /** Auto-saved workspace entries from pages read this task. Injected automatically. */
+  workspaceBlock?: string;
 }
 
 /** Render mid-task user corrections as a high-priority guidance block (empty string when none,
@@ -77,7 +98,12 @@ export function buildPlannerMessages(ctx: CommonContext, extra?: string, workflo
 Your job: Decompose the user's goal into a sequence of concrete, executable steps. Steps must be self-contained, observable, and have clear success criteria. Each step's successCriteria states what will be TRUE when the step is done (e.g. "the museum's facilities are listed on the page"), not the action performed.
 
 Output: Respond ONLY with a JSON object of the form:
-{"steps":[{"description":"...","successCriteria":"...","toolHint":"optional"}]}
+{"steps":[{"description":"...","successCriteria":"...","toolHint":"persona:extractor"}]}
+
+REQUIRED: Tag EVERY step with a persona in toolHint:
+- "persona:extractor" for reading/extracting data from a page (search results, product lists, tables, repo details)
+- "persona:form-filler" for filling form fields with profile data
+- Omit toolHint (or leave it out of the step) for navigation-only steps like "open a page" or "search", where reading is automatic
 
 If GOAL is not an actionable task (a greeting like "hi", small talk, thanks, or input with no topic or task in it at all, e.g. "do something", "help"), do NOT invent a step that just asks for a goal — respond with EXACTLY {"noGoal":true} instead.
 
@@ -90,7 +116,8 @@ A plan that ends before the goal is fully satisfied is wrong.
 
 If a PROVEN RECIPE is given below, build your plan DIRECTLY from it: turn each recipe step into a plan step IN ORDER and copy its [tool: …] into that step's toolHint. Substitute the GOAL's specific items, but PRESERVE every constraint the recipe states (e.g. "from the same source as the other items", "use a precise figure, not a vague range", "note the source"). Do NOT simplify a recipe step into a generic "search for X" that drops its rule — the recipe's wording encodes guardrails this task needs; keep them in the step's description.
 
-Each step is a single browser action or observation. Prefer observing before acting (extract a page → decide → act). Use the FEWEST steps that still fully cover the goal — fewer is better, because each step is a slow model call AND a chance to derail. Make ONE step per item that both finds AND reads that item's fact (e.g. "find Austin's population") — do NOT split it into separate search / open / extract steps (a page opened via search is auto-read for you). Never pad with vague "analyze", "re-evaluate", or "assume" steps. The FINAL step must report the requested items AS THE ANSWER (e.g. "list the 3 products with names and prices").
+Each step is a single browser action or observation. Prefer observing before acting (extract a page → decide → act). Use the FEWEST steps that still fully cover the goal
+- To extract structured data from a list or table page (trending, search results, product listings), tag the step with toolHint "persona:extractor" — the executor will switch to data-extraction mode and use dom.query instead of ARIA. — fewer is better, because each step is a slow model call AND a chance to derail. Make ONE step per item that both finds AND reads that item's fact (e.g. "find Austin's population") — do NOT split it into separate search / open / extract steps (a page opened via search is auto-read for you). Never pad with vague "analyze", "re-evaluate", or "assume" steps. The FINAL step must report the requested items AS THE ANSWER (e.g. "list the 3 products with names and prices").
 
 To COMPARE or look up several specific named things (cities, products, people), handle EACH item on its own — one step per item — pulling its fact from its OWN page or its OWN search-result snippet (and for a COMPARISON, from the SAME website for every item, so the values are comparable). Search ONE item per query (e.g. "Wikipedia population of Austin"), NEVER a combined query like "Austin Seattle Denver population" — a combined query returns a ranked "List of…" page that small models can't read row-by-row, while a single-item query puts the fact right in the snippet. Never parse a single giant list/table page for many items (small models lose rows in big tables). If a web search already returns each item's requested fact inside its result snippet, the per-item step can read it straight from the results — it need NOT open every page (open one only when its snippet lacks the fact). If the goal names a source ("using Wikipedia", "on Amazon"), every page you open MUST be on that source — never wander to another site.
 
@@ -105,6 +132,7 @@ Do NOT bake specific or guessed URLs into steps — the Executor opens real URLs
     SAFETY_RULES,
     tabsList(ctx.ownedTabs),
     planText(ctx.plan, ctx.currentStepId),
+    ctx.workspaceBlock ?? '',
     extra ? `REPLAN CONTEXT:\n${extra}` : '',
   ]
     .filter(Boolean)
@@ -130,26 +158,25 @@ Rules:
 - To FILL a job application or form: use tab.fill_many when you can see 2+ empty text fields at once and know every value from USER PROFILE — one call, not one per field. Use tab.type only for a single field, or when you don't yet know every value. Use ONLY profile values for personal data — never invent a name, email, etc.
 - To attach a résumé: call tab.upload_file (it uses the user's stored résumé). The file input is usually HIDDEN, so it has no element index — never tab.click it or hunt for a file input by index.
 - Do NOT submit a job application. After every field is filled and the résumé is attached, call finish and report that the form is filled and ready for the user to review and submit.
-- Prefer clicking a link by its element index (from aria.extract) over typing a URL.
-- Use element indices from the most recent aria.extract output (e.g. "click element [3]").
-- To COLLECT data (products, prices, ratings, text): read it from the aria.extract output / CURRENT PAGE CONTENT and report the values yourself in finish/next_step — you are the extractor (there is no per-site extraction tool).
-- Report ONLY values that actually appear in the page content you have read. If the GOAL asks for a field that is NOT in CURRENT PAGE CONTENT (e.g. a rating shown only as an icon/graphic with no text or label), report it as not available — e.g. "star rating: not shown on the page" — and NEVER invent a value or claim what is "visually shown". Report every field you DID find and mark only the missing one as unavailable; an honest partial answer beats a fabricated one.
-- When comparing a metric across several items, take EVERY item's figure from the SAME website — the site you used for the first item is your "anchor". A number from a different site is NOT comparable (different sites report different bases, e.g. a city-proper population vs a metro-area one), so use the anchor site's figure for each item even if another site ranks higher or shows a bigger number. Look for the anchor site's result in the snippet list; if NONE of the snippets is from the anchor site, OPEN the anchor site's result to read its figure — this overrides the usual "answer from the snippet" shortcut, because a comparable basis matters more than saving one open. Use a PRECISE figure, never a vague range ("over 30 million", "more than X", "about X") — a range can't be ranked; if the anchor's snippet is only a range, open its page or use the anchor result that gives an exact number. State which source you used and what it measures (e.g. "city population, same site for all"). Switch sources only if the anchor lacks an item — then re-gather every item from one site that has them all.
-- Do NOT call vision.read or re-run aria.extract when CURRENT PAGE CONTENT already shows what you need (e.g. product names and prices are listed). vision.read is ONLY for when aria.extract returned an empty/near-root tree.
+- For LIST or TABLE pages (trending, search results, product listings, directories, repositories): do NOT parse the CURRENT PAGE CONTENT — it is too dense. Instead call dom.query(tabId, "h2 a, h3 a, .repo-link a, article h2 a, article h3 a") immediately to get clean item names with hrefs. Then use dom.click_selector(tabId, "a[href='...']") to navigate. This is FASTER and more reliable than trying to extract indices from the ARIA tree.
+- Prefer aria.extract and dom.query over vision.read for text-based pages. vision.read uses a screenshot and the vision model — it is SLOWER and often misreads numbers (star counts, issue counts) and labels. Use aria.extract first (fast and precise for interactive elements), dom.query for structured text, and vision.read only when both return nothing usable.
 - CURRENT PAGE CONTENT (below, when present) holds your most recent aria.extract/vision.read output IN FULL. To report, compare, or list data, read it THERE and answer from it — do NOT re-extract a page you have already read.
 - If you produce text instead of a tool call, you will be re-prompted; do not chat.
 - The moment you have everything the GOAL asks for, call finish with the COMPLETE answer in 'summary' — the actual values, formatted as asked (e.g. "1. Logitech M185 — $13.42\n2. ..."). Do NOT keep calling next_step, and never end on a meta-summary like "the data was extracted".
 - Don't plan ahead. Stay on the current step.
 - If stuck after 3 turns on the same step, call next_step (the Evaluator will judge).
-${SAFETY_RULES}`;
+${SAFETY_RULES}
+${personaBlock(ctx.persona)}`;
   const lines = [
     `GOAL: ${ctx.goal}`,
     preferencesBlock(ctx.preferences),
     steerBlock(ctx.steerNotes),
     `TOOLS:\n${ctx.toolCatalog}`,
     tabsList(ctx.ownedTabs),
+    ctx.persona ? `PERSONA: ${ctx.persona} — follow the ROLE instructions above.` : undefined,
     planText(ctx.plan, ctx.currentStepId),
     ctx.findingsBlock ? `FINDINGS:\n${ctx.findingsBlock}` : '',
+    ctx.workspaceBlock ?? '',
     ctx.scratchpad ? `SCRATCHPAD:\n${ctx.scratchpad}` : '',
     ctx.recentActions ? `RECENT ACTIONS:\n${ctx.recentActions}` : '',
     ctx.profileBlock ?? '',
@@ -214,6 +241,7 @@ Output: ONLY a JSON object of the form:
       ? `CURRENT PAGE CONTENT (the actual page — verify the result's claims against THIS, not the executor's words):\n${ctx.pageContentBlock}`
       : '',
     ctx.findingsBlock ? `FINDINGS:\n${ctx.findingsBlock}` : '',
+    ctx.workspaceBlock ?? '',
   ]
     .filter(Boolean)
     .join('\n\n');

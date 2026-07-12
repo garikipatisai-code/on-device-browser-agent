@@ -171,6 +171,7 @@ const SET_NATIVE_VALUE_FN = `function(v){
     var desc = Object.getOwnPropertyDescriptor(proto, 'value');
     if (desc && desc.set) { desc.set.call(this, v); } else { this.value = v; }
     this.dispatchEvent(new Event('input', {bubbles:true}));
+    this.dispatchEvent(new Event('change', {bubbles:true}));
   } catch(e) { try { this.value = v; } catch(e2) {} }
 }`;
 

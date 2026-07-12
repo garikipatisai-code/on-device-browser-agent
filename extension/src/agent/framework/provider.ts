@@ -15,6 +15,21 @@ export function localProvider(ollama: OllamaClient): ModelProvider {
   return ollama;
 }
 
+// Frontier APIs (OpenAI, Anthropic) restrict tool names to [a-zA-Z0-9_-].
+// Our tools use dots (tab.click, dom.query, page.fetch, vision.read, etc.) which
+// are rejected. Build a map of sanitized→original names so we can map back in
+// the response without corrupting tools that already use underscores (open_result,
+// next_step, tab_read_active, etc.).
+function buildToolNameMap(tools: ChatOptions['tools']): Map<string, string> {
+  const m = new Map<string, string>();
+  if (!tools) return m;
+  for (const t of tools) {
+    const sanitized = t.function.name.replace(/\./g, '_');
+    if (sanitized !== t.function.name) m.set(sanitized, t.function.name);
+  }
+  return m;
+}
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -23,13 +38,8 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // FrontierConfig keep working unchanged.
 export type { FrontierConfig };
 
-/** Raw fetch against the Anthropic Messages API — no SDK dependency, matching
- *  OllamaClient's own pattern. Only ever called for the head-chef/sous-chef
- *  seats (planner, evaluator), which never pass `tools` or multi-turn
- *  tool_result history — so this only needs to translate a single system
- *  message + a run of user/assistant messages. If a future frontier-eligible
- *  seat needs tool-calling, this needs the full tool_use/tool_result mapping,
- *  deliberately not built here. */
+/** Raw fetch against the Anthropic Messages API — handles tool calls when
+ *  the caller passes `tools`, otherwise text-only. */
 export function frontierProvider(cfg: Extract<FrontierConfig, { provider: 'anthropic' }>): ModelProvider {
   return {
     async chatOnce(opts: ChatOptions): Promise<ChatResponse> {
@@ -41,8 +51,17 @@ export function frontierProvider(cfg: Extract<FrontierConfig, { provider: 'anthr
         thinking: { type: opts.thinking === false ? 'disabled' : 'adaptive' },
       };
       if (system) body.system = system;
+      // Anthropic tool format: {name, description, input_schema}
+      const nameMap = buildToolNameMap(opts.tools);
+      if (opts.tools && opts.tools.length > 0) {
+        body.tools = opts.tools.map((t) => ({
+          name: nameMap.has(t.function.name) ? nameMap.get(t.function.name)! : t.function.name.replace(/\./g, '_'),
+          description: t.function.description,
+          input_schema: t.function.parameters,
+        }));
+      }
 
-      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 120_000, opts.signal);
+      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 300_000, opts.signal);
       try {
         const res = await fetch(ANTHROPIC_API_URL, {
           method: 'POST',
@@ -55,7 +74,7 @@ export function frontierProvider(cfg: Extract<FrontierConfig, { provider: 'anthr
           signal,
         });
         if (!res.ok) throw frontierHttpError(res.status, await safeText(res));
-        return normalizeAnthropicResponse(await res.json());
+        return normalizeAnthropicResponse(await res.json(), nameMap);
       } finally {
         cleanup();
       }
@@ -71,22 +90,27 @@ function splitSystem(messages: ChatOptions['messages']): { system?: string; mess
   return { system: sys?.content, messages: rest };
 }
 
-function normalizeAnthropicResponse(json: Record<string, unknown>): ChatResponse {
+function normalizeAnthropicResponse(json: Record<string, unknown>, nameMap?: Map<string, string>): ChatResponse {
   if (json.stop_reason === 'refusal') {
     const category = (json.stop_details as { category?: string } | undefined)?.category ?? 'refusal';
     throw new Error(`Frontier model declined the request (${category})`);
   }
-  const blocks = (json.content as Array<{ type: string; text?: string }> | undefined) ?? [];
+  const blocks = (json.content as Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }> | undefined) ?? [];
   const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
-  if (!text) throw new Error('Frontier model returned no text content');
+  // Extract tool_use blocks — Anthropic returns tools alongside text in the content array
+  const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = blocks
+    .filter((b): b is { type: 'tool_use'; name: string; input: Record<string, unknown> } & typeof b => b.type === 'tool_use')
+    .map((b) => ({ name: nameMap?.get(b.name) ?? b.name, args: b.input ?? {} }));
+  if (!text && toolCalls.length === 0) throw new Error('Frontier model returned no text or tool call content');
+  const rawText = toolCalls.length > 0 ? toolCalls.map((t) => `${t.name}(${JSON.stringify(t.args)})`).join('\n') : text;
   const usage = json.usage as { input_tokens?: number; output_tokens?: number } | undefined;
   return {
-    message: { role: 'assistant', content: text },
+    message: { role: 'assistant', content: text || rawText },
     done: true,
     promptEvalCount: usage?.input_tokens,
     evalCount: usage?.output_tokens,
-    toolCalls: [],
-    rawText: text,
+    toolCalls,
+    rawText,
   };
 }
 
@@ -112,9 +136,16 @@ export function openAICompatibleProvider(cfg: Extract<FrontierConfig, { provider
         max_tokens: 4096,
         messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
       };
-      if (opts.thinking === true) body.reasoning_effort = 'high';
+      if (opts.thinking === true) body.reasoning_effort = opts.thinkingEffort ?? 'medium';
+      const nameMap = buildToolNameMap(opts.tools);
+      if (opts.tools && opts.tools.length > 0) {
+        body.tools = opts.tools.map((t) => ({
+          type: 'function',
+          function: { name: nameMap.has(t.function.name) ? nameMap.get(t.function.name)! : t.function.name.replace(/\./g, '_'), description: t.function.description, parameters: t.function.parameters },
+        }));
+      }
 
-      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 120_000, opts.signal);
+      const { signal, cleanup } = composeSignal(opts.timeoutMs ?? 300_000, opts.signal);
       try {
         const res = await fetch(cfg.baseUrl, {
           method: 'POST',
@@ -123,7 +154,7 @@ export function openAICompatibleProvider(cfg: Extract<FrontierConfig, { provider
           signal,
         });
         if (!res.ok) throw frontierHttpError(res.status, await safeText(res));
-        return normalizeOpenAIResponse(await res.json());
+        return normalizeOpenAIResponse(await res.json(), nameMap);
       } finally {
         cleanup();
       }
@@ -131,19 +162,27 @@ export function openAICompatibleProvider(cfg: Extract<FrontierConfig, { provider
   };
 }
 
-function normalizeOpenAIResponse(json: Record<string, unknown>): ChatResponse {
-  const choice = (json.choices as Array<{ message?: { content?: string; refusal?: string } }> | undefined)?.[0];
+function normalizeOpenAIResponse(json: Record<string, unknown>, nameMap?: Map<string, string>): ChatResponse {
+  type Choice = { message?: { content?: string; refusal?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } };
+  const choice = (json.choices as Choice[] | undefined)?.[0];
   if (choice?.message?.refusal) throw new Error(`Frontier model declined the request (${choice.message.refusal})`);
   const text = choice?.message?.content ?? '';
-  if (!text) throw new Error('Frontier model returned no text content');
+  // Extract tool calls — OpenAI returns them as a separate array on the message
+  const rawToolCalls = choice?.message?.tool_calls ?? [];
+  const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = rawToolCalls.map((tc) => ({
+    name: nameMap?.has(tc.function.name) ? nameMap.get(tc.function.name)! : tc.function.name,
+    args: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })(),
+  }));
+  if (!text && toolCalls.length === 0) throw new Error('Frontier model returned no text or tool call content');
+  const rawText = toolCalls.length > 0 ? toolCalls.map((t) => `${t.name}(${JSON.stringify(t.args)})`).join('\n') : text;
   const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
   return {
-    message: { role: 'assistant', content: text },
+    message: { role: 'assistant', content: text || rawText },
     done: true,
     promptEvalCount: usage?.prompt_tokens,
     evalCount: usage?.completion_tokens,
-    toolCalls: [],
-    rawText: text,
+    toolCalls,
+    rawText,
   };
 }
 
@@ -187,11 +226,11 @@ function describeFallbackReason(err: unknown): string {
   return err instanceof Error ? err.message : 'unknown frontier error';
 }
 
-export function withThinkingOverride(provider: ModelProvider, override?: boolean): ModelProvider {
+export function withThinkingOverride(provider: ModelProvider, override?: boolean, effort?: 'low' | 'medium' | 'high'): ModelProvider {
   if (override === undefined) return provider; // no-op — today's per-role hardcoded defaults stand
   return {
     async chatOnce(opts: ChatOptions): Promise<ChatResponse> {
-      return provider.chatOnce({ ...opts, thinking: override });
+      return provider.chatOnce({ ...opts, thinking: override, thinkingEffort: effort ?? opts.thinkingEffort });
     },
   };
 }
@@ -213,5 +252,5 @@ export function resolveLeadProvider(
   const base = !settings.hybridMode || !settings.frontier?.apiKey
     ? localProvider(ollama)
     : withFallback(frontierProviderFor(settings.frontier), localProvider(ollama), onFallback);
-  return withThinkingOverride(base, settings.leadThinking);
+  return withThinkingOverride(base, settings.leadThinking, settings.leadThinkingEffort);
 }

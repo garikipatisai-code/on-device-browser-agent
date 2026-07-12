@@ -107,6 +107,22 @@ export class Orchestrator {
   // Everything read this task (capped) — the corpus the finish-verifier grounds against.
   private observedText = '';
   private facts: Fact[] = [];
+  /** Cached workspace entries so commonCtx can inject them synchronously. */
+  private workspaceCache: Array<{ title: string; content: string; url?: string }> = [];
+  /** Reload workspace cache from storage — catches entries added by the workspace.add tool
+   *  (which writes directly to chrome.storage, bypassing this cache). Called before every
+   *  verification to ensure the grounding corpus is complete. */
+  private async syncWorkspaceCache(): Promise<void> {
+    try {
+      const { ['agent.workspace']: raw } = await chrome.storage.local.get('agent.workspace');
+      if (Array.isArray(raw)) this.workspaceCache = raw as Array<{ title: string; content: string; url?: string }>;
+    } catch { /* non-critical */ }
+  }
+  /** Grounding corpus = observedText + workspace content (workspace doesn't rotate out). */
+  private groundingCorpus(): string {
+    const ws = this.workspaceCache.map((e) => `${e.title} ${e.content}`).join('\n');
+    return ws ? `${this.observedText}\n${ws}` : this.observedText;
+  }
   private sessionId: string | null = null;
   private priorSummary = '';
   /** Set by plan() when the planner signals GOAL isn't actionable — checked once by
@@ -154,7 +170,20 @@ export class Orchestrator {
         message: `Frontier call failed, using local model instead: ${reason}`,
       }),
     );
-    this.helperProvider = localProvider(opts.ollama);
+    // Helper seat always local by default. When hybridHelpers is on, the executor
+    // and compactor also use the frontier provider — full browser control through the
+    // remote API. Off by default; opt-in only.
+    this.helperProvider =
+      opts.settings.hybridMode && opts.settings.hybridHelpers && opts.settings.frontier?.apiKey
+        ? resolveLeadProvider(opts.settings, opts.ollama, (reason) =>
+            this.emit({
+              kind: 'log',
+              ts: Date.now(),
+              level: 'warn',
+              message: `Helper frontier call failed, falling back to local: ${reason}`,
+            }),
+          )
+        : localProvider(opts.ollama);
   }
 
   async start(goal: string, sessionId?: string | null): Promise<AgentStateHot> {
@@ -179,6 +208,8 @@ export class Orchestrator {
     this.plannerNoGoal = false;
     this.dirtyReason = '';
     this.matchedWorkflow = matchWorkflow(trimmed, await loadWorkflows());
+    this.workspaceCache = [];
+    try { await chrome.storage.local.remove('agent.workspace'); } catch { /* non-critical */ }
     this.taskId = ulid();
     this.numCtx = clampNumCtx(this.opts.settings.numCtx);
     this.caps = capsFor(this.numCtx);
@@ -246,6 +277,12 @@ export class Orchestrator {
       this.turns = turn;
       hot = await this.refreshHot(hot);
 
+      // Sync workspace cache before verification — the workspace.add tool writes directly
+      // to chrome.storage and bypasses the orchestrator's cache. Without this sync, any
+      // workspace entry added by the tool during the executor turn is invisible to the
+      // grounding verifier and causes false rejections.
+      await this.syncWorkspaceCache();
+
       if (execOut.result.finish) {
         const fin = execOut.result.finish;
         // Honest failures (blocked/failed) aren't fabrication risks. A 'partial' carries data,
@@ -255,9 +292,9 @@ export class Orchestrator {
           // hit a read-only/tier denial after the facts were read). Prefer a grounded salvage over
           // the defeatist message; preferSalvageOnDenial no-ops (keeps this verdict) if no denial
           // occurred — so a genuine "not found" stays an honest blocked/failed.
-          return this.preferSalvageOnDenial(hot, gateFinishSummary(fin.verdict, fin.summary, this.observedText, this.facts));
+          return this.preferSalvageOnDenial(hot, gateFinishSummary(fin.verdict, fin.summary, this.groundingCorpus(), this.facts));
         }
-        const v = verifyFinish(fin.summary, this.observedText, this.facts);
+        const v = verifyFinish(fin.summary, this.groundingCorpus(), this.facts);
         if (v.ok) {
           return this.finalizeFinish(hot, 'success', fin.summary);
         }
@@ -271,7 +308,7 @@ export class Orchestrator {
         const sp = await getScratchpad(this.taskId);
         await setScratchpad(
           this.taskId,
-          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Re-read the page (aria.extract / vision.read) and correct the answer, or report those value(s) as not available on the page. Do NOT repeat the unsupported claim.`.slice(-this.caps.scratch),
+          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Do NOT open new tabs or re-read pages — all data is already in your workspace/observations. Call finish again with only values that appear exactly in the workspace, or mark them unavailable.`.slice(-this.caps.scratch),
         );
         continue;
       }
@@ -281,14 +318,14 @@ export class Orchestrator {
         // tool-produced advance is already page-grounded. The circuit breaker stops a model that
         // loops on bad prose.
         if (execOut.tool === 'answer') {
-          const v = verifyFinish(execOut.result.content ?? '', this.observedText, this.facts);
+          const v = verifyFinish(execOut.result.content ?? '', this.groundingCorpus(), this.facts);
           if (!v.ok) {
             this.markDirty('mid-plan prose answer ungrounded');
             this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `prose answer rejected (${v.reason})` });
             const sp = await getScratchpad(this.taskId);
             await setScratchpad(
               this.taskId,
-              `${sp}\n[VERIFICATION] Your answer was rejected: ${v.reason}. Re-read the page (aria.extract) and use only on-page values, or report them as unavailable.`.slice(-this.caps.scratch),
+              `${sp}\n[VERIFICATION] Your answer was rejected: ${v.reason}. Use values already in your observations — do NOT open new tabs or re-extract pages you have already seen.`.slice(-this.caps.scratch),
             );
             continue;
           }
@@ -585,6 +622,8 @@ export class Orchestrator {
     this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, this.caps.page) };
     this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
     this.recordObserved(obs.content, obsUrl);
+    // Auto-save workspace entry — the model sees these in context without remembering to call workspace.add
+    await this.autoSaveWorkspace(obs.content, obsUrl).catch(() => undefined);
     this.emit({
       kind: 'log',
       ts: Date.now(),
@@ -616,6 +655,7 @@ export class Orchestrator {
       obsUrl = resolved.data && typeof resolved.data.url === 'string' ? (resolved.data.url as string) : obsUrl;
       this.lastRead = { tool: 'aria.extract', url: obsUrl, content: resolved.content.slice(0, this.caps.page) };
       this.recordObserved(resolved.content, obsUrl);
+      await this.autoSaveWorkspace(resolved.content, obsUrl).catch(() => undefined);
       this.emit({ kind: 'antibot.resolved', ts: Date.now() });
       await patchHot({ phase: 'EXECUTING' });
       return;
@@ -638,7 +678,25 @@ export class Orchestrator {
       const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
       this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, this.caps.page) };
       this.recordObserved(after.content, afterUrl);
+      await this.autoSaveWorkspace(after.content, afterUrl).catch(() => undefined);
     }
+  }
+
+  /** Save page content to workspace automatically after reading it.
+   *  The model sees workspace summaries in its context on every turn, so it
+   *  doesn't need to remember to call workspace.add. Non-critical: swallow errors. */
+  private async autoSaveWorkspace(content: string, url?: string): Promise<void> {
+    try {
+      const title = url
+        ? `Page: ${new URL(url).pathname.replace(/\/$/, '').split('/').filter(Boolean).pop() || url}`
+        : 'Page: (unknown)';
+      const body = content.slice(0, 800).replace(/\s+/g, ' ').trim();
+      const { ['agent.workspace']: raw } = await chrome.storage.local.get('agent.workspace');
+      const entries = Array.isArray(raw) ? (raw as Array<{ title: string; content: string; url?: string }>) : [];
+      entries.push({ title, content: body, url });
+      this.workspaceCache = entries.slice(-50);
+      await chrome.storage.local.set({ 'agent.workspace': this.workspaceCache });
+    } catch { /* non-critical */ }
   }
 
   /** Per-turn bookkeeping: circuit breaker, carry-forward of a page read, the
@@ -703,7 +761,7 @@ export class Orchestrator {
     this.facts = addGroundedFact(
       this.facts,
       { step: step.description, text: ev.fact, url: this.lastRead?.url },
-      this.observedText,
+      this.groundingCorpus(),
     );
     if (this.facts.length > before) {
       const f = this.facts[this.facts.length - 1];
@@ -757,6 +815,14 @@ export class Orchestrator {
     return TIER_ORDER[getDomainTier(hostFor(url), this.opts.settings.domainTiers)] >= TIER_ORDER['click-only'];
   }
 
+  /** Extract persona from step toolHint (e.g. "persona:extractor" → "extractor"). */
+  private personaFromStep(hot: AgentStateHot): string | undefined {
+    const step = hot.plan && hot.currentStepId ? hot.plan.steps.find((s) => s.id === hot.currentStepId) : null;
+    const hint = step?.toolHint ?? '';
+    const m = hint.match(/persona:(\w+)/);
+    return m?.[1];
+  }
+
   private commonCtx(hot: AgentStateHot, scratchpad?: string) {
     return {
       goal: hot.goal,
@@ -772,9 +838,10 @@ export class Orchestrator {
       pageContentBlock: this.lastRead
         ? wrapPageContent(
             `${this.lastRead.tool}${this.lastRead.url ? ` url=${this.lastRead.url}` : ''}`,
-            this.lastRead.content,
+            this.lastRead.content.slice(0, 6_000), // 6K fits 120s timeout on P2200; full 12K in workspace + observedText for grounding
           )
         : undefined,
+      persona: this.personaFromStep(hot),
       recentActions: this.recentActions
         .map(
           (a) =>
@@ -782,6 +849,11 @@ export class Orchestrator {
         )
         .join('\n'),
       findingsBlock: renderFacts(this.facts),
+      workspaceBlock: this.workspaceCache.length
+        ? `WORKSPACE (pages read this task):\n${this.workspaceCache
+            .map((e) => `  ${e.title}${e.url ? `\n    URL: ${e.url}` : ''}\n    ${e.content.slice(0, 300).replace(/\n/g, '\n    ')}`)
+            .join('\n\n')}`
+        : undefined,
     };
   }
 
@@ -813,7 +885,7 @@ export class Orchestrator {
    *  against the FULL corpus. NOT used by the salvage paths (giveUp/preferSalvageOnDenial), which
    *  already answer from the corpus. */
   private async finalizeFinish(hot: AgentStateHot, verdict: string, summary: string): Promise<RunResult> {
-    const g = gateFinishSummary(verdict, summary, this.observedText, this.facts);
+    const g = gateFinishSummary(verdict, summary, this.groundingCorpus(), this.facts);
     const reconciled = g.verdict === 'success' ? await this.reconcileMissingFromCorpus(hot, g.summary) : g.summary;
     return this.finishOk(hot, g.verdict, reconciled);
   }
@@ -830,7 +902,7 @@ export class Orchestrator {
     // A short/junk answer (or one that still says "not shown") means the field is genuinely
     // absent — keep the honest original (preserves absent-field honesty, e.g. an icon-only rating).
     if (corpusAnswer && corpusAnswer.length >= 40 && !mentionsMissing(corpusAnswer)) {
-      const g = gateFinishSummary('success', corpusAnswer, this.observedText, this.facts);
+      const g = gateFinishSummary('success', corpusAnswer, this.groundingCorpus(), this.facts);
       if (g.verdict === 'success') {
         this.markDirty('finish re-answered from corpus');
         this.emit({
@@ -940,7 +1012,7 @@ export class Orchestrator {
     this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `${reason} Trying a final answer from what was gathered.` });
     const answer = await this.synthesizeFromObserved(hot);
     if (answer) {
-      const g = gateFinishSummary('partial', answer, this.observedText, this.facts);
+      const g = gateFinishSummary('partial', answer, this.groundingCorpus(), this.facts);
       return this.finishOk(hot, g.verdict, g.summary);
     }
     return this.abortNow(hot, reason);
@@ -958,7 +1030,7 @@ export class Orchestrator {
     if (this.sawActionDenial) {
       const salvaged = await this.synthesizeFromObserved(hot);
       if (salvaged) {
-        const g = gateFinishSummary('partial', salvaged, this.observedText, this.facts);
+        const g = gateFinishSummary('partial', salvaged, this.groundingCorpus(), this.facts);
         return this.finishOk(hot, g.verdict, g.summary);
       }
     }
@@ -968,7 +1040,7 @@ export class Orchestrator {
   /** One model call that answers the goal from the observed corpus (everything read this task).
    *  Returns null if nothing meaningful was gathered. The answer is grounding-gated by the caller. */
   private async synthesizeFromObserved(hot: AgentStateHot): Promise<string | null> {
-    const corpus = this.observedText.trim();
+    const corpus = this.groundingCorpus().trim();
     if (corpus.length < 40) return null; // nothing was read — nothing to salvage
     try {
       const resp = await this.opts.ollama.chatOnce({

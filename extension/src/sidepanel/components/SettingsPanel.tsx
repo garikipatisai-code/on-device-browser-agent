@@ -21,6 +21,29 @@ interface Props {
 
 type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
 
+interface FrontPreset {
+  label: string;
+  desc: string;
+  provider: FrontierConfig['provider'];
+  model: string;
+  baseUrl?: string;
+  seat: 'lead' | 'helper' | 'both';
+}
+
+const LEAD_PRESETS: FrontPreset[] = [
+  { label: 'Claude Sonnet 4.6', desc: 'Best agent reasoning', provider: 'anthropic', model: 'claude-sonnet-4-6', seat: 'lead' },
+  { label: 'DeepSeek V4 Pro', desc: 'Cheap reasoning', provider: 'openai-compatible', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1/chat/completions', seat: 'lead' },
+  { label: 'GPT-5.6', desc: 'OpenAI flagship', provider: 'openai-compatible', model: 'gpt-5.6', seat: 'lead' },
+  { label: 'Gemini 3.2 Pro', desc: 'Google balanced', provider: 'openai-compatible', model: 'gemini-3.2-pro', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', seat: 'lead' },
+];
+
+const HELPER_PRESETS: FrontPreset[] = [
+  { label: 'DeepSeek V4 Flash', desc: 'Cheapest frontier', provider: 'openai-compatible', model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com/v1/chat/completions', seat: 'helper' },
+  { label: 'Gemini 3.2 Flash', desc: 'Fastest latency', provider: 'openai-compatible', model: 'gemini-3.2-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', seat: 'helper' },
+  { label: 'GPT-5.6 mini', desc: 'Reliable budget', provider: 'openai-compatible', model: 'gpt-5.6-mini', seat: 'helper' },
+  { label: 'Claude Haiku 4.5', desc: 'Anthropic budget', provider: 'anthropic', model: 'claude-haiku-4-5', seat: 'helper' },
+];
+
 const TIERS: DomainTier[] = ['read-only', 'click-only'];
 const OPENAI_COMPATIBLE_DEFAULT_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -321,8 +344,8 @@ export function SettingsPanel({
           <Icon name="spark" size={13} /> Frontier model (optional)
         </h2>
         <div className="field-hint">
-          Let the planner and evaluator use a frontier model instead of the local one. Everything
-          else (reading pages, clicking, typing) always stays local. Off by default.
+          Use a frontier model for the lead seats (planner, evaluator). The helper seat
+          (executor, compactor) always stays local unless you also enable the option below. Off by default.
         </div>
         <label className="field-hint check-row">
           <input
@@ -338,6 +361,26 @@ export function SettingsPanel({
         </label>
         {local.hybridMode && (
           <>
+            <div className="field">
+              <label className="field-label">Quick presets (populates model + URL)</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {(local.hybridHelpers ? [...LEAD_PRESETS, ...HELPER_PRESETS] : LEAD_PRESETS).map((p) => (
+                  <button
+                    key={p.label}
+                    className="btn btn-sm"
+                    title={p.desc}
+                    onClick={() => updateFrontier({ provider: p.provider, model: p.model, baseUrl: p.baseUrl })}
+                    style={{
+                      fontSize: 11,
+                      opacity: local.frontier?.model === p.model ? 1 : 0.65,
+                      borderColor: local.frontier?.model === p.model ? 'var(--accent)' : undefined,
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="field">
               <label className="field-label" htmlFor="frontier-provider">Provider</label>
               <select
@@ -407,6 +450,36 @@ export function SettingsPanel({
             to control this, so Default and Always on may behave identically there. Leave on Default
             unless you have a specific reason to change it.
           </div>
+          <div className="field" style={{ marginTop: 8 }}>
+            <label className="field-label" htmlFor="thinking-effort">Thinking effort</label>
+            <select
+              id="thinking-effort"
+              value={local.leadThinkingEffort ?? 'medium'}
+              onChange={(e) => update('leadThinkingEffort', e.target.value as 'low' | 'medium' | 'high')}
+            >
+              <option value="low">Low — fastest, less thorough</option>
+              <option value="medium">Medium — balanced</option>
+              <option value="high">High — deepest reasoning, slowest</option>
+            </select>
+            <div className="field-hint">
+              How much reasoning effort to spend per planner/evaluator step. Low is faster but may miss
+              edge cases. High is more thorough but costs more tokens and time. Only applies when
+              thinking is on and the provider supports it (OpenAI, DeepSeek). Anthropic uses its own
+              adaptive thinking regardless of this setting.
+            </div>
+          </div>
+          <label className="field-hint check-row" style={{ marginTop: 12 }}>
+            <input
+              type="checkbox"
+              checked={!!local.hybridHelpers}
+              onChange={(e) => update('hybridHelpers', e.target.checked)}
+            />
+            <span>
+              <strong>Also run the executor/compactor on the frontier model.</strong> Everything that
+              reads pages, clicks, and types goes through the remote API too. Only turn this on for
+              tasks where the local model is too slow or unreliable. The whole run uses API tokens.
+            </span>
+          </label>
         </div>
       </div>
 

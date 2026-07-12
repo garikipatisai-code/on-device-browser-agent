@@ -62,13 +62,22 @@ export async function extractAria(tabId: number): Promise<ToolResult> {
   const ax = await withCdp(tabId, (send) => getAxNodes(send));
   const tree = simplifyAxTree(ax);
   const { byIndex } = assignIndices(tree);
-  const { text, truncated } = capTree(tree, cap);
+  const { text: capText, truncated } = capTree(tree, cap);
   _cache.set(tabId, { url, ts: Date.now(), byIndex, tree });
-  // When the a11y tree is empty/near-root (canvas/JS-heavy or blocked pages),
-  // steer the model to the visual fallback instead of re-extracting forever.
-  const sparse = ax.length <= 1 || byIndex.size === 0;
+  // When the a11y tree is sparse (few interactive elements and thin content), steer the
+  // model toward the visual fallback. Many JS-heavy pages have some ARIA surface but miss
+  // the actual rendered content (tables, product lists, SPA views). The old threshold was
+  // "0 interactive elements", which missed most of these — expanded to < 5 interactive
+  // elements when content is also thin, so vision catches layouts ARIA can't describe.
+  const lowInteraction = byIndex.size < 5 && capText.length < 800;
+  const noInteraction = byIndex.size === 0;
+  const sparse = ax.length <= 1 || noInteraction || lowInteraction;
+  let text = capText;
+  if (sparse && !noInteraction) {
+    text += '\n\n[SPARSE] The ARIA tree above is incomplete. Use vision.read for a fuller picture.';
+  }
   const hint = sparse
-    ? '\n\n[NOTE: this page exposes almost no accessibility tree. Do NOT re-run aria.extract — call vision.read on this tab to read it visually.]'
+    ? '\n\n[NOTE: this page has a limited accessibility tree. For richer page reading, call vision.read on this tab — it captures a screenshot and reads it visually, catching content the ARIA tree missed.]'
     : '';
   return {
     ok: true,
