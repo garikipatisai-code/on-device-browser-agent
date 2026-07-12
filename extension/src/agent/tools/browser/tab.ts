@@ -119,19 +119,13 @@ export function openUrlAllowed(url: string, results: Array<{ url: string }>): bo
 }
 
 /** Open a tab at `url` and register ownership so the agent can close it later.
- *  Reuses an existing owned tab if one already points at this URL — prevents
- *  the model from creating N duplicate tabs for the same repo/page. */
+ *  Always opens a fresh tab — the old dedup check (reuse if same URL) was silently
+ *  collapsing the agent's tabs, making it impossible to find a previously opened
+ *  page when the same URL appeared in a later search result. The agent can close
+ *  tabs it no longer needs via tab.close, and the orchestrator cleans up all owned
+ *  tabs on finish/abort. */
 export async function openOwnedTab(url: string, ctx: ToolContext): Promise<ToolResult> {
   if (isBlockedUrl(url)) return { ok: false, content: `Blocked URL: ${url}`, fatal: true };
-  // Check existing owned tabs for a match before creating a new one
-  for (const tid of ctx.hot.ownedTabs) {
-    try {
-      const t = await new Promise<chrome.tabs.Tab | null>((resolve) => chrome.tabs.get(tid, (tab) => resolve(chrome.runtime.lastError ? null : tab)));
-      if (t && t.url && normalizeUrl(t.url) === normalizeUrl(url)) {
-        return { ok: true, content: `Reused existing tab ${tid} at ${url}`, data: { tabId: tid, url } };
-      }
-    } catch { /* tab gone — skip */ }
-  }
   const tab = await new Promise<chrome.tabs.Tab>((resolve, reject) => {
     chrome.tabs.create({ url, active: false }, (t) => {
       const err = chrome.runtime.lastError;
