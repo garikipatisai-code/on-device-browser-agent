@@ -254,3 +254,24 @@ export function resolveLeadProvider(
     : withFallback(frontierProviderFor(settings.frontier), localProvider(ollama), onFallback);
   return withThinkingOverride(base, settings.leadThinking, settings.leadThinkingEffort);
 }
+
+/** Resolved once per run for the executor and compactor seats. Uses
+ *  helperFrontier if configured; otherwise falls back to the lead's frontier
+ *  (the current behavior, unchanged). Thinking overrides use helperThinking/
+ *  helperThinkingEffort, falling back to leadThinking/leadThinkingEffort
+ *  when not set. When hybridHelpers is off, always resolves to local. */
+export function resolveHelperProvider(
+  settings: Settings,
+  ollama: OllamaClient,
+  onFallback?: (reason: string) => void,
+): ModelProvider {
+  const effectiveFrontier = settings.helperFrontier ?? settings.frontier;
+  const effectiveThinking = settings.helperThinking ?? settings.leadThinking;
+  const effectiveEffort = settings.helperThinkingEffort ?? settings.leadThinkingEffort;
+  const base = !settings.hybridMode
+    || !settings.hybridHelpers
+    || !effectiveFrontier?.apiKey
+    ? localProvider(ollama)
+    : withFallback(frontierProviderFor(effectiveFrontier), localProvider(ollama), onFallback);
+  return withThinkingOverride(base, effectiveThinking, effectiveEffort);
+}

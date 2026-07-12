@@ -27,7 +27,7 @@ import { addGroundedFact, renderFacts, type Fact } from './facts';
 import { runHeadChef } from './framework/head_chef';
 import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
 import { runHelper, runHelperCompaction } from './framework/helper';
-import { localProvider, resolveLeadProvider, type ModelProvider } from './framework/provider';
+import { localProvider, resolveLeadProvider, resolveHelperProvider, type ModelProvider } from './framework/provider';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
 import {
@@ -171,19 +171,16 @@ export class Orchestrator {
       }),
     );
     // Helper seat always local by default. When hybridHelpers is on, the executor
-    // and compactor also use the frontier provider — full browser control through the
-    // remote API. Off by default; opt-in only.
-    this.helperProvider =
-      opts.settings.hybridMode && opts.settings.hybridHelpers && opts.settings.frontier?.apiKey
-        ? resolveLeadProvider(opts.settings, opts.ollama, (reason) =>
-            this.emit({
-              kind: 'log',
-              ts: Date.now(),
-              level: 'warn',
-              message: `Helper frontier call failed, falling back to local: ${reason}`,
-            }),
-          )
-        : localProvider(opts.ollama);
+    // and compactor also use a frontier provider — uses helperFrontier if configured,
+    // otherwise falls back to the lead's frontier. Off by default; opt-in only.
+    this.helperProvider = resolveHelperProvider(opts.settings, opts.ollama, (reason) =>
+      this.emit({
+        kind: 'log',
+        ts: Date.now(),
+        level: 'warn',
+        message: `Helper frontier call failed, falling back to local: ${reason}`,
+      }),
+    );
   }
 
   async start(goal: string, sessionId?: string | null): Promise<AgentStateHot> {

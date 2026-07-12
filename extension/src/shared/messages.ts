@@ -72,10 +72,20 @@ export interface Settings {
    *  Default 'medium'. */
   leadThinkingEffort?: 'low' | 'medium' | 'high';
   /** When true AND hybridMode is on, the helper seat (executor, compactor)
-   *  also runs on the frontier model, not just the lead seats. Off by default:
-   *  everything that touches the browser stays local. Turn on only when you
-   *  trust the frontier provider with full browser access. */
+   *  also runs on the frontier model. Uses helperFrontier if set, otherwise
+   *  falls back to frontier (the lead's config). Off by default. */
   hybridHelpers?: boolean;
+  /** Independent frontier config for the helper seat (executor, compactor).
+   *  When omitted but hybridHelpers is on, falls back to `frontier`. This
+   *  allows a high-reasoning lead model paired with a cheaper/faster workhorse
+   *  model for the browser-heavy executor calls. */
+  helperFrontier?: FrontierConfig;
+  /** Overrides extended-thinking for the helper seat. When undefined,
+   *  falls back to leadThinking. */
+  helperThinking?: boolean;
+  /** Reasoning effort for the helper seat when helperThinking is on.
+   *  When undefined, falls back to leadThinkingEffort. */
+  helperThinkingEffort?: 'low' | 'medium' | 'high';
 }
 
 export const DEFAULT_SETTINGS: Settings = {

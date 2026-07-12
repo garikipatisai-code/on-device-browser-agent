@@ -120,6 +120,58 @@ describe('orchestrator — hybrid mode seat routing', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('routes lead and helper to different frontier models when helperFrontier is set', async () => {
+    // Two different fetch endpoints: lead (Anthropic) and helper (openai-compatible, e.g. DeepSeek).
+    // Each returns its own API's response shape so the respective normalizers can parse them.
+    const leadUrl = 'https://api.anthropic.com/v1/messages';
+    const helperUrl = 'https://api.deepseek.com/v1/chat/completions';
+    const calledUrls: string[] = [];
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string, _init?: RequestInit) => {
+      calledUrls.push(url as string);
+      const json = url === leadUrl
+        ? {
+            // Anthropic shape (normalizeAnthropicResponse)
+            content: [{ type: 'text', text: JSON.stringify({ steps: [{ description: 'do it', successCriteria: 'done' }] }) }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 10, output_tokens: 5 },
+          }
+        : {
+            // OpenAI shape (normalizeOpenAIResponse) — tool call on the executor
+            choices: [{ message: { content: '', tool_calls: [{ function: { name: 'finish', arguments: JSON.stringify({ verdict: 'success', summary: 'done' }) } }] } }],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+          };
+      return { ok: true, json: async () => json };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ollama = makeFakeOllama({}); // executor must NOT reach local Ollama — should hit fetch
+
+    const orch = new Orchestrator({
+      ollama,
+      registry: buildRegistry(),
+      settings: {
+        ...DEFAULT_SETTINGS,
+        hybridMode: true,
+        hybridHelpers: true,
+        frontier: { provider: 'anthropic', apiKey: 'sk-lead', model: 'claude-sonnet-4-6' },
+        helperFrontier: { provider: 'openai-compatible', apiKey: 'sk-helper', model: 'deepseek-v4-flash', baseUrl: helperUrl },
+      },
+      emit: () => undefined,
+    });
+
+    try {
+      const result = await orch.runUntilTerminal(await orch.start('do it'));
+      expect(result.phase).toBe('DONE');
+      // Lead (planner) hit Anthropic
+      expect(calledUrls).toContain(leadUrl);
+      // Helper (executor) hit the different helper endpoint
+      expect(calledUrls).toContain(helperUrl);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('orchestrator — goal byte-survival across replan', () => {

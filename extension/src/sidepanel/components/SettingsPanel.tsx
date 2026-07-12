@@ -69,6 +69,11 @@ export function SettingsPanel({
   const [lastBaseUrl, setLastBaseUrl] = useState(
     settings.frontier?.provider === 'openai-compatible' ? settings.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL,
   );
+  const [helperLastBaseUrl, setHelperLastBaseUrl] = useState(
+    settings.helperFrontier?.provider === 'openai-compatible'
+      ? settings.helperFrontier.baseUrl
+      : OPENAI_COMPATIBLE_DEFAULT_URL,
+  );
 
   useEffect(() => {
     setLocal((s) => ({ ...s, profileJson: settings.profileJson }));
@@ -97,6 +102,30 @@ export function SettingsPanel({
               baseUrl: patch.baseUrl ?? lastBaseUrl,
             };
       return { ...s, frontier };
+    });
+  };
+
+  const updateHelperFrontier = (patch: {
+    provider?: FrontierConfig['provider'];
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  }) => {
+    if (patch.baseUrl !== undefined) setHelperLastBaseUrl(patch.baseUrl);
+    setLocal((s) => {
+      const provider = patch.provider ?? s.helperFrontier?.provider ?? 'anthropic';
+      const apiKey = patch.apiKey ?? s.helperFrontier?.apiKey ?? '';
+      const model = patch.model ?? s.helperFrontier?.model ?? '';
+      const frontier: FrontierConfig =
+        provider === 'anthropic'
+          ? { provider, apiKey, model }
+          : {
+              provider,
+              apiKey,
+              model,
+              baseUrl: patch.baseUrl ?? helperLastBaseUrl,
+            };
+      return { ...s, helperFrontier: frontier };
     });
   };
 
@@ -364,7 +393,7 @@ export function SettingsPanel({
             <div className="field">
               <label className="field-label">Quick presets (populates model + URL)</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                {(local.hybridHelpers ? [...LEAD_PRESETS, ...HELPER_PRESETS] : LEAD_PRESETS).map((p) => (
+                {LEAD_PRESETS.map((p) => (
                   <button
                     key={p.label}
                     className="btn btn-sm"
@@ -482,6 +511,116 @@ export function SettingsPanel({
           </label>
         </div>
       </div>
+
+      {/* Helper frontier (executor, compactor) — only shown when hybridHelpers is on */}
+      {local.hybridMode && local.hybridHelpers && (
+        <div className="card setting-group">
+          <h2 className="card-title">
+            <Icon name="spark" size={13} /> Helper frontier (executor, compactor)
+          </h2>
+          <div className="field-hint">
+            Frontier model for the helper seat. Falls back to the lead frontier above if left
+            blank. Use a cheaper/faster model here — the executor makes many more calls than the
+            planner.
+          </div>
+          <div className="field">
+            <label className="field-label">Quick presets</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {HELPER_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  className="btn btn-sm"
+                  title={p.desc}
+                  onClick={() => updateHelperFrontier({ provider: p.provider, model: p.model, baseUrl: p.baseUrl })}
+                  style={{
+                    fontSize: 11,
+                    opacity: local.helperFrontier?.model === p.model ? 1 : 0.65,
+                    borderColor: local.helperFrontier?.model === p.model ? 'var(--accent)' : undefined,
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="helper-frontier-provider">Provider</label>
+            <select
+              id="helper-frontier-provider"
+              value={local.helperFrontier?.provider ?? 'anthropic'}
+              onChange={(e) => updateHelperFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
+            >
+              <option value="anthropic">Anthropic</option>
+              <option value="openai-compatible">OpenAI-compatible</option>
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="helper-frontier-model">Model</label>
+            <input
+              id="helper-frontier-model"
+              placeholder={local.helperFrontier?.provider === 'openai-compatible' ? 'deepseek-v4-flash' : 'claude-haiku-4-5'}
+              value={local.helperFrontier?.model ?? ''}
+              onChange={(e) => updateHelperFrontier({ model: e.target.value })}
+            />
+          </div>
+          {local.helperFrontier?.provider === 'openai-compatible' && (
+            <div className="field">
+              <label className="field-label" htmlFor="helper-frontier-base-url">Base URL</label>
+              <input
+                id="helper-frontier-base-url"
+                placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
+                value={local.helperFrontier.baseUrl}
+                onChange={(e) => updateHelperFrontier({ baseUrl: e.target.value })}
+              />
+            </div>
+          )}
+          <div className="field">
+            <label className="field-label" htmlFor="helper-frontier-api-key">API key</label>
+            <input
+              id="helper-frontier-api-key"
+              type="password"
+              placeholder="sk-..."
+              value={local.helperFrontier?.apiKey ?? ''}
+              onChange={(e) => updateHelperFrontier({ apiKey: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="helper-thinking-mode">Thinking (helper seat)</label>
+            <select
+              id="helper-thinking-mode"
+              value={local.helperThinking === undefined ? 'default' : local.helperThinking ? 'on' : 'off'}
+              onChange={(e) => {
+                const v = e.target.value;
+                update('helperThinking', v === 'default' ? undefined : v === 'on');
+              }}
+            >
+              <option value="default">Same as lead</option>
+              <option value="on">Always on</option>
+              <option value="off">Always off</option>
+            </select>
+            <div className="field-hint">
+              Overrides extended thinking for the executor/compactor seat. "Same as lead" defers to
+              the lead thinking setting above.
+            </div>
+            <div className="field" style={{ marginTop: 8 }}>
+              <label className="field-label" htmlFor="helper-thinking-effort">Thinking effort</label>
+              <select
+                id="helper-thinking-effort"
+                value={local.helperThinkingEffort ?? 'medium'}
+                onChange={(e) => update('helperThinkingEffort', e.target.value as 'low' | 'medium' | 'high')}
+              >
+                <option value="low">Low — fastest, less thorough</option>
+                <option value="medium">Medium — balanced</option>
+                <option value="high">High — deepest reasoning, slowest</option>
+              </select>
+              <div className="field-hint">
+                How much reasoning effort for the helper seat. Only applies when helper thinking is on
+                and the provider supports it.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="save-bar">
         <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => onSave(local)}>
