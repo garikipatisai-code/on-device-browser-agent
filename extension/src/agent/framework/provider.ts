@@ -239,39 +239,34 @@ function frontierProviderFor(cfg: FrontierConfig): ModelProvider {
   return cfg.provider === 'anthropic' ? frontierProvider(cfg) : openAICompatibleProvider(cfg);
 }
 
-/** Resolved once per run for the head-chef and sous-chef seats — they always
- *  resolve identically, since hybridMode is one master toggle, not two
- *  independent ones. Falls out to local whenever hybrid mode is off or no
- *  frontier config is present: this IS the "local-only is the unchanged
- *  default" guarantee, not a promise layered on top of it. */
-export function resolveLeadProvider(
-  settings: Settings,
+/** Resolve a ModelProvider from a RoleGroupConfig. For ollama provider, returns
+ *  the local Ollama client directly. For frontier providers, wraps in withFallback
+ *  (one retry on 5xx, then falls back to local). Applies thinkingLevel as an
+ *  override — maps to provider-native params (budget_tokens for Anthropic,
+ *  reasoning_effort for OpenAI-compatible, ignored for Ollama). */
+export function resolveProvider(
+  group: { provider: string; model: string; apiKey?: string; baseUrl?: string; thinkingLevel?: string },
   ollama: OllamaClient,
   onFallback?: (reason: string) => void,
 ): ModelProvider {
-  const base = !settings.hybridMode || !settings.frontier?.apiKey
-    ? localProvider(ollama)
-    : withFallback(frontierProviderFor(settings.frontier), localProvider(ollama), onFallback);
-  return withThinkingOverride(base, settings.leadThinking, settings.leadThinkingEffort);
+  if (group.provider === 'ollama') {
+    return withThinkingOverride(
+      localProvider(ollama),
+      group.thinkingLevel && group.thinkingLevel !== 'off' ? thinkingLevelToEffort(group.thinkingLevel).thinking : undefined,
+      thinkingLevelToEffort(group.thinkingLevel ?? 'off').effort,
+    );
+  }
+  const cfg: FrontierConfig = group.provider === 'anthropic'
+    ? { provider: 'anthropic', apiKey: group.apiKey!, model: group.model }
+    : { provider: 'openai-compatible', apiKey: group.apiKey!, model: group.model, baseUrl: group.baseUrl! };
+  const base = withFallback(frontierProviderFor(cfg), localProvider(ollama), onFallback);
+  const { thinking, effort } = thinkingLevelToEffort(group.thinkingLevel ?? 'off');
+  return withThinkingOverride(base, thinking, effort);
 }
 
-/** Resolved once per run for the executor and compactor seats. Uses
- *  helperFrontier if configured; otherwise falls back to the lead's frontier
- *  (the current behavior, unchanged). Thinking overrides use helperThinking/
- *  helperThinkingEffort, falling back to leadThinking/leadThinkingEffort
- *  when not set. When hybridHelpers is off, always resolves to local. */
-export function resolveHelperProvider(
-  settings: Settings,
-  ollama: OllamaClient,
-  onFallback?: (reason: string) => void,
-): ModelProvider {
-  const effectiveFrontier = settings.helperFrontier ?? settings.frontier;
-  const effectiveThinking = settings.helperThinking ?? settings.leadThinking;
-  const effectiveEffort = settings.helperThinkingEffort ?? settings.leadThinkingEffort;
-  const base = !settings.hybridMode
-    || !settings.hybridHelpers
-    || !effectiveFrontier?.apiKey
-    ? localProvider(ollama)
-    : withFallback(frontierProviderFor(effectiveFrontier), localProvider(ollama), onFallback);
-  return withThinkingOverride(base, effectiveThinking, effectiveEffort);
+function thinkingLevelToEffort(level: string): { thinking?: boolean; effort?: 'low' | 'medium' | 'high' } {
+  if (level === 'off') return {};
+  if (level === 'fast') return { thinking: true, effort: 'low' };
+  if (level === 'standard') return { thinking: true, effort: 'medium' };
+  return { thinking: true, effort: 'high' }; // 'full'
 }

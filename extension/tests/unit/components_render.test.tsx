@@ -183,7 +183,7 @@ describe('redesigned components render across states', () => {
     const html = renderToStaticMarkup(
       <SettingsPanel
         settings={{ ...DEFAULT_SETTINGS, domainTiers: { 'shop.example': 'click-only' } }}
-        installedModels={[DEFAULT_SETTINGS.executorModel]}
+        installedModels={[DEFAULT_SETTINGS.agent?.body.model ?? 'gemma4:e4b']}
         onSave={noop}
         onTier={noop}
         onRefreshModels={noop}
@@ -194,30 +194,35 @@ describe('redesigned components render across states', () => {
       />,
     );
     expect(html).toContain('Connection');
-    expect(html).toContain('Models');
+    expect(html).toContain('Brain');
+    expect(html).toContain('Body');
+    expect(html).toContain('Other models');
     expect(html).toContain('Domain access');
     expect(html).toContain('shop.example');
     expect(html).toContain('Save settings');
     expect(html).toMatch(/Forget learned recipes/i);
   });
 
-  it('SettingsPanel keeps a typed-in frontier baseUrl after a round-trip through the anthropic provider', () => {
-    // Regression: switching Provider to anthropic and back to openai-compatible used to
-    // silently reset a custom baseUrl (e.g. an OpenRouter/DeepSeek endpoint) back to the
-    // hardcoded default, because updateFrontier only remembered the last baseUrl when
-    // `frontier` was *currently* shaped as openai-compatible — a detour through the
-    // anthropic arm (which has no baseUrl field at all) broke that chain.
+  it('Brain card keeps typed baseUrl across provider round-trip', () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    const settings: Settings = { ...DEFAULT_SETTINGS, hybridMode: true };
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
+    const customUrl = 'https://openrouter.ai/api/v1/chat/completions';
+
+    const settings: Settings = {
+      ...DEFAULT_SETTINGS,
+      agent: {
+        brain: { provider: 'openai-compatible', model: 'gpt-5.1', apiKey: 'sk-x', baseUrl: customUrl },
+        body: { provider: 'ollama', model: 'gemma4:e4b' },
+      },
+    };
 
     act(() => {
       root.render(
         <SettingsPanel
           settings={settings}
-          installedModels={[DEFAULT_SETTINGS.executorModel]}
+          installedModels={[DEFAULT_SETTINGS.agent?.body.model ?? 'gemma4:e4b']}
           onSave={noop}
           onTier={noop}
           onRefreshModels={noop}
@@ -229,43 +234,26 @@ describe('redesigned components render across states', () => {
       );
     });
 
-    const fieldValue = (label: string) =>
-      [...container.querySelectorAll('.field')]
-        .find((f) => f.querySelector('.field-label')?.textContent === label);
+    // Brain should show the custom baseUrl
+    expect((container.querySelector('#brain-base-url') as HTMLInputElement)?.value).toBe(customUrl);
+    // Brain API key should be present
+    expect((container.querySelector('#brain-api-key') as HTMLInputElement)?.value).toBe('sk-x');
 
-    const setSelect = (label: string, value: string) => {
-      const select = fieldValue(label)!.querySelector('select') as HTMLSelectElement;
-      act(() => {
-        select.value = value;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      });
-    };
-    // React patches HTMLInputElement.prototype's `value` setter to track "seen" values, so a
-    // plain `input.value = x` (which goes through that patched setter) leaves React thinking it
-    // already observed this value, and a subsequently dispatched `input` event is a no-op. Go
-    // through the native (unpatched) prototype setter instead — same trick testing-library uses.
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-    const setInput = (label: string, value: string) => {
-      const input = fieldValue(label)!.querySelector('input') as HTMLInputElement;
-      act(() => {
-        nativeInputValueSetter.call(input, value);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      });
-    };
-    const getInputValue = (label: string) =>
-      (fieldValue(label)!.querySelector('input') as HTMLInputElement).value;
+    // Find the Brain card and switch to anthropic via click on the label text
+    const cards = container.querySelectorAll('[class*="card"]');
+    const brainCard = [...cards].find((c) => c.textContent?.includes('Brain'))!;
+    const labels = brainCard.querySelectorAll('label');
+    // Labels: "Local" (0), "Anthropic" (1), "OpenAI" (2)
+    const anthroLabel = [...labels].find((l) => l.textContent?.trim() === 'Anthropic')!;
 
-    // Switch to openai-compatible, then type a custom baseUrl (OpenRouter's endpoint).
-    setSelect('Provider', 'openai-compatible');
-    const customUrl = 'https://openrouter.ai/api/v1/chat/completions';
-    setInput('Base URL', customUrl);
-    expect(getInputValue('Base URL')).toBe(customUrl);
+    act(() => { (anthroLabel.querySelector('input') as HTMLInputElement).click(); });
+    // Base URL field should disappear (anthropic has no baseUrl)
+    expect(container.querySelector('#brain-base-url')).toBeNull();
 
-    // Round-trip through anthropic (no baseUrl field exists at all on that arm) and back.
-    setSelect('Provider', 'anthropic');
-    setSelect('Provider', 'openai-compatible');
-
-    expect(getInputValue('Base URL')).toBe(customUrl);
+    // Switch back to openai-compatible
+    const oaiLabel = [...labels].find((l) => l.textContent?.trim() === 'OpenAI')!;
+    act(() => { (oaiLabel.querySelector('input') as HTMLInputElement).click(); });
+    expect((container.querySelector('#brain-base-url') as HTMLInputElement)?.value).toBe(customUrl);
 
     act(() => root.unmount());
     container.remove();

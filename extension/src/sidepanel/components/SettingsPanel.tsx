@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { DomainTier, FrontierConfig, Settings } from '@/shared/messages';
+import type { DomainTier, Settings, Provider, ThinkingLevel, RoleGroupConfig } from '@/shared/messages';
 import { sameModel } from '@/shared/messages';
 import { migrateLegacyTier } from '@/agent/safety/domain_tiers';
 import { clampNumCtx, MIN_NUM_CTX, MAX_NUM_CTX, DEFAULT_NUM_CTX } from '@/agent/budget';
@@ -19,29 +19,38 @@ interface Props {
   onClearRecipes: () => void;
 }
 
-type ModelKey = 'plannerModel' | 'executorModel' | 'evaluatorModel' | 'compactorModel' | 'embeddingModel' | 'visionModel';
-
-interface FrontPreset {
+interface Preset {
   label: string;
   desc: string;
-  provider: FrontierConfig['provider'];
+  provider: Provider;
   model: string;
   baseUrl?: string;
-  seat: 'lead' | 'helper' | 'both';
 }
 
-const LEAD_PRESETS: FrontPreset[] = [
-  { label: 'Claude Sonnet 4.6', desc: 'Best agent reasoning', provider: 'anthropic', model: 'claude-sonnet-4-6', seat: 'lead' },
-  { label: 'DeepSeek V4 Pro', desc: 'Cheap reasoning', provider: 'openai-compatible', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1/chat/completions', seat: 'lead' },
-  { label: 'GPT-5.6', desc: 'OpenAI flagship', provider: 'openai-compatible', model: 'gpt-5.6', seat: 'lead' },
-  { label: 'Gemini 3.2 Pro', desc: 'Google balanced', provider: 'openai-compatible', model: 'gemini-3.2-pro', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', seat: 'lead' },
+const BRAIN_PRESETS: Preset[] = [
+  { label: 'Claude Sonnet 4.6', desc: 'Best agent reasoning', provider: 'anthropic', model: 'claude-sonnet-4-6' },
+  { label: 'DeepSeek V4 Pro', desc: 'Cheap reasoning', provider: 'openai-compatible', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1/chat/completions' },
+  { label: 'GPT-5.6', desc: 'OpenAI flagship', provider: 'openai-compatible', model: 'gpt-5.6' },
+  { label: 'Gemini 3.2 Pro', desc: 'Google balanced', provider: 'openai-compatible', model: 'gemini-3.2-pro', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions' },
 ];
 
-const HELPER_PRESETS: FrontPreset[] = [
-  { label: 'DeepSeek V4 Flash', desc: 'Cheapest frontier', provider: 'openai-compatible', model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com/v1/chat/completions', seat: 'helper' },
-  { label: 'Gemini 3.2 Flash', desc: 'Fastest latency', provider: 'openai-compatible', model: 'gemini-3.2-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', seat: 'helper' },
-  { label: 'GPT-5.6 mini', desc: 'Reliable budget', provider: 'openai-compatible', model: 'gpt-5.6-mini', seat: 'helper' },
-  { label: 'Claude Haiku 4.5', desc: 'Anthropic budget', provider: 'anthropic', model: 'claude-haiku-4-5', seat: 'helper' },
+const BODY_PRESETS: Preset[] = [
+  { label: 'DeepSeek V4 Flash', desc: 'Cheapest frontier', provider: 'openai-compatible', model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com/v1/chat/completions' },
+  { label: 'Gemini 3.2 Flash', desc: 'Fastest latency', provider: 'openai-compatible', model: 'gemini-3.2-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions' },
+  { label: 'GPT-5.6 mini', desc: 'Reliable budget', provider: 'openai-compatible', model: 'gpt-5.6-mini' },
+  { label: 'Claude Haiku 4.5', desc: 'Anthropic budget', provider: 'anthropic', model: 'claude-haiku-4-5' },
+];
+
+const THINKING_LEVELS: { value: ThinkingLevel; label: string }[] = [
+  { value: 'off', label: 'Off — fastest, no extended reasoning' },
+  { value: 'fast', label: 'Fast — low budget' },
+  { value: 'standard', label: 'Standard — balanced' },
+  { value: 'full', label: 'Full — deepest reasoning, slowest' },
+];
+
+const CLOUD_PROVIDERS: { value: Provider; label: string }[] = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai-compatible', label: 'OpenAI-compatible' },
 ];
 
 const TIERS: DomainTier[] = ['read-only', 'click-only'];
@@ -63,16 +72,12 @@ export function SettingsPanel({
   const [newTier, setNewTier] = useState<DomainTier>('read-only');
   const [resumeMsg, setResumeMsg] = useState('');
   const [recipesCleared, setRecipesCleared] = useState(false);
-  // Survives a round-trip through the anthropic provider arm (which has no baseUrl field at
-  // all), so exploring the Provider select doesn't silently discard a typed-in openai-compatible
-  // endpoint (OpenRouter/DeepSeek/self-hosted). Tracked independently of `local.frontier` itself.
-  const [lastBaseUrl, setLastBaseUrl] = useState(
-    settings.frontier?.provider === 'openai-compatible' ? settings.frontier.baseUrl : OPENAI_COMPATIBLE_DEFAULT_URL,
+  // Survive baseUrl across provider round-trips (anthropic has no baseUrl field)
+  const [brainBaseUrl, setBrainBaseUrl] = useState(
+    local.agent?.brain.provider === 'openai-compatible' ? local.agent.brain.baseUrl ?? OPENAI_COMPATIBLE_DEFAULT_URL : OPENAI_COMPATIBLE_DEFAULT_URL,
   );
-  const [helperLastBaseUrl, setHelperLastBaseUrl] = useState(
-    settings.helperFrontier?.provider === 'openai-compatible'
-      ? settings.helperFrontier.baseUrl
-      : OPENAI_COMPATIBLE_DEFAULT_URL,
+  const [bodyBaseUrl, setBodyBaseUrl] = useState(
+    local.agent?.body.provider === 'openai-compatible' ? local.agent.body.baseUrl ?? OPENAI_COMPATIBLE_DEFAULT_URL : OPENAI_COMPATIBLE_DEFAULT_URL,
   );
 
   useEffect(() => {
@@ -81,79 +86,128 @@ export function SettingsPanel({
 
   const update = <K extends keyof Settings>(k: K, v: Settings[K]) => setLocal((s) => ({ ...s, [k]: v }));
 
-  const updateFrontier = (patch: {
-    provider?: FrontierConfig['provider'];
-    apiKey?: string;
-    model?: string;
-    baseUrl?: string;
-  }) => {
-    if (patch.baseUrl !== undefined) setLastBaseUrl(patch.baseUrl);
+  const patchRole = (seat: 'brain' | 'body', p: Partial<RoleGroupConfig>) => {
     setLocal((s) => {
-      const provider = patch.provider ?? s.frontier?.provider ?? 'anthropic';
-      const apiKey = patch.apiKey ?? s.frontier?.apiKey ?? '';
-      const model = patch.model ?? s.frontier?.model ?? '';
-      const frontier: FrontierConfig =
-        provider === 'anthropic'
-          ? { provider, apiKey, model }
-          : {
-              provider,
-              apiKey,
-              model,
-              baseUrl: patch.baseUrl ?? lastBaseUrl,
-            };
-      return { ...s, frontier };
+      const agent = s.agent ?? DEFAULT_ROLE_GROUP();
+      return { ...s, agent: { ...agent, [seat]: { ...agent[seat], ...p } } };
     });
   };
 
-  const updateHelperFrontier = (patch: {
-    provider?: FrontierConfig['provider'];
-    apiKey?: string;
-    model?: string;
-    baseUrl?: string;
-  }) => {
-    if (patch.baseUrl !== undefined) setHelperLastBaseUrl(patch.baseUrl);
-    setLocal((s) => {
-      const provider = patch.provider ?? s.helperFrontier?.provider ?? 'anthropic';
-      const apiKey = patch.apiKey ?? s.helperFrontier?.apiKey ?? '';
-      const model = patch.model ?? s.helperFrontier?.model ?? '';
-      const frontier: FrontierConfig =
-        provider === 'anthropic'
-          ? { provider, apiKey, model }
-          : {
-              provider,
-              apiKey,
-              model,
-              baseUrl: patch.baseUrl ?? helperLastBaseUrl,
-            };
-      return { ...s, helperFrontier: frontier };
-    });
+  const setProvider = (seat: 'brain' | 'body', prov: Provider) => {
+    if (seat === 'brain') setBrainBaseUrl(local.agent?.brain.baseUrl ?? OPENAI_COMPATIBLE_DEFAULT_URL);
+    else setBodyBaseUrl(local.agent?.body.baseUrl ?? OPENAI_COMPATIBLE_DEFAULT_URL);
+    patchRole(seat, { provider: prov, apiKey: prov === 'ollama' ? undefined : (local.agent?.[seat].apiKey ?? ''), baseUrl: prov === 'openai-compatible' ? (seat === 'brain' ? brainBaseUrl : bodyBaseUrl) : undefined });
+  };
+
+  const applyPreset = (seat: 'brain' | 'body', p: Preset) => {
+    if (seat === 'brain') setBrainBaseUrl(p.baseUrl ?? OPENAI_COMPATIBLE_DEFAULT_URL);
+    else setBodyBaseUrl(p.baseUrl ?? OPENAI_COMPATIBLE_DEFAULT_URL);
+    patchRole(seat, { provider: p.provider, model: p.model, apiKey: local.agent?.[seat].apiKey ?? '', baseUrl: p.baseUrl ?? (p.provider === 'openai-compatible' ? OPENAI_COMPATIBLE_DEFAULT_URL : undefined) });
   };
 
   const isInstalled = (name: string) =>
     installedModels.length === 0 || installedModels.some((m) => sameModel(m, name));
   const connected = installedModels.length > 0;
 
-  const modelField = (key: ModelKey, label: string) => {
-    const value = local[key] as string;
-    const known = isInstalled(value);
+  const providerRadio = (seat: 'brain' | 'body', current: Provider) => (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+      {(['ollama', 'anthropic', 'openai-compatible'] as Provider[]).map((p) => (
+        <label key={p} className="field-hint check-row" style={{ margin: 0 }}>
+          <input type="radio" name={`${seat}-provider`} checked={current === p} onChange={() => setProvider(seat, p)} />
+          <span style={{ fontSize: 12 }}>{p === 'ollama' ? 'Local' : p === 'anthropic' ? 'Anthropic' : 'OpenAI'}</span>
+        </label>
+      ))}
+    </div>
+  );
+
+  const modelChip = (model: string) => {
+    const known = isInstalled(model);
     return (
-      <div className="field" key={key}>
-        <div className="row-between">
-          <label className="field-label" htmlFor={key}>{label}</label>
-          <span className={`model-chip ${known ? 'on' : 'off'}`}>
-            <Icon name={known ? 'check' : 'alert'} size={10} /> {known ? 'installed' : 'not pulled'}
-          </span>
+      <span className={`model-chip ${known ? 'on' : 'off'}`} style={{ fontSize: 10, marginLeft: 4 }}>
+        <Icon name={known ? 'check' : 'alert'} size={9} /> {known ? 'pulled' : 'not pulled'}
+      </span>
+    );
+  };
+
+  const roleCard = (seat: 'brain' | 'body', title: string, emoji: string, roles: string, presets: Preset[]) => {
+    const g = local.agent?.[seat] ?? { provider: 'ollama' as Provider, model: 'gemma4:e4b' };
+    const isCloud = g.provider !== 'ollama';
+    return (
+      <div className="card setting-group" style={{ flex: 1, minWidth: 260 }}>
+        <h2 className="card-title">{emoji} {title}</h2>
+        <div className="field-hint" style={{ marginBottom: 8 }}>Powers: {roles}</div>
+        {/* Presets */}
+        <div className="field">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+            {presets.map((p) => (
+              <button key={p.label} className="btn btn-sm" title={p.desc}
+                onClick={() => applyPreset(seat, p)}
+                style={{ fontSize: 10, opacity: g.model === p.model ? 1 : 0.6, borderColor: g.model === p.model ? 'var(--accent)' : undefined }}>
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <input
-          id={key}
-          list="installed-models"
-          value={value}
-          onChange={(e) => update(key, e.target.value as Settings[ModelKey])}
-          style={!known ? { borderColor: 'var(--warn)' } : undefined}
-        />
+        {/* Provider */}
+        <div className="field">
+          <label className="field-label">Provider</label>
+          {providerRadio(seat, g.provider)}
+        </div>
+        {/* Model */}
+        <div className="field">
+          <label className="field-label" htmlFor={`${seat}-model`}>Model {g.provider === 'ollama' ? modelChip(g.model) : null}</label>
+          <input id={`${seat}-model`} list="installed-models"
+            placeholder={g.provider === 'ollama' ? 'gemma4:e4b' : g.provider === 'anthropic' ? 'claude-opus-4-8' : 'gpt-5.1'}
+            value={g.model}
+            onChange={(e) => patchRole(seat, { model: e.target.value })} />
+        </div>
+        {/* Cloud-only fields */}
+        {isCloud && (
+          <>
+            {g.provider === 'openai-compatible' && (
+              <div className="field">
+                <label className="field-label" htmlFor={`${seat}-cloud-provider`}>Cloud provider</label>
+                <select id={`${seat}-cloud-provider`} value={g.provider}
+                  onChange={(e) => setProvider(seat, e.target.value as Provider)}>
+                  {CLOUD_PROVIDERS.map((cp) => <option key={cp.value} value={cp.value}>{cp.label}</option>)}
+                </select>
+              </div>
+            )}
+            {g.provider === 'openai-compatible' && (
+              <div className="field">
+                <label className="field-label" htmlFor={`${seat}-base-url`}>Base URL</label>
+                <input id={`${seat}-base-url`} placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
+                  value={g.baseUrl ?? ''}
+                  onChange={(e) => { if (seat === 'brain') setBrainBaseUrl(e.target.value); else setBodyBaseUrl(e.target.value); patchRole(seat, { baseUrl: e.target.value }); }} />
+              </div>
+            )}
+            <div className="field">
+              <label className="field-label" htmlFor={`${seat}-api-key`}>API key</label>
+              <input id={`${seat}-api-key`} type="password" placeholder="sk-..."
+                value={g.apiKey ?? ''}
+                onChange={(e) => patchRole(seat, { apiKey: e.target.value })} />
+            </div>
+          </>
+        )}
+        {/* Thinking */}
+        <div className="field">
+          <label className="field-label" htmlFor={`${seat}-thinking`}>Thinking</label>
+          <select id={`${seat}-thinking`}
+            value={g.thinkingLevel ?? 'off'}
+            onChange={(e) => patchRole(seat, { thinkingLevel: e.target.value as ThinkingLevel })}>
+            {THINKING_LEVELS.map((tl) => <option key={tl.value} value={tl.value}>{tl.label}</option>)}
+          </select>
+          <div className="field-hint">
+            {g.provider === 'ollama' ? 'Local models ignore this — it only applies to cloud providers.' : 'Controls reasoning depth for this role.'}
+          </div>
+        </div>
       </div>
     );
   };
+
+  function DEFAULT_ROLE_GROUP(): { brain: RoleGroupConfig; body: RoleGroupConfig } {
+    return { brain: { provider: 'ollama', model: 'gemma4:e4b' }, body: { provider: 'ollama', model: 'gemma4:e4b' } };
+  }
 
   return (
     <div className="settings">
@@ -177,22 +231,39 @@ export function SettingsPanel({
         </div>
       </div>
 
-      {/* Models */}
+      {/* Brain & Body model config */}
+      <datalist id="installed-models">
+        {installedModels.map((m) => (
+          <option value={m} key={m} />
+        ))}
+      </datalist>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {roleCard('brain', 'Brain', '🧠', 'Planner + Evaluator', BRAIN_PRESETS)}
+        {roleCard('body', 'Body', '⚡', 'Executor + Compactor', BODY_PRESETS)}
+      </div>
+
+      {/* Other models + context window */}
       <div className="card setting-group">
         <h2 className="card-title">
-          <Icon name="spark" size={13} /> Models
+          <Icon name="spark" size={13} /> Other models & memory
         </h2>
-        <datalist id="installed-models">
-          {installedModels.map((m) => (
-            <option value={m} key={m} />
-          ))}
-        </datalist>
-        {modelField('plannerModel', 'Planner')}
-        {modelField('executorModel', 'Executor')}
-        {modelField('evaluatorModel', 'Evaluator')}
-        {modelField('compactorModel', 'Compactor')}
-        {modelField('visionModel', 'Vision (multimodal)')}
-        {modelField('embeddingModel', 'Embeddings')}
+        <div className="field">
+          <div className="row-between">
+            <label className="field-label" htmlFor="vision-model">Vision (multimodal)</label>
+            {modelChip(local.visionModel)}
+          </div>
+          <input id="vision-model" list="installed-models" value={local.visionModel}
+            onChange={(e) => update('visionModel', e.target.value)} />
+          <div className="field-hint">Used by vision.read and vision.verify for screenshot analysis. Must support images.</div>
+        </div>
+        <div className="field">
+          <div className="row-between">
+            <label className="field-label" htmlFor="embedding-model">Embeddings</label>
+            {modelChip(local.embeddingModel)}
+          </div>
+          <input id="embedding-model" list="installed-models" value={local.embeddingModel}
+            onChange={(e) => update('embeddingModel', e.target.value)} />
+        </div>
         <div className="field">
           <label className="field-label" htmlFor="num-ctx">Context window (num_ctx)</label>
           <input
@@ -366,261 +437,6 @@ export function SettingsPanel({
           </button>
         </div>
       </div>
-
-      {/* Frontier model (optional) */}
-      <div className="card setting-group">
-        <h2 className="card-title">
-          <Icon name="spark" size={13} /> Frontier model (optional)
-        </h2>
-        <div className="field-hint">
-          Use a frontier model for the lead seats (planner, evaluator). The helper seat
-          (executor, compactor) always stays local unless you also enable the option below. Off by default.
-        </div>
-        <label className="field-hint check-row">
-          <input
-            type="checkbox"
-            checked={!!local.hybridMode}
-            onChange={(e) => update('hybridMode', e.target.checked)}
-          />
-          <span>
-            <strong>Use a frontier model for planning and evaluation (hybrid mode)</strong>. Calls a
-            paid API repeatedly during a run (roughly every 3rd turn) — this app doesn't track or cap
-            that spend.
-          </span>
-        </label>
-        {local.hybridMode && (
-          <>
-            <div className="field">
-              <label className="field-label">Quick presets (populates model + URL)</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                {LEAD_PRESETS.map((p) => (
-                  <button
-                    key={p.label}
-                    className="btn btn-sm"
-                    title={p.desc}
-                    onClick={() => updateFrontier({ provider: p.provider, model: p.model, baseUrl: p.baseUrl })}
-                    style={{
-                      fontSize: 11,
-                      opacity: local.frontier?.model === p.model ? 1 : 0.65,
-                      borderColor: local.frontier?.model === p.model ? 'var(--accent)' : undefined,
-                    }}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="field">
-              <label className="field-label" htmlFor="frontier-provider">Provider</label>
-              <select
-                id="frontier-provider"
-                value={local.frontier?.provider ?? 'anthropic'}
-                onChange={(e) => updateFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
-              >
-                <option value="anthropic">Anthropic</option>
-                <option value="openai-compatible">OpenAI-compatible</option>
-              </select>
-            </div>
-            <div className="field">
-              <label className="field-label" htmlFor="frontier-model">Model</label>
-              <input
-                id="frontier-model"
-                placeholder={local.frontier?.provider === 'openai-compatible' ? 'gpt-5.1' : 'claude-opus-4-8'}
-                value={local.frontier?.model ?? ''}
-                onChange={(e) => updateFrontier({ model: e.target.value })}
-              />
-            </div>
-            {local.frontier?.provider === 'openai-compatible' && (
-              <div className="field">
-                <label className="field-label" htmlFor="frontier-base-url">Base URL</label>
-                <input
-                  id="frontier-base-url"
-                  placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
-                  value={local.frontier.baseUrl}
-                  onChange={(e) => updateFrontier({ baseUrl: e.target.value })}
-                />
-                <div className="field-hint">
-                  Examples — OpenRouter: <code>https://openrouter.ai/api/v1/chat/completions</code>; DeepSeek:{' '}
-                  <code>https://api.deepseek.com/chat/completions</code>; or any self-hosted/proxy endpoint
-                  speaking the same OpenAI Chat Completions shape.
-                </div>
-              </div>
-            )}
-            <div className="field">
-              <label className="field-label" htmlFor="frontier-api-key">API key</label>
-              <input
-                id="frontier-api-key"
-                type="password"
-                placeholder={local.frontier?.provider === 'openai-compatible' ? 'sk-...' : 'sk-ant-...'}
-                value={local.frontier?.apiKey ?? ''}
-                onChange={(e) => updateFrontier({ apiKey: e.target.value })}
-              />
-            </div>
-          </>
-        )}
-        <div className="field">
-          <label className="field-label" htmlFor="thinking-mode">Thinking (lead seat)</label>
-          <select
-            id="thinking-mode"
-            value={local.leadThinking === undefined ? 'default' : local.leadThinking ? 'on' : 'off'}
-            onChange={(e) => {
-              const v = e.target.value;
-              update('leadThinking', v === 'default' ? undefined : v === 'on');
-            }}
-          >
-            <option value="default">Default (recommended)</option>
-            <option value="on">Always on</option>
-            <option value="off">Always off</option>
-          </select>
-          <div className="field-hint">
-            Overrides extended thinking for the planner/evaluator seat, on whichever model is serving
-            it (local or frontier). Best-effort only on Anthropic and OpenAI itself — DeepSeek,
-            MiniMax, OpenRouter-routed models, and self-hosted backends don't have a standardized way
-            to control this, so Default and Always on may behave identically there. Leave on Default
-            unless you have a specific reason to change it.
-          </div>
-          <div className="field" style={{ marginTop: 8 }}>
-            <label className="field-label" htmlFor="thinking-effort">Thinking effort</label>
-            <select
-              id="thinking-effort"
-              value={local.leadThinkingEffort ?? 'medium'}
-              onChange={(e) => update('leadThinkingEffort', e.target.value as 'low' | 'medium' | 'high')}
-            >
-              <option value="low">Low — fastest, less thorough</option>
-              <option value="medium">Medium — balanced</option>
-              <option value="high">High — deepest reasoning, slowest</option>
-            </select>
-            <div className="field-hint">
-              How much reasoning effort to spend per planner/evaluator step. Low is faster but may miss
-              edge cases. High is more thorough but costs more tokens and time. Only applies when
-              thinking is on and the provider supports it (OpenAI, DeepSeek). Anthropic uses its own
-              adaptive thinking regardless of this setting.
-            </div>
-          </div>
-          <label className="field-hint check-row" style={{ marginTop: 12 }}>
-            <input
-              type="checkbox"
-              checked={!!local.hybridHelpers}
-              onChange={(e) => update('hybridHelpers', e.target.checked)}
-            />
-            <span>
-              <strong>Also run the executor/compactor on the frontier model.</strong> Everything that
-              reads pages, clicks, and types goes through the remote API too. Only turn this on for
-              tasks where the local model is too slow or unreliable. The whole run uses API tokens.
-            </span>
-          </label>
-        </div>
-      </div>
-
-      {/* Helper frontier (executor, compactor) — only shown when hybridHelpers is on */}
-      {local.hybridMode && local.hybridHelpers && (
-        <div className="card setting-group">
-          <h2 className="card-title">
-            <Icon name="spark" size={13} /> Helper frontier (executor, compactor)
-          </h2>
-          <div className="field-hint">
-            Frontier model for the helper seat. Falls back to the lead frontier above if left
-            blank. Use a cheaper/faster model here — the executor makes many more calls than the
-            planner.
-          </div>
-          <div className="field">
-            <label className="field-label">Quick presets</label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-              {HELPER_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  className="btn btn-sm"
-                  title={p.desc}
-                  onClick={() => updateHelperFrontier({ provider: p.provider, model: p.model, baseUrl: p.baseUrl })}
-                  style={{
-                    fontSize: 11,
-                    opacity: local.helperFrontier?.model === p.model ? 1 : 0.65,
-                    borderColor: local.helperFrontier?.model === p.model ? 'var(--accent)' : undefined,
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="helper-frontier-provider">Provider</label>
-            <select
-              id="helper-frontier-provider"
-              value={local.helperFrontier?.provider ?? 'anthropic'}
-              onChange={(e) => updateHelperFrontier({ provider: e.target.value as FrontierConfig['provider'] })}
-            >
-              <option value="anthropic">Anthropic</option>
-              <option value="openai-compatible">OpenAI-compatible</option>
-            </select>
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="helper-frontier-model">Model</label>
-            <input
-              id="helper-frontier-model"
-              placeholder={local.helperFrontier?.provider === 'openai-compatible' ? 'deepseek-v4-flash' : 'claude-haiku-4-5'}
-              value={local.helperFrontier?.model ?? ''}
-              onChange={(e) => updateHelperFrontier({ model: e.target.value })}
-            />
-          </div>
-          {local.helperFrontier?.provider === 'openai-compatible' && (
-            <div className="field">
-              <label className="field-label" htmlFor="helper-frontier-base-url">Base URL</label>
-              <input
-                id="helper-frontier-base-url"
-                placeholder={OPENAI_COMPATIBLE_DEFAULT_URL}
-                value={local.helperFrontier.baseUrl}
-                onChange={(e) => updateHelperFrontier({ baseUrl: e.target.value })}
-              />
-            </div>
-          )}
-          <div className="field">
-            <label className="field-label" htmlFor="helper-frontier-api-key">API key</label>
-            <input
-              id="helper-frontier-api-key"
-              type="password"
-              placeholder="sk-..."
-              value={local.helperFrontier?.apiKey ?? ''}
-              onChange={(e) => updateHelperFrontier({ apiKey: e.target.value })}
-            />
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="helper-thinking-mode">Thinking (helper seat)</label>
-            <select
-              id="helper-thinking-mode"
-              value={local.helperThinking === undefined ? 'default' : local.helperThinking ? 'on' : 'off'}
-              onChange={(e) => {
-                const v = e.target.value;
-                update('helperThinking', v === 'default' ? undefined : v === 'on');
-              }}
-            >
-              <option value="default">Same as lead</option>
-              <option value="on">Always on</option>
-              <option value="off">Always off</option>
-            </select>
-            <div className="field-hint">
-              Overrides extended thinking for the executor/compactor seat. "Same as lead" defers to
-              the lead thinking setting above.
-            </div>
-            <div className="field" style={{ marginTop: 8 }}>
-              <label className="field-label" htmlFor="helper-thinking-effort">Thinking effort</label>
-              <select
-                id="helper-thinking-effort"
-                value={local.helperThinkingEffort ?? 'medium'}
-                onChange={(e) => update('helperThinkingEffort', e.target.value as 'low' | 'medium' | 'high')}
-              >
-                <option value="low">Low — fastest, less thorough</option>
-                <option value="medium">Medium — balanced</option>
-                <option value="high">High — deepest reasoning, slowest</option>
-              </select>
-              <div className="field-hint">
-                How much reasoning effort for the helper seat. Only applies when helper thinking is on
-                and the provider supports it.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="save-bar">
         <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => onSave(local)}>

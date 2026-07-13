@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { localProvider, frontierProvider, openAICompatibleProvider, withFallback, withThinkingOverride, resolveLeadProvider, resolveHelperProvider, type ModelProvider } from '@/agent/framework/provider';
+import { localProvider, frontierProvider, openAICompatibleProvider, withFallback, withThinkingOverride, resolveProvider, type ModelProvider } from '@/agent/framework/provider';
 import type { OllamaClient } from '@/background/ollama';
 import { DEFAULT_SETTINGS } from '@/shared/messages';
 import { makeFakeOllama } from '../helpers';
@@ -255,205 +255,76 @@ describe('withThinkingOverride', () => {
   });
 });
 
-describe('resolveLeadProvider', () => {
-  it('resolves to local when hybridMode is off', () => {
-    const fake = makeFakeOllama({});
-    const p = resolveLeadProvider({ ...DEFAULT_SETTINGS, hybridMode: false }, fake);
-    expect(p).toBe(fake); // localProvider is an identity function
+describe('resolveProvider', () => {
+  const fakeLocal = makeFakeOllama({});
+
+  it('resolves ollama provider to local identity', () => {
+    const p = resolveProvider({ provider: 'ollama', model: 'gemma4:e4b' }, fakeLocal);
+    expect(p).toBe(fakeLocal); // localProvider is identity
   });
 
-  it('resolves to local when hybridMode is on but no frontier config is present', () => {
-    const fake = makeFakeOllama({});
-    const p = resolveLeadProvider({ ...DEFAULT_SETTINGS, hybridMode: true }, fake);
-    expect(p).toBe(fake);
+  it('resolves to frontier with fallback for anthropic', () => {
+    const p = resolveProvider({ provider: 'anthropic', model: 'claude-opus-4-8', apiKey: 'sk-test' }, fakeLocal);
+    expect(p).not.toBe(fakeLocal); // wrapped in withFallback
   });
 
-  it('resolves to a fallback-wrapped frontier provider when fully configured', () => {
-    const fake = makeFakeOllama({});
-    const p = resolveLeadProvider(
-      { ...DEFAULT_SETTINGS, hybridMode: true, frontier: { provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' } },
-      fake,
-    );
-    expect(p).not.toBe(fake);
-  });
-
-  it('resolves to the openai-compatible provider (not Anthropic) when configured', async () => {
+  it('routes to openai-compatible when provider is openai-compatible', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
     });
     vi.stubGlobal('fetch', fetchMock);
-    const fake = makeFakeOllama({});
-    const p = resolveLeadProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: true,
-        frontier: { provider: 'openai-compatible', apiKey: 'sk-x', model: 'gpt-5.1', baseUrl: 'https://api.openai.com/v1/chat/completions' },
-      },
-      fake,
+    const p = resolveProvider(
+      { provider: 'openai-compatible', model: 'gpt-5.1', apiKey: 'sk-x', baseUrl: 'https://api.openai.com/v1/chat/completions' },
+      fakeLocal,
     );
-    await p.chatOnce({ model: 'gpt-5.1', messages: [{ role: 'user', content: 'hi' }] });
+    await p.chatOnce({ model: 'x', messages: [{ role: 'user', content: 'hi' }] });
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.openai.com/v1/chat/completions');
     vi.unstubAllGlobals();
   });
 
-  it('composes leadThinking over the local branch even when hybridMode is off', async () => {
-    const captured: Array<{ thinking?: boolean }> = [];
+  it('applies thinkingLevel "full" as thinking:true with effort "high"', async () => {
+    const captured: Array<{ thinking?: boolean; thinkingEffort?: string }> = [];
     const fake = {
-      chatOnce: async (opts: { thinking?: boolean }) => {
+      chatOnce: async (opts: { thinking?: boolean; thinkingEffort?: string }) => {
         captured.push(opts);
         return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
       },
     } as unknown as OllamaClient;
-    const p = resolveLeadProvider({ ...DEFAULT_SETTINGS, hybridMode: false, leadThinking: true }, fake);
+    const p = resolveProvider({ provider: 'ollama', model: 'x', thinkingLevel: 'full' }, fake);
     await p.chatOnce({ model: 'x', messages: [], thinking: false });
     expect(captured[0].thinking).toBe(true);
-  });
-});
-
-describe('resolveHelperProvider', () => {
-  const fakeLocal = {
-    chatOnce: async () => ({ message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' }),
-  } as unknown as OllamaClient;
-
-  it('resolves to local when hybridMode is off', () => {
-    const p = resolveHelperProvider(
-      { ...DEFAULT_SETTINGS, hybridMode: false, hybridHelpers: true, helperFrontier: { provider: 'anthropic', apiKey: 'sk-x', model: 'm' } },
-      fakeLocal,
-    );
-    // localProvider returns the input reference — identity check proves no wrapper
-    expect(p).toBe(fakeLocal as unknown as ModelProvider);
-  });
-
-  it('resolves to local when hybridHelpers is off', () => {
-    const p = resolveHelperProvider(
-      { ...DEFAULT_SETTINGS, hybridMode: true, hybridHelpers: false, helperFrontier: { provider: 'anthropic', apiKey: 'sk-x', model: 'm' } },
-      fakeLocal,
-    );
-    expect(p).toBe(fakeLocal as unknown as ModelProvider);
-  });
-
-  it('resolves to local when no API key is set', () => {
-    const p = resolveHelperProvider(
-      { ...DEFAULT_SETTINGS, hybridMode: true, hybridHelpers: true, helperFrontier: { provider: 'anthropic', apiKey: '', model: 'm' } },
-      fakeLocal,
-    );
-    expect(p).toBe(fakeLocal as unknown as ModelProvider);
-  });
-
-  it('falls back to lead frontier when helperFrontier is not set', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        id: '1', model: 'claude-opus-4-8', content: [{ type: 'text', text: 'hello' }],
-        stop_reason: 'end_turn', usage: { input_tokens: 5, output_tokens: 5 },
-      }), { status: 200, headers: { 'content-type': 'application/json' } }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    const p = resolveHelperProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: true,
-        hybridHelpers: true,
-        frontier: { provider: 'anthropic', apiKey: 'sk-lead', model: 'claude-sonnet-4-6' },
-        // helperFrontier NOT set — should fall back to frontier
-      },
-      fakeLocal,
-    );
-    await p.chatOnce({ model: 'x', messages: [{ role: 'user', content: 'hi' }] });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://api.anthropic.com/v1/messages');
-    vi.unstubAllGlobals();
-  });
-
-  it('uses helperFrontier when explicitly set', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        id: '1', model: 'deepseek-v4-flash', choices: [{ message: { content: 'hello' } }],
-        usage: { prompt_tokens: 5, completion_tokens: 5 },
-      }), { status: 200, headers: { 'content-type': 'application/json' } }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    const p = resolveHelperProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: true,
-        hybridHelpers: true,
-        frontier: { provider: 'anthropic', apiKey: 'sk-lead', model: 'claude-sonnet-4-6' },
-        helperFrontier: { provider: 'openai-compatible', apiKey: 'sk-helper', model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com/v1/chat/completions' },
-      },
-      fakeLocal,
-    );
-    await p.chatOnce({ model: 'x', messages: [{ role: 'user', content: 'hi' }] });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://api.deepseek.com/v1/chat/completions');
-    vi.unstubAllGlobals();
-  });
-
-  it('helper thinking falls back to leadThinking', async () => {
-    const captured: Array<{ thinking?: boolean }> = [];
-    const fake = {
-      chatOnce: async (opts: { thinking?: boolean }) => {
-        captured.push(opts);
-        return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
-      },
-    } as unknown as OllamaClient;
-    const p = resolveHelperProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: false,
-        leadThinking: true,
-        // helperThinking not set — should fall back to leadThinking
-      },
-      fake,
-    );
-    await p.chatOnce({ model: 'x', messages: [], thinking: false });
-    expect(captured[0].thinking).toBe(true);
-  });
-
-  it('helper thinking explicitly overrides leadThinking', async () => {
-    const captured: Array<{ thinking?: boolean }> = [];
-    const fake = {
-      chatOnce: async (opts: { thinking?: boolean }) => {
-        captured.push(opts);
-        return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
-      },
-    } as unknown as OllamaClient;
-    const p = resolveHelperProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: false,
-        leadThinking: true,
-        helperThinking: false, // explicitly off
-      },
-      fake,
-    );
-    await p.chatOnce({ model: 'x', messages: [], thinking: true });
-    expect(captured[0].thinking).toBe(false);
-  });
-
-  it('helper thinking effort falls back to leadThinkingEffort', async () => {
-    const captured: Array<{ thinkingEffort?: string }> = [];
-    const fake = {
-      chatOnce: async (opts: { thinkingEffort?: string }) => {
-        captured.push(opts);
-        return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
-      },
-    } as unknown as OllamaClient;
-    const p = resolveHelperProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: false,
-        leadThinking: true,
-        leadThinkingEffort: 'high',
-        // helperThinkingEffort not set
-      },
-      fake,
-    );
-    await p.chatOnce({ model: 'x', messages: [], thinking: true });
     expect(captured[0].thinkingEffort).toBe('high');
   });
 
-  it('helper thinking effort explicitly set', async () => {
+  it('thinkingLevel "fast" maps to thinking:true effort:low', async () => {
+    const captured: Array<{ thinking?: boolean; thinkingEffort?: string }> = [];
+    const fake = {
+      chatOnce: async (opts: { thinking?: boolean; thinkingEffort?: string }) => {
+        captured.push(opts);
+        return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
+      },
+    } as unknown as OllamaClient;
+    const p = resolveProvider({ provider: 'ollama', model: 'x', thinkingLevel: 'fast' }, fake);
+    await p.chatOnce({ model: 'x', messages: [], thinking: false });
+    expect(captured[0].thinking).toBe(true);
+    expect(captured[0].thinkingEffort).toBe('low');
+  });
+
+  it('thinkingLevel "off" applies no override', async () => {
+    const captured: Array<{ thinking?: boolean }> = [];
+    const fake = {
+      chatOnce: async (opts: { thinking?: boolean }) => {
+        captured.push(opts);
+        return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
+      },
+    } as unknown as OllamaClient;
+    const p = resolveProvider({ provider: 'ollama', model: 'x', thinkingLevel: 'off' }, fake);
+    await p.chatOnce({ model: 'x', messages: [], thinking: false });
+    expect(captured[0].thinking).toBe(false); // no override, original call's thinking:false passes through
+  });
+
+  it('thinkingLevel "standard" maps to thinking:true effort:medium', async () => {
     const captured: Array<{ thinkingEffort?: string }> = [];
     const fake = {
       chatOnce: async (opts: { thinkingEffort?: string }) => {
@@ -461,18 +332,8 @@ describe('resolveHelperProvider', () => {
         return { message: { role: 'assistant', content: 'ok' }, done: true, toolCalls: [], rawText: 'ok' };
       },
     } as unknown as OllamaClient;
-    const p = resolveHelperProvider(
-      {
-        ...DEFAULT_SETTINGS,
-        hybridMode: false,
-        leadThinking: true,
-        leadThinkingEffort: 'high',
-        helperThinking: true,
-        helperThinkingEffort: 'low',
-      },
-      fake,
-    );
+    const p = resolveProvider({ provider: 'ollama', model: 'x', thinkingLevel: 'standard' }, fake);
     await p.chatOnce({ model: 'x', messages: [], thinking: true });
-    expect(captured[0].thinkingEffort).toBe('low');
+    expect(captured[0].thinkingEffort).toBe('medium');
   });
 });

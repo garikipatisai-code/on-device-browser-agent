@@ -84,13 +84,13 @@ describe('settings', () => {
   it('loadSettings returns defaults when none stored', async () => {
     const s = await loadSettings();
     expect(s.ollamaBaseUrl).toMatch(/^http/);
-    expect(s.executorModel).toBeTruthy();
+    expect(s.agent?.body.model).toBeTruthy();
   });
 
   it('saveSettings merges with defaults', async () => {
-    const next = await saveSettings({ executorModel: 'override:1b' });
-    expect(next.executorModel).toBe('override:1b');
-    expect(next.plannerModel).toBeTruthy();
+    const next = await saveSettings({ agent: { brain: { provider: 'ollama', model: 'override:1b' }, body: { provider: 'ollama', model: 'override:1b' } } });
+    expect(next.agent?.body.model).toBe('override:1b');
+    expect(next.agent?.brain.model).toBeTruthy();
   });
 
   it('setDomainTier upserts a host', async () => {
@@ -104,12 +104,12 @@ describe('settings', () => {
     await Promise.all([
       setDomainTier('a.com', 'click-only'),
       setDomainTier('b.com', 'read-only'),
-      saveSettings({ executorModel: 'concurrent:9b' }),
+      saveSettings({ agent: { brain: { provider: 'ollama', model: 'concurrent:9b' }, body: { provider: 'ollama', model: 'concurrent:9b' } } }),
     ]);
     const s = await loadSettings();
     expect(s.domainTiers['a.com']).toBe('click-only');
     expect(s.domainTiers['b.com']).toBe('read-only');
-    expect(s.executorModel).toBe('concurrent:9b');
+    expect(s.agent?.body.model).toBe('concurrent:9b');
   });
 });
 

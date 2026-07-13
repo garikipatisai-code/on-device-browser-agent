@@ -55,7 +55,7 @@ export function makeFakeOllama(
     baseUrl: 'http://fake',
     setBaseUrl: () => undefined,
     ping: async () => true,
-    listModels: async () => ['gemma4:2b', 'gemma4:4b', 'gemma4:26b', 'mxbai-embed-large'],
+    listModels: async () => ['gemma4:e4b', 'gemma4:4b', 'gemma4:26b', 'mxbai-embed-large'],
     chatOnce: async (opts: ChatOptions) => {
       const role = detect(opts.messages);
       options.onChat?.(opts.model, role, opts.messages, (opts.tools ?? []).map((t) => t.function.name));

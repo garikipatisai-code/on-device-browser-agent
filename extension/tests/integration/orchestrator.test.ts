@@ -104,8 +104,10 @@ describe('orchestrator — hybrid mode seat routing', () => {
       registry: buildRegistry(),
       settings: {
         ...DEFAULT_SETTINGS,
-        hybridMode: true,
-        frontier: { provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-4-8' },
+        agent: {
+          brain: { provider: 'anthropic', model: 'claude-opus-4-8', apiKey: 'sk-test' },
+          body:  { provider: 'ollama', model: 'gemma4:e4b' },
+        },
       },
       emit: () => undefined,
     });
@@ -153,10 +155,10 @@ describe('orchestrator — hybrid mode seat routing', () => {
       registry: buildRegistry(),
       settings: {
         ...DEFAULT_SETTINGS,
-        hybridMode: true,
-        hybridHelpers: true,
-        frontier: { provider: 'anthropic', apiKey: 'sk-lead', model: 'claude-sonnet-4-6' },
-        helperFrontier: { provider: 'openai-compatible', apiKey: 'sk-helper', model: 'deepseek-v4-flash', baseUrl: helperUrl },
+        agent: {
+          brain: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'sk-lead' },
+          body:  { provider: 'openai-compatible', model: 'deepseek-v4-flash', apiKey: 'sk-helper', baseUrl: helperUrl },
+        },
       },
       emit: () => undefined,
     });

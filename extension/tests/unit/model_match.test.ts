@@ -23,14 +23,13 @@ describe('sameModel', () => {
 });
 
 describe('DEFAULT_SETTINGS', () => {
-  it('every role has a non-empty model assigned', () => {
-    expect(DEFAULT_SETTINGS.plannerModel).toBeTruthy();
-    expect(DEFAULT_SETTINGS.executorModel).toBeTruthy();
-    expect(DEFAULT_SETTINGS.evaluatorModel).toBeTruthy();
-    expect(DEFAULT_SETTINGS.compactorModel).toBeTruthy();
+  it('brain and body have non-empty models assigned', () => {
+    expect(DEFAULT_SETTINGS.agent?.brain.model).toBeTruthy();
+    expect(DEFAULT_SETTINGS.agent?.body.model).toBeTruthy();
+    expect(DEFAULT_SETTINGS.visionModel).toBeTruthy();
     expect(DEFAULT_SETTINGS.embeddingModel).toBeTruthy();
   });
-  it('compactor shares the executor model (cache reuse)', () => {
-    expect(sameModel(DEFAULT_SETTINGS.compactorModel, DEFAULT_SETTINGS.executorModel)).toBe(true);
+  it('brain and body default to the same model', () => {
+    expect(sameModel(DEFAULT_SETTINGS.agent?.brain.model ?? '', DEFAULT_SETTINGS.agent?.body.model ?? '')).toBe(true);
   });
 });

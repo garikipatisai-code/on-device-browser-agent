@@ -27,7 +27,7 @@ import { addGroundedFact, renderFacts, type Fact } from './facts';
 import { runHeadChef } from './framework/head_chef';
 import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
 import { runHelper, runHelperCompaction } from './framework/helper';
-import { localProvider, resolveLeadProvider, resolveHelperProvider, type ModelProvider } from './framework/provider';
+import { localProvider, resolveProvider, type ModelProvider } from './framework/provider';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
 import {
@@ -162,23 +162,21 @@ export class Orchestrator {
 
   constructor(private opts: OrchestratorOpts) {
     this.signal = opts.signal ?? new AbortController().signal;
-    this.leadProvider = resolveLeadProvider(opts.settings, opts.ollama, (reason) =>
+    const agent = opts.settings.agent!;
+    this.leadProvider = resolveProvider(agent.brain, opts.ollama, (reason) =>
       this.emit({
         kind: 'log',
         ts: Date.now(),
         level: 'warn',
-        message: `Frontier call failed, using local model instead: ${reason}`,
+        message: `Brain frontier call failed, using local: ${reason}`,
       }),
     );
-    // Helper seat always local by default. When hybridHelpers is on, the executor
-    // and compactor also use a frontier provider — uses helperFrontier if configured,
-    // otherwise falls back to the lead's frontier. Off by default; opt-in only.
-    this.helperProvider = resolveHelperProvider(opts.settings, opts.ollama, (reason) =>
+    this.helperProvider = resolveProvider(agent.body, opts.ollama, (reason) =>
       this.emit({
         kind: 'log',
         ts: Date.now(),
         level: 'warn',
-        message: `Helper frontier call failed, falling back to local: ${reason}`,
+        message: `Body frontier call failed, using local: ${reason}`,
       }),
     );
   }
@@ -427,10 +425,11 @@ export class Orchestrator {
     hot = await patchHot({ phase: 'PLANNING' });
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'planner' });
     const t0 = performance.now();
+    const agent = this.opts.settings.agent!;
     const out = await timed('planner', () =>
       runHeadChef(this.leadProvider, {
         ctx: this.commonCtx(hot),
-        model: this.opts.settings.plannerModel,
+        model: agent.brain.model,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
         recipeRetryUsed: hot.recipeRetryUsed,
@@ -463,10 +462,11 @@ export class Orchestrator {
     hot = await patchHot({ phase: 'PLANNING', replanCount: hot.replanCount + 1 });
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'planner' });
     const t0 = performance.now();
+    const agent = this.opts.settings.agent!;
     const out = await timed('planner.replan', () =>
       runHeadChef(this.leadProvider, {
         ctx: this.commonCtx(hot),
-        model: this.opts.settings.plannerModel,
+        model: agent.brain.model,
         replanContext: reason,
         workflowRecipe: this.matchedWorkflow ? renderRecipe(this.matchedWorkflow) : undefined,
         recipeStepCount: this.matchedWorkflow?.steps.length,
@@ -489,6 +489,7 @@ export class Orchestrator {
     result: ToolResult;
     tool: string;
   }> {
+    const agent = this.opts.settings.agent!;
     hot = await patchHot({ phase: 'EXECUTING', currentStepId: stepId });
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'executor', stepId });
     const t0 = performance.now();
@@ -518,7 +519,7 @@ export class Orchestrator {
     const out = await timed('executor', () =>
       runHelper(this.helperProvider, {
         ctx,
-        model: this.opts.settings.executorModel,
+        model: agent.body.model,
         registry: this.opts.registry,
         toolCtx,
         toolFilter,
@@ -727,6 +728,7 @@ export class Orchestrator {
   }
 
   private async evaluate(hot: AgentStateHot, stepId: string, lastResult: string) {
+    const agent = this.opts.settings.agent!;
     await patchHot({ phase: 'EVALUATING' });
     const step = hot.plan!.steps.find((s) => s.id === stepId)!;
     // Pass the scratchpad so the evaluator can see data gathered on EARLIER turns — otherwise it
@@ -738,7 +740,7 @@ export class Orchestrator {
     const ev = await timed('evaluator', () =>
       runSousChef(this.leadProvider, {
         ctx: this.commonCtx(hot, scratch),
-        model: this.opts.settings.evaluatorModel,
+        model: agent.brain.model,
         lastExecutorResult: lastResult,
         step,
         signal: this.signal,
@@ -767,6 +769,7 @@ export class Orchestrator {
   }
 
   private async compact(hotState: AgentStateHot, scratch: string) {
+    const agent = this.opts.settings.agent!;
     await patchHot({ phase: 'COMPACTING' });
     this.emit({ kind: 'role.start', ts: Date.now(), role: 'compactor' });
     const t0 = performance.now();
@@ -775,7 +778,7 @@ export class Orchestrator {
         goal: hotState.goal,
         toolCatalog: this.opts.registry.describe(),
         scratchpad: scratch,
-        model: this.opts.settings.compactorModel,
+        model: agent.body.model,
         signal: this.signal,
         numCtx: this.numCtx,
       }),
@@ -1037,11 +1040,12 @@ export class Orchestrator {
   /** One model call that answers the goal from the observed corpus (everything read this task).
    *  Returns null if nothing meaningful was gathered. The answer is grounding-gated by the caller. */
   private async synthesizeFromObserved(hot: AgentStateHot): Promise<string | null> {
+    const agent = this.opts.settings.agent!;
     const corpus = this.groundingCorpus().trim();
     if (corpus.length < 40) return null; // nothing was read — nothing to salvage
     try {
       const resp = await this.opts.ollama.chatOnce({
-        model: this.opts.settings.executorModel,
+        model: agent.body.model,
         messages: [
           {
             role: 'system',

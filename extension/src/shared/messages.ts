@@ -36,13 +36,50 @@ export type FrontierConfig =
   | { provider: 'anthropic'; apiKey: string; model: string }
   | { provider: 'openai-compatible'; apiKey: string; model: string; baseUrl: string };
 
+export type Provider = 'ollama' | 'anthropic' | 'openai-compatible';
+
+/** Normalized thinking budget — maps to provider-native params at call time.
+ *  'off' = no extended thinking; 'fast'/'standard'/'full' map to budget_tokens
+ *  (Anthropic) or reasoning_effort (OpenAI). Local Ollama ignores this field. */
+export type ThinkingLevel = 'off' | 'fast' | 'standard' | 'full';
+
+/** Self-contained config for one role group. Brain (planner+evaluator) and
+ *  Body (executor+compactor) each get their own. Provider 'ollama' uses the
+ *  local Ollama server; frontier providers use the API key + optional base URL. */
+export interface RoleGroupConfig {
+  provider: Provider;
+  model: string;
+  apiKey?: string;
+  baseUrl?: string;
+  thinkingLevel?: ThinkingLevel;
+}
+
+/** Brain/Body model assignment. Replaces the 14 scattered model/frontier/
+ *  thinking/hybrid fields with two self-contained role-group configs. */
+export interface AgentConfig {
+  brain: RoleGroupConfig;
+  body: RoleGroupConfig;
+}
+
 export interface Settings {
+  /** Schema version for migration. undefined = v0 (scattered fields), 1 = AgentConfig. */
+  schemaVersion?: number;
+  /** Brain (planner+evaluator) and Body (executor+compactor) model config.
+   *  Always present after migration from v0. */
+  agent?: AgentConfig;
   ollamaBaseUrl: string;
-  plannerModel: string;
-  executorModel: string;
-  evaluatorModel: string;
-  compactorModel: string;
+  // ---- deprecated below (v0 fields, kept for migration — read agent.* instead) ----
+  /** @deprecated Use agent.brain.model instead. */
+  plannerModel?: string;
+  /** @deprecated Use agent.body.model instead. */
+  executorModel?: string;
+  /** @deprecated Use agent.brain.model instead. */
+  evaluatorModel?: string;
+  /** @deprecated Use agent.body.model instead. */
+  compactorModel?: string;
   embeddingModel: string;
+  /** Multimodal model for vision.read (screenshot → text). Must support images.
+   *  Not part of the brain/body split — vision tools use this directly. */
   visionModel: string;
   domainTiers: Record<string, DomainTier>;
   /** Opt-in escape hatch: when true, the agent may click/type/submit on ANY site (the domain-tier
@@ -57,48 +94,38 @@ export interface Settings {
   preferences?: string;
   /** Ollama context window; default 32768, raise only after verifying VRAM with `ollama ps`. */
   numCtx?: number;
-  /** Master toggle: when true, the head-chef and sous-chef seats (planner,
-   *  evaluator) may run on the configured frontier model instead of local
-   *  Ollama. The helper seat (executor, compactor) always stays local. */
+  // ---- v0 frontier/thinking fields (kept for migration) ----
+  /** @deprecated Use agent.brain.provider instead. */
   hybridMode?: boolean;
+  /** @deprecated Use agent.brain.apiKey + agent.brain.model instead. */
   frontier?: FrontierConfig;
-  /** Overrides extended-thinking for the lead seat (head-chef/sous-chef) on
-   *  whichever provider serves it. undefined = today's unchanged per-role
-   *  defaults; true/false forces it either way, regardless of provider. */
+  /** @deprecated Use agent.brain.thinkingLevel instead. */
   leadThinking?: boolean;
-  /** Reasoning effort level when lead thinking is on. 'low' | 'medium' | 'high'.
-   *  Maps to OpenAI-compatible reasoning_effort. On Anthropic this is set by the
-   *  thinking.type field ('adaptive'), so effort only matters on non-Anthropic paths.
-   *  Default 'medium'. */
+  /** @deprecated Use agent.brain.thinkingLevel instead. */
   leadThinkingEffort?: 'low' | 'medium' | 'high';
-  /** When true AND hybridMode is on, the helper seat (executor, compactor)
-   *  also runs on the frontier model. Uses helperFrontier if set, otherwise
-   *  falls back to frontier (the lead's config). Off by default. */
+  /** @deprecated Use agent.body.provider instead. */
   hybridHelpers?: boolean;
-  /** Independent frontier config for the helper seat (executor, compactor).
-   *  When omitted but hybridHelpers is on, falls back to `frontier`. This
-   *  allows a high-reasoning lead model paired with a cheaper/faster workhorse
-   *  model for the browser-heavy executor calls. */
+  /** @deprecated Use agent.body.apiKey + agent.body.model instead. */
   helperFrontier?: FrontierConfig;
-  /** Overrides extended-thinking for the helper seat. When undefined,
-   *  falls back to leadThinking. */
+  /** @deprecated Use agent.body.thinkingLevel instead. */
   helperThinking?: boolean;
-  /** Reasoning effort for the helper seat when helperThinking is on.
-   *  When undefined, falls back to leadThinkingEffort. */
+  /** @deprecated Use agent.body.thinkingLevel instead. */
   helperThinkingEffort?: 'low' | 'medium' | 'high';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  schemaVersion: 1,
+  agent: {
+    // gemma4:e4b is the floor for this app: measured 100% first-try valid+correct
+    // tool_calls at p90 2.1s on M5-class hardware (scripts/measure_toolcalls.mjs).
+    // gemma4:e2b is intentionally NOT used — it chose the wrong tool ~60% of the
+    // time. Larger tags (gemma4:12b/:26b/:31b) add planning depth but are no more
+    // reliable for tool-calling and 12b busts the 6s Executor budget.
+    // For a faster body, try gemma4:12b or a frontier model with thinking off.
+    brain: { provider: 'ollama', model: 'gemma4:e4b' },
+    body:  { provider: 'ollama', model: 'gemma4:e4b' },
+  },
   ollamaBaseUrl: 'http://localhost:11434',
-  // gemma4:e4b is the floor for this app: measured 100% first-try valid+correct
-  // tool_calls at p90 2.1s on M5-class hardware (scripts/measure_toolcalls.mjs).
-  // gemma4:e2b is intentionally NOT used — it chose the wrong tool ~60% of the
-  // time. Larger tags (gemma4:12b/:26b/:31b) add planning depth but are no more
-  // reliable for tool-calling and 12b busts the 6s Executor budget.
-  plannerModel: 'gemma4:e4b',
-  executorModel: 'gemma4:e4b',
-  evaluatorModel: 'gemma4:e4b',
-  compactorModel: 'gemma4:e4b',
   embeddingModel: 'mxbai-embed-large',
   // Multimodal model for vision.read (screenshot → text). Must support images.
   visionModel: 'gemma4:e4b',
@@ -107,7 +134,6 @@ export const DEFAULT_SETTINGS: Settings = {
   profileJson: '',
   preferences: '',
   numCtx: 32_768,
-  hybridMode: false,
 };
 
 /** Treat a bare model name as equal to its `:latest` tag (Ollama's default). */

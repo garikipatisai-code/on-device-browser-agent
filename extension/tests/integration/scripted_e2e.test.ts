@@ -122,7 +122,7 @@ describe('scripted-browser E2E (real orchestrator + real tools + fake model)', (
     const orch = new Orchestrator({
       ollama,
       registry,
-      settings: { ...DEFAULT_SETTINGS, hybridMode: false },
+      settings: { ...DEFAULT_SETTINGS },
       emit: () => undefined,
     });
     const result = await orch.runUntilTerminal(await orch.start(t.goal));
@@ -154,7 +154,7 @@ describe('scripted-browser E2E (real orchestrator + real tools + fake model)', (
     const orch = new Orchestrator({
       ollama,
       registry,
-      settings: { ...DEFAULT_SETTINGS, hybridMode: false, leadThinking: true },
+            settings: { ...DEFAULT_SETTINGS, agent: { brain: { provider: 'ollama', model: 'gemma4:e4b', thinkingLevel: 'full' }, body: { provider: 'ollama', model: 'gemma4:e4b' } } },
       emit: () => undefined,
     });
     const result = await orch.runUntilTerminal(await orch.start(t.goal));

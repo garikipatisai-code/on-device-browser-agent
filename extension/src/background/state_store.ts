@@ -14,7 +14,7 @@ import type {
   TaskPhase,
   TimelineEvent,
 } from '@/shared/messages';
-import { DEFAULT_SETTINGS } from '@/shared/messages';
+import { DEFAULT_SETTINGS, type FrontierConfig } from '@/shared/messages';
 import type { Fact } from '@/agent/facts';
 import { redact, redactDeep } from '@/agent/safety/redact';
 
@@ -203,10 +203,54 @@ export async function saveActiveSessionId(id: string | null): Promise<void> {
 
 // ---------- Settings ----------
 
+/** One-time migration from v0 (scattered model/frontier/thinking fields) to
+ *  v1 (AgentConfig with brain/body RoleGroupConfigs). Writes the migrated
+ *  shape back to storage so the old fields are never read again. */
+function migrateSettings(raw: Settings): Settings {
+  if (raw.schemaVersion !== undefined && raw.agent) return raw; // already migrated
+
+  const bThink = raw.leadThinking
+    ? (raw.leadThinkingEffort === 'low' ? 'fast' as const : raw.leadThinkingEffort === 'medium' ? 'standard' as const : 'full' as const)
+    : 'off' as const;
+  const hThink = raw.helperThinking
+    ? (raw.helperThinkingEffort === 'low' ? 'fast' as const : raw.helperThinkingEffort === 'medium' ? 'standard' as const : 'full' as const)
+    : 'off' as const;
+
+  const bProv = (raw.hybridMode && raw.frontier?.apiKey) ? raw.frontier.provider : 'ollama' as const;
+  const hProv = (raw.hybridHelpers && ((raw.helperFrontier?.apiKey) || raw.frontier?.apiKey))
+    ? (raw.helperFrontier?.provider ?? raw.frontier?.provider ?? 'ollama' as const)
+    : 'ollama' as const;
+
+  const migrated: Settings = {
+    ...raw,
+    schemaVersion: 1,
+    agent: {
+      brain: {
+        provider: bProv,
+        model: bProv === 'ollama' ? (raw.plannerModel ?? 'gemma4:e4b') : raw.frontier!.model,
+        apiKey: bProv !== 'ollama' ? raw.frontier?.apiKey : undefined,
+        baseUrl: bProv === 'openai-compatible' ? (raw.frontier as Extract<typeof raw.frontier, {provider:'openai-compatible'}>)?.baseUrl : undefined,
+        thinkingLevel: bThink,
+      },
+      body: {
+        provider: hProv,
+        model: hProv === 'ollama' ? (raw.executorModel ?? 'gemma4:e4b') : ((raw.helperFrontier as FrontierConfig)?.model ?? raw.frontier!.model),
+        apiKey: hProv !== 'ollama' ? ((raw.helperFrontier as FrontierConfig)?.apiKey ?? raw.frontier?.apiKey) : undefined,
+        baseUrl: hProv === 'openai-compatible' ? ((raw.helperFrontier as Extract<typeof raw.helperFrontier, {provider:'openai-compatible'}>)?.baseUrl ?? (raw.frontier as Extract<typeof raw.frontier, {provider:'openai-compatible'}>)?.baseUrl) : undefined,
+        thinkingLevel: hThink,
+      },
+    },
+  };
+  // Write back so the old fields are never read again
+  _storage.set(SETTINGS_KEY, migrated).catch(() => undefined);
+  return migrated;
+}
+
 export async function loadSettings(): Promise<Settings> {
   const v = (await _storage.get(SETTINGS_KEY)) as Settings | undefined;
   if (!v) return { ...DEFAULT_SETTINGS };
-  return { ...DEFAULT_SETTINGS, ...v, domainTiers: { ...DEFAULT_SETTINGS.domainTiers, ...(v.domainTiers ?? {}) } };
+  const merged = { ...DEFAULT_SETTINGS, ...v, domainTiers: { ...DEFAULT_SETTINGS.domainTiers, ...(v.domainTiers ?? {}) } };
+  return migrateSettings(merged);
 }
 
 /** Serialized read-modify-write of the settings record. The mutate fn must be pure (it may run

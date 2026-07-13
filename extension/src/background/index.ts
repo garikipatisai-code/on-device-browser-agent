@@ -145,7 +145,7 @@ async function handleQuickChat(goal: string) {
   const ollama = new OllamaClient(settings.ollamaBaseUrl);
   let summary: string;
   try {
-    summary = await quickChatReply(ollama, settings.executorModel, goal);
+    summary = await quickChatReply(ollama, settings.agent?.body.model ?? settings.executorModel ?? 'gemma4:e4b', goal);
   } catch (err) {
     log('quick chat failed, falling back:', (err as Error).message);
     summary = QUICK_CHAT_FALLBACK;
@@ -308,13 +308,14 @@ async function handleStart(
   }
   const models = await ollama.listModels();
   log('installed models =', models);
-  const required = [
-    settings.executorModel,
-    settings.plannerModel,
-    settings.evaluatorModel,
-    settings.compactorModel,
-  ];
-  const missing = required.filter((m) => !models.some((x) => sameModel(x, m)));
+  const agent = settings.agent!;
+  const ollamaModels = [
+    agent.brain.provider === 'ollama' ? agent.brain.model : null,
+    agent.body.provider === 'ollama' ? agent.body.model : null,
+    settings.visionModel,
+  ].filter((m): m is string => !!m);
+  const unique = [...new Set(ollamaModels)];
+  const missing = unique.filter((m) => !models.some((x) => sameModel(x, m)));
   if (missing.length) {
     _starting = false;
     log('missing models =', missing);
@@ -405,13 +406,13 @@ async function handlePreflight() {
     return;
   }
   const models = await ollama.listModels();
-  const required = [
-    settings.executorModel,
-    settings.plannerModel,
-    settings.evaluatorModel,
-    settings.compactorModel,
-  ];
-  const missing = required.filter((m) => !models.some((x) => sameModel(x, m)));
+  const agent = settings.agent!;
+  const ollamaModels = [
+    agent.brain.provider === 'ollama' ? agent.brain.model : null,
+    agent.body.provider === 'ollama' ? agent.body.model : null,
+    settings.visionModel,
+  ].filter((m): m is string => !!m);
+  const missing = [...new Set(ollamaModels)].filter((m) => !models.some((x) => sameModel(x, m)));
   broadcast({
     type: 'preflight',
     ok: missing.length === 0,
@@ -433,7 +434,7 @@ async function handleProfileExtract(resumeText: string) {
     }
     log('extracting profile from résumé text, chars =', resumeText.length);
     const resp = await ollama.chatOnce({
-      model: settings.executorModel,
+      model: settings.agent?.body.model ?? 'gemma4:e4b',
       messages: buildProfileExtractionMessages(resumeText),
       format: 'json',
       thinking: false,

@@ -53,10 +53,9 @@ describe('background run lifecycle — a superseded run cannot tear down its suc
     origFetch = globalThis.fetch;
     // Preflight: ping ok + every required model present, so handleStart reaches the orchestrator.
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     bg.setOrchestratorFactory((opts) => {
@@ -150,10 +149,9 @@ describe('crash-resume: SW restart finds an in-flight task', () => {
     expect((await loadHot())?.phase).toBe('ABORTED');
 
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     const origFetch = globalThis.fetch;
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
@@ -230,10 +228,9 @@ describe('session commands', () => {
     // handleStart's preflight — ping + listModels, both real fetch() calls — succeeds).
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
@@ -267,10 +264,9 @@ describe('session commands', () => {
   it('agent.start auto-creates a session when none is active', async () => {
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
@@ -300,10 +296,9 @@ describe('session commands', () => {
 
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
@@ -331,10 +326,9 @@ describe('session commands', () => {
 
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
@@ -367,10 +361,9 @@ describe('session commands', () => {
 
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
@@ -405,10 +398,9 @@ describe('session commands', () => {
 
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     bg.setOrchestratorFactory((opts) => {
@@ -444,10 +436,9 @@ describe('session commands', () => {
   it('handleStart without autoSession (the agent.askPage call shape) stays sessionless when none is active', async () => {
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
@@ -528,10 +519,9 @@ describe('status broadcasts stay fresh during a run — not just IDLE-at-start, 
   it('a mid-run emitted event also pushes a fresh status broadcast, so the panel can see phase !== IDLE/DONE while a task is actually in flight', async () => {
     const origFetch = globalThis.fetch;
     const models = [
-      DEFAULT_SETTINGS.executorModel,
-      DEFAULT_SETTINGS.plannerModel,
-      DEFAULT_SETTINGS.evaluatorModel,
-      DEFAULT_SETTINGS.compactorModel,
+      DEFAULT_SETTINGS.agent!.brain.model,
+      DEFAULT_SETTINGS.agent!.body.model,
+      DEFAULT_SETTINGS.visionModel,
     ].map((name) => ({ name }));
     globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ models }) }) as Response) as typeof globalThis.fetch;
     let liveOrch: FakeOrch | null = null;
