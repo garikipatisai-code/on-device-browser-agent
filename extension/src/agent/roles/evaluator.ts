@@ -61,7 +61,7 @@ export async function runEvaluator(input: EvaluatorInput): Promise<Verdict> {
     messages,
     format: 'json',
     thinking: true,
-    timeoutMs: input.timeoutMs ?? 120_000,
+    timeoutMs: input.timeoutMs ?? 300_000,
     signal: input.signal,
     numCtx: input.numCtx ?? NUM_CTX,
   });

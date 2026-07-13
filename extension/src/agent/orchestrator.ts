@@ -1059,7 +1059,7 @@ export class Orchestrator {
         ],
         thinking: false,
         numCtx: this.numCtx,
-        timeoutMs: 120_000,
+        timeoutMs: 300_000,
         signal: this.signal,
       });
       const text = (resp.message.content ?? '').trim();

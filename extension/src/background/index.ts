@@ -439,7 +439,7 @@ async function handleProfileExtract(resumeText: string) {
       format: 'json',
       thinking: false,
       numCtx: clampNumCtx(settings.numCtx),
-      timeoutMs: 120_000,
+      timeoutMs: 300_000,
     });
     const profileJson = normalizeExtractedProfile(resp.message.content ?? '');
     if (!profileJson) {

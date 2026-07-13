@@ -121,9 +121,10 @@ export const DEFAULT_SETTINGS: Settings = {
     // gemma4:e2b is intentionally NOT used — it chose the wrong tool ~60% of the
     // time. Larger tags (gemma4:12b/:26b/:31b) add planning depth but are no more
     // reliable for tool-calling and 12b busts the 6s Executor budget.
-    // For a faster body, try gemma4:12b or a frontier model with thinking off.
-    brain: { provider: 'ollama', model: 'gemma4:e4b' },
-    body:  { provider: 'ollama', model: 'gemma4:e4b' },
+    // For planning depth, try gemma4:12b or gemma4:26b. For a faster body, try
+    // gemma4:e4b (proven tool-calling floor) with thinking off.
+    brain: { provider: 'ollama', model: 'gemma4:e4b', thinkingLevel: 'standard' },
+    body:  { provider: 'ollama', model: 'gemma4:e4b', thinkingLevel: 'fast' },
   },
   ollamaBaseUrl: 'http://localhost:11434',
   embeddingModel: 'mxbai-embed-large',

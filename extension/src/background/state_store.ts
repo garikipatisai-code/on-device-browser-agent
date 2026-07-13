@@ -209,12 +209,15 @@ export async function saveActiveSessionId(id: string | null): Promise<void> {
 function migrateSettings(raw: Settings): Settings {
   if (raw.schemaVersion !== undefined && raw.agent) return raw; // already migrated
 
-  const bThink = raw.leadThinking
-    ? (raw.leadThinkingEffort === 'low' ? 'fast' as const : raw.leadThinkingEffort === 'medium' ? 'standard' as const : 'full' as const)
-    : 'off' as const;
-  const hThink = raw.helperThinking
-    ? (raw.helperThinkingEffort === 'low' ? 'fast' as const : raw.helperThinkingEffort === 'medium' ? 'standard' as const : 'full' as const)
-    : 'off' as const;
+  // v0 default was "no override" which meant roles used their own thinking:true.
+  // Map: explicitly off → 'off', explicitly on with effort → mapped level,
+  // not set → 'standard' for brain (planner/evaluator), 'fast' for body (executor/compactor).
+  const bThink = raw.leadThinking === undefined ? 'standard' as const
+    : raw.leadThinking === false ? 'off' as const
+    : (raw.leadThinkingEffort === 'low' ? 'fast' as const : raw.leadThinkingEffort === 'medium' ? 'standard' as const : 'full' as const);
+  const hThink = raw.helperThinking === undefined ? 'fast' as const
+    : raw.helperThinking === false ? 'off' as const
+    : (raw.helperThinkingEffort === 'low' ? 'fast' as const : raw.helperThinkingEffort === 'medium' ? 'standard' as const : 'full' as const);
 
   const bProv = (raw.hybridMode && raw.frontier?.apiKey) ? raw.frontier.provider : 'ollama' as const;
   const hProv = (raw.hybridHelpers && ((raw.helperFrontier?.apiKey) || raw.frontier?.apiKey))
