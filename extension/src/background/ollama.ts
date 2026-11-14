@@ -6,6 +6,7 @@
 // - Pre-flight ping before tasks (fail fast on wrong URL)
 
 import { composeSignal } from './signal';
+import { assertAllowedOllamaBaseUrl } from '../shared/messages';
 
 export interface ToolDef {
   type: 'function';
@@ -37,7 +38,18 @@ export interface ChatOptions {
   toolChoice?: 'auto' | 'none' | 'required';
   thinking?: boolean;
   thinkingEffort?: 'low' | 'medium' | 'high';
-  format?: 'json'; // never pass a schema object — see blueprint §03
+  /**
+   * Response-format constraint for the local provider.
+   *  - 'json'                  → loose "must be valid JSON" mode (the long-standing default path).
+   *  - Record<string, unknown> → structured outputs: a JSON Schema enforced by grammar-constrained
+   *                              decoding in llama.cpp. OPT-IN ONLY (Settings.structuredToolCalls):
+   *                              the default paths never send a schema object, keeping request
+   *                              bodies byte-identical to the historical behavior. Known caveat:
+   *                              combining a schema with native `tools` can shift a model from
+   *                              tool_calls to content-JSON output — the executor's pickToolCall
+   *                              already parses both shapes, so this is safe-by-fallback.
+   */
+  format?: 'json' | Record<string, unknown>;
   temperature?: number;
   topP?: number;
   topK?: number;
@@ -68,9 +80,12 @@ export interface EmbedOptions {
 }
 
 export class OllamaClient {
-  constructor(public baseUrl: string = 'http://localhost:11434') {}
+  constructor(public baseUrl: string = 'http://localhost:11434') {
+    assertAllowedOllamaBaseUrl(baseUrl);
+  }
 
   setBaseUrl(url: string) {
+    assertAllowedOllamaBaseUrl(url);
     this.baseUrl = url.replace(/\/$/, '');
   }
 
@@ -192,12 +207,21 @@ export class OllamaClient {
       model: opts.model,
       messages: opts.messages,
       stream,
-      keep_alive: opts.keepAlive ?? '10m',
+      keep_alive: opts.keepAlive ?? process.env.OLLAMA_KEEP_ALIVE ?? '10m',
       options: {
         temperature: opts.temperature ?? 1.0,
         top_p: opts.topP ?? 0.95,
         top_k: opts.topK ?? 64,
-        ...(opts.numCtx ? { num_ctx: opts.numCtx } : {}),
+        ...(opts.numCtx
+          ? {
+              num_ctx: (() => {
+                const env = process.env.OLLAMA_CONTEXT_LENGTH;
+                if (env == null) return opts.numCtx;
+                const len = Number(env);
+                return Number.isFinite(len) ? Math.min(opts.numCtx, len) : opts.numCtx;
+              })(),
+            }
+          : {}),
         cache_prompt: opts.cachePrompt !== false,
       },
     };
@@ -205,6 +229,7 @@ export class OllamaClient {
     if (opts.toolChoice) body.tool_choice = opts.toolChoice;
     if (opts.thinking !== undefined) body.think = opts.thinking;
     if (opts.format === 'json') body.format = 'json'; // string mode only
+    else if (opts.format && typeof opts.format === 'object') body.format = opts.format; // opt-in schema mode
     return body;
   }
 

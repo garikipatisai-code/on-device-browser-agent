@@ -100,12 +100,13 @@ export function redactEvent<T>(ev: T): T {
 }
 
 /**
- * Recursively redacts both object KEYS and string leaf VALUES, with no depth cap: its two call
+ * Recursively redacts both object KEYS and string leaf VALUES, depth-capped at 16: its two call
  * sites (a tool's addFinding data, the flat 3-field grounded-fact ledger record) only ever carry
- * shallow, non-adversarial data in practice, so an unbounded walk poses no realistic stack risk.
+ * shallow, non-adversarial data in practice, so a bounded walk poses no realistic stack risk.
+ * See redactAny() — the cap guards against deep nesting, not cycles.
  */
 export function redactDeep<T>(v: T): T {
-  return redactAny(v, { keys: true }) as T;
+  return redactAny(v, { keys: true, maxDepth: 16 }) as T;
 }
 
 export function luhnValid(num: string): boolean {

@@ -27,7 +27,7 @@ import { addGroundedFact, renderFacts, type Fact } from './facts';
 import { runHeadChef } from './framework/head_chef';
 import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
 import { runHelper, runHelperCompaction } from './framework/helper';
-import { localProvider, resolveProvider, type ModelProvider } from './framework/provider';
+import { resolveProvider, type ModelProvider } from './framework/provider';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
 import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
 import {
@@ -99,8 +99,12 @@ export class Orchestrator {
   private breaker: BreakerState = newBreakerState();
   private recentActions: Array<{ tool: string; args: unknown; ok: boolean; content: string; ts: number }> = [];
   private taskId = ulid();
-  private numCtx = NUM_CTX;
-  private caps = capsFor(NUM_CTX);
+  // Per-role windows: brain 32K (quality) vs body 16K (speed). Initialized in
+  // start() from agent.brain/body.numCtx (fallback: legacy settings.numCtx).
+  private brainNumCtx = NUM_CTX;
+  private bodyNumCtx = NUM_CTX;
+  private brainCaps = capsFor(NUM_CTX);
+  private bodyCaps = capsFor(NUM_CTX);
   // Full content of the most recent page read (aria.extract / vision.read / search).
   // Re-injected into every executor turn so synthesis/report steps can see the data.
   private lastRead: { tool: string; url?: string; content: string } | null = null;
@@ -145,6 +149,11 @@ export class Orchestrator {
   private observeGateStep: string | null = null;
   // Workflow memory: a proven recipe matched to the goal, injected into the planner.
   private matchedWorkflow: Workflow | null = null;
+  // Evaluator-driven backtracking: distinct prior page states (url-differentiated), newest
+  // last, capped. On a FAIL that would burn a full replan, the most recent DISTINCT earlier
+  // page can be restored so the executor retries from a known-good position instead.
+  private pageHistory: Array<{ tool: string; url?: string; content: string }> = [];
+  private backtracksUsed = 0;
   // The tool sequence executed this run — generalized into a recipe on success (Phase 2).
   private trace: Array<{ tool: string; args: Record<string, unknown> }> = [];
   // Distinct page URLs read this run — surfaced as citations on the finish.
@@ -188,6 +197,8 @@ export class Orchestrator {
     this.breaker = newBreakerState();
     this.recentActions = [];
     this.lastRead = null;
+    this.pageHistory = [];
+    this.backtracksUsed = 0;
     this.observedText = '';
     this.verifyAttempts = 0;
     this.turns = 0;
@@ -206,8 +217,11 @@ export class Orchestrator {
     this.workspaceCache = [];
     try { await chrome.storage.local.remove('agent.workspace'); } catch { /* non-critical */ }
     this.taskId = ulid();
-    this.numCtx = clampNumCtx(this.opts.settings.numCtx);
-    this.caps = capsFor(this.numCtx);
+    const agentCfg = this.opts.settings.agent;
+    this.brainNumCtx = clampNumCtx(agentCfg?.brain.numCtx ?? this.opts.settings.numCtx);
+    this.bodyNumCtx = clampNumCtx(agentCfg?.body.numCtx ?? this.opts.settings.numCtx);
+    this.brainCaps = capsFor(this.brainNumCtx);
+    this.bodyCaps = capsFor(this.bodyNumCtx);
     this.sessionId = sessionId ?? null;
     if (this.sessionId) {
       const carried = await loadSessionContext(this.sessionId);
@@ -303,7 +317,7 @@ export class Orchestrator {
         const sp = await getScratchpad(this.taskId);
         await setScratchpad(
           this.taskId,
-          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Do NOT open new tabs or re-read pages — all data is already in your workspace/observations. Call finish again with only values that appear exactly in the workspace, or mark them unavailable.`.slice(-this.caps.scratch),
+          `${sp}\n[VERIFICATION] Your finish was rejected: ${v.reason}. Do NOT open new tabs or re-read pages — all data is already in your workspace/observations. Call finish again with only values that appear exactly in the workspace, or mark them unavailable.`.slice(-this.bodyCaps.scratch),
         );
         continue;
       }
@@ -320,7 +334,7 @@ export class Orchestrator {
             const sp = await getScratchpad(this.taskId);
             await setScratchpad(
               this.taskId,
-              `${sp}\n[VERIFICATION] Your answer was rejected: ${v.reason}. Use values already in your observations — do NOT open new tabs or re-extract pages you have already seen.`.slice(-this.caps.scratch),
+              `${sp}\n[VERIFICATION] Your answer was rejected: ${v.reason}. Use values already in your observations — do NOT open new tabs or re-extract pages you have already seen.`.slice(-this.bodyCaps.scratch),
             );
             continue;
           }
@@ -394,6 +408,10 @@ export class Orchestrator {
           return this.finalizeFinish(hot, ev.finishVerdict, ev.finishSummary);
         }
         if (ev.verdict === 'FAIL' && ev.shouldReplan) {
+          // Backtrack first: retrying from a remembered earlier page is cheaper than a replan
+          // and often enough (wrong product page → go back to the results list). Falls through
+          // to the replan path when there's no usable history or the backtrack budget is spent.
+          if (this.tryBacktrack()) continue;
           if (hot.replanCount >= (this.opts.maxReplans ?? 3) - 1) {
             return this.giveUp(hot, `Evaluator requested replan but max replans reached.`);
           }
@@ -434,7 +452,7 @@ export class Orchestrator {
         recipeStepCount: this.matchedWorkflow?.steps.length,
         recipeRetryUsed: hot.recipeRetryUsed,
         signal: this.signal,
-        numCtx: this.numCtx,
+        numCtx: this.brainNumCtx,
       }),
     );
     if (out.promptEvalCount && out.evalCount) {
@@ -472,7 +490,7 @@ export class Orchestrator {
         recipeStepCount: this.matchedWorkflow?.steps.length,
         recipeRetryUsed: hot.recipeRetryUsed,
         signal: this.signal,
-        numCtx: this.numCtx,
+        numCtx: this.brainNumCtx,
       }),
     );
     hot = await this.applyPlan(hot, out.plan);
@@ -496,7 +514,7 @@ export class Orchestrator {
 
     let scratch = await getScratchpad(this.taskId);
     let ctx = this.commonCtx(hot, scratch);
-    const budgetCheck = checkBudget('executor', JSON.stringify(ctx), this.est, this.numCtx);
+    const budgetCheck = checkBudget('executor', JSON.stringify(ctx), this.est, this.bodyNumCtx);
     if (budgetCheck.shouldCompact && scratch.length > 1_000) {
       const compacted = await this.compact(hot, scratch);
       scratch = compacted.summary;
@@ -524,7 +542,8 @@ export class Orchestrator {
         toolCtx,
         toolFilter,
         signal: this.signal,
-        numCtx: this.numCtx,
+        numCtx: this.bodyNumCtx,
+        structured: !!this.opts.settings.structuredToolCalls,
       }),
     );
 
@@ -565,7 +584,7 @@ export class Orchestrator {
       hot,
       settings: this.opts.settings,
       ollama: this.opts.ollama,
-      numCtx: this.numCtx,
+      numCtx: this.bodyNumCtx,
       emit: this.emit.bind(this),
       addFinding: async (kind, data, sid) => {
         await addFinding({
@@ -617,7 +636,7 @@ export class Orchestrator {
       return;
     }
     let obsUrl = obs.data && typeof obs.data.url === 'string' ? (obs.data.url as string) : this.lastRead?.url;
-    this.lastRead = { tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, this.caps.page) };
+    this.setLastRead({ tool: 'aria.extract', url: obsUrl, content: obs.content.slice(0, this.bodyCaps.page) });
     this.lastObserveTool = 'aria.extract'; // nudge: act on the fresh page, don't re-extract
     this.recordObserved(obs.content, obsUrl);
     // Auto-save workspace entry — the model sees these in context without remembering to call workspace.add
@@ -651,7 +670,7 @@ export class Orchestrator {
         block = detectAntiBotBlock(polled.content);
       }
       obsUrl = resolved.data && typeof resolved.data.url === 'string' ? (resolved.data.url as string) : obsUrl;
-      this.lastRead = { tool: 'aria.extract', url: obsUrl, content: resolved.content.slice(0, this.caps.page) };
+      this.setLastRead({ tool: 'aria.extract', url: obsUrl, content: resolved.content.slice(0, this.bodyCaps.page) });
       this.recordObserved(resolved.content, obsUrl);
       await this.autoSaveWorkspace(resolved.content, obsUrl).catch(() => undefined);
       this.emit({ kind: 'antibot.resolved', ts: Date.now() });
@@ -674,7 +693,7 @@ export class Orchestrator {
     const after = await this.opts.registry.dispatch('aria.extract', { tabId: navTabId }, toolCtx).catch(() => null);
     if (after && after.ok && after.content) {
       const afterUrl = after.data && typeof after.data.url === 'string' ? (after.data.url as string) : obsUrl;
-      this.lastRead = { tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, this.caps.page) };
+      this.setLastRead({ tool: 'aria.extract', url: afterUrl, content: after.content.slice(0, this.bodyCaps.page) });
       this.recordObserved(after.content, afterUrl);
       await this.autoSaveWorkspace(after.content, afterUrl).catch(() => undefined);
     }
@@ -711,7 +730,7 @@ export class Orchestrator {
     if (READING_TOOLS.has(out.tool) && out.result.ok && (out.result.content?.length ?? 0) > 0) {
       const data = out.result.data;
       const url = data && typeof data.url === 'string' ? data.url : undefined;
-      this.lastRead = { tool: out.tool, url, content: (out.result.content ?? '').slice(0, this.caps.page) };
+      this.setLastRead({ tool: out.tool, url, content: (out.result.content ?? '').slice(0, this.bodyCaps.page) });
       this.recordObserved(out.result.content ?? '', url);
     }
 
@@ -720,11 +739,43 @@ export class Orchestrator {
     const turnNote = redact(
       `[${new Date().toISOString()}] ${out.tool}(${JSON.stringify(out.args).slice(0, 200)}) -> ${(out.result.content ?? '').slice(0, 800)}`,
     );
-    await setScratchpad(this.taskId, `${scratch}\n${turnNote}`.slice(-this.caps.scratch));
+    await setScratchpad(this.taskId, `${scratch}\n${turnNote}`.slice(-this.bodyCaps.scratch));
 
     this.recentActions.push({ tool: out.tool, args: out.args, ok: out.result.ok, content: out.result.content ?? '', ts: Date.now() });
     if (this.recentActions.length > 5) this.recentActions.shift();
     this.trace.push({ tool: out.tool, args: out.args });
+  }
+
+  /** Centralized lastRead setter — records the outgoing distinct page state into pageHistory
+   *  (url-differentiated) so backtracking has known-good positions to restore. */
+  private setLastRead(read: { tool: string; url?: string; content: string }): void {
+    if (this.lastRead && read.url && this.lastRead.url && this.lastRead.url !== read.url) {
+      this.pageHistory.push(this.lastRead);
+      if (this.pageHistory.length > 3) this.pageHistory.shift();
+    }
+    this.lastRead = read;
+  }
+
+  /** Evaluator-driven backtracking (width-2 retry): when the evaluator FAILs a step and asks
+   *  for a replan, first try resuming from the most recent DISTINCT earlier page with a
+   *  corrective steer note — a cheap second attempt from a known-good position before spending
+   *  a planner call and one of maxReplans. Returns true when a backtrack was applied. */
+  private tryBacktrack(): boolean {
+    if (!this.pageHistory.length || this.backtracksUsed >= 2) return false;
+    let idx = this.pageHistory.length - 1;
+    while (idx >= 0 && this.pageHistory[idx].url && this.pageHistory[idx].url === this.lastRead?.url) idx--;
+    if (idx < 0) return false; // every remembered page is where we already are
+    const restored = this.pageHistory.splice(idx, 1)[0];
+    this.setLastRead(restored);
+    this.backtracksUsed += 1;
+    this.markDirty('backtrack');
+    this.observeGateStep = null; // fresh observe budget on the restored page
+    this.lastObserveTool = null;
+    this.log('info', `backtrack: restored an earlier page${restored.url ? ` (${restored.url})` : ''} — retrying the step from there instead of replanning`);
+    this.steer(
+      `Backtrack: you are back on an earlier page${restored.url ? ` (${restored.url})` : ''}. The current approach FAILED — try a DIFFERENT link, tab, or method from here.`,
+    );
+    return true;
   }
 
   private async evaluate(hot: AgentStateHot, stepId: string, lastResult: string) {
@@ -744,7 +795,7 @@ export class Orchestrator {
         lastExecutorResult: lastResult,
         step,
         signal: this.signal,
-        numCtx: this.numCtx,
+        numCtx: this.brainNumCtx,
       }),
     );
     this.emit({ kind: 'evaluator.verdict', ts: Date.now(), verdict: ev.verdict, reason: ev.reason });
@@ -780,7 +831,7 @@ export class Orchestrator {
         scratchpad: scratch,
         model: agent.body.model,
         signal: this.signal,
-        numCtx: this.numCtx,
+        numCtx: this.bodyNumCtx,
       }),
     );
     this.emit({ kind: 'compaction', ts: Date.now(), before: out.charsBefore, after: out.charsAfter });
@@ -791,7 +842,7 @@ export class Orchestrator {
   private recordObserved(content: string, url?: string): void {
     if (url && /^https?:\/\//i.test(url)) this.sourceUrls.add(url);
     if (!content) return;
-    this.observedText = `${this.observedText}\n${content}`.slice(-this.caps.observed);
+    this.observedText = `${this.observedText}\n${content}`.slice(-this.brainCaps.observed);
   }
 
   /** Apply a pre-built plan without calling the planner LLM (fast path). */
@@ -1054,11 +1105,11 @@ export class Orchestrator {
           },
           {
             role: 'user',
-            content: `GOAL: ${hot.goal}\n\nGATHERED NOTES (the pages you read this task):\n${corpus.slice(-this.caps.salvage)}\n\nAnswer the GOAL now from these notes.`,
+            content: `GOAL: ${hot.goal}\n\nGATHERED NOTES (the pages you read this task):\n${corpus.slice(-this.bodyCaps.salvage)}\n\nAnswer the GOAL now from these notes.`,
           },
         ],
         thinking: false,
-        numCtx: this.numCtx,
+        numCtx: this.bodyNumCtx,
         timeoutMs: 300_000,
         signal: this.signal,
       });

@@ -130,7 +130,11 @@ export function SettingsPanel({
   };
 
   const roleCard = (seat: 'brain' | 'body', title: string, emoji: string, roles: string, presets: Preset[]) => {
-    const g = local.agent?.[seat] ?? { provider: 'ollama' as Provider, model: 'gemma4:e4b' };
+    const fallback: RoleGroupConfig =
+      seat === 'brain'
+        ? { provider: 'ollama' as Provider, model: 'gemma4:e4b-it-q4_K_M', thinkingLevel: 'standard', numCtx: 32_768 }
+        : { provider: 'ollama' as Provider, model: 'gemma4:e2b-it-q4_K_M', thinkingLevel: 'off', numCtx: 16_384 };
+    const g = local.agent?.[seat] ?? fallback;
     const isCloud = g.provider !== 'ollama';
     return (
       <div className="card setting-group" style={{ flex: 1, minWidth: 260 }}>
@@ -157,7 +161,7 @@ export function SettingsPanel({
         <div className="field">
           <label className="field-label" htmlFor={`${seat}-model`}>Model {g.provider === 'ollama' ? modelChip(g.model) : null}</label>
           <input id={`${seat}-model`} list="installed-models"
-            placeholder={g.provider === 'ollama' ? 'gemma4:e4b' : g.provider === 'anthropic' ? 'claude-opus-4-8' : 'gpt-5.1'}
+            placeholder={g.provider === 'ollama' ? (seat === 'brain' ? 'gemma4:e4b-it-q4_K_M' : 'gemma4:e2b-it-q4_K_M') : g.provider === 'anthropic' ? 'claude-opus-4-8' : 'gpt-5.1'}
             value={g.model}
             onChange={(e) => patchRole(seat, { model: e.target.value })} />
         </div>
@@ -201,12 +205,35 @@ export function SettingsPanel({
             {g.provider === 'ollama' ? 'Local models ignore this — it only applies to cloud providers.' : 'Controls reasoning depth for this role.'}
           </div>
         </div>
+        {/* Per-role context window */}
+        <div className="field">
+          <label className="field-label" htmlFor={`${seat}-num-ctx`}>Context window (num_ctx)</label>
+          <input
+            id={`${seat}-num-ctx`}
+            type="number"
+            value={g.numCtx ?? (seat === 'brain' ? 32_768 : 16_384)}
+            min={MIN_NUM_CTX}
+            max={MAX_NUM_CTX}
+            step={8192}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              patchRole(seat, { numCtx: Number.isFinite(n) ? n : undefined });
+            }}
+            onBlur={() => patchRole(seat, { numCtx: clampNumCtx(g.numCtx) })}
+          />
+          <div className="field-hint">
+            {seat === 'brain' ? 'Brain 32K default (quality).' : 'Body 16K default (speed + VRAM).'} Overrides the legacy fallback below when set.
+          </div>
+        </div>
       </div>
     );
   };
 
   function DEFAULT_ROLE_GROUP(): { brain: RoleGroupConfig; body: RoleGroupConfig } {
-    return { brain: { provider: 'ollama', model: 'gemma4:e4b' }, body: { provider: 'ollama', model: 'gemma4:e4b' } };
+    return {
+      brain: { provider: 'ollama', model: 'gemma4:e4b-it-q4_K_M', thinkingLevel: 'standard', numCtx: 32_768 },
+      body: { provider: 'ollama', model: 'gemma4:e2b-it-q4_K_M', thinkingLevel: 'off', numCtx: 16_384 },
+    };
   }
 
   return (
@@ -280,7 +307,9 @@ export function SettingsPanel({
             onBlur={() => update('numCtx', clampNumCtx(local.numCtx))}
           />
           <div className="field-hint">
-            Larger = better long-task memory but more VRAM. On a 16 GB box, raise in steps (32768 → 65536 → 131072)
+            Legacy fallback, used only when a per-role window above is unset. Overridden by the
+            Brain/Body windows when set. Larger = better long-task memory but more VRAM. On a
+            16 GB box, raise in steps (32768 → 65536 → 131072)
             and check <code>ollama ps</code> shows the model at ~100% GPU with no CPU spill after each change. If a
             task fails to start or slows sharply, lower it back.
           </div>

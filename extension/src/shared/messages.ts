@@ -40,18 +40,21 @@ export type Provider = 'ollama' | 'anthropic' | 'openai-compatible';
 
 /** Normalized thinking budget — maps to provider-native params at call time.
  *  'off' = no extended thinking; 'fast'/'standard'/'full' map to budget_tokens
- *  (Anthropic) or reasoning_effort (OpenAI). Local Ollama ignores this field. */
+ *  (Anthropic), reasoning_effort (OpenAI), or think (local Ollama). */
 export type ThinkingLevel = 'off' | 'fast' | 'standard' | 'full';
 
 /** Self-contained config for one role group. Brain (planner+evaluator) and
  *  Body (executor+compactor) each get their own. Provider 'ollama' uses the
- *  local Ollama server; frontier providers use the API key + optional base URL. */
+ *  local Ollama server; frontier providers use the API key + optional base URL.
+ *  numCtx is per-role: brain 32K (quality), body 16K (speed). Falls back to
+ *  Settings.numCtx (legacy single window) when undefined. */
 export interface RoleGroupConfig {
   provider: Provider;
   model: string;
   apiKey?: string;
   baseUrl?: string;
   thinkingLevel?: ThinkingLevel;
+  numCtx?: number;
 }
 
 /** Brain/Body model assignment. Replaces the 14 scattered model/frontier/
@@ -92,8 +95,19 @@ export interface Settings {
   /** Durable, user-edited standing guidance injected into every run (planner/executor/evaluator),
    *  e.g. "use city-proper population figures" or "prefer official sources". */
   preferences?: string;
-  /** Ollama context window; default 32768, raise only after verifying VRAM with `ollama ps`. */
+  /** Legacy single Ollama context window; per-role agent.brain/body.numCtx take
+   *  precedence when set. Kept as fallback for pre-split installs. Default 32768,
+   *  raise only after verifying VRAM with `ollama ps`. */
   numCtx?: number;
+  /** Opt-in: constrain executor tool-call responses with Ollama structured outputs
+   *  (JSON-Schema grammar decoding on the local provider). Off by default — request bodies
+   *  stay byte-identical unless enabled. Only affects the local Ollama path; frontier
+   *  providers ignore it (they have their own native tool-calling formats). */
+  structuredToolCalls?: boolean;
+  /** Opt-in: constrict the agent for constrained hardware (small context window, low RAM/VRAM,
+   *  one slow local model). Off by default — every downstream constriction is a no-op passthrough
+   *  when false, so behavior is byte-identical to the baseline unless explicitly enabled. */
+  limitedResources?: boolean;
   // ---- v0 frontier/thinking fields (kept for migration) ----
   /** @deprecated Use agent.brain.provider instead. */
   hybridMode?: boolean;
@@ -116,31 +130,67 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   schemaVersion: 1,
   agent: {
-    // gemma4:e4b is the floor for this app: measured 100% first-try valid+correct
-    // tool_calls at p90 2.1s on M5-class hardware (scripts/measure_toolcalls.mjs).
-    // gemma4:e2b is intentionally NOT used — it chose the wrong tool ~60% of the
-    // time. Larger tags (gemma4:12b/:26b/:31b) add planning depth but are no more
-    // reliable for tool-calling and 12b busts the 6s Executor budget.
-    // For planning depth, try gemma4:12b or gemma4:26b. For a faster body, try
-    // gemma4:e4b (proven tool-calling floor) with thinking off.
-    brain: { provider: 'ollama', model: 'gemma4:e4b', thinkingLevel: 'standard' },
-    body:  { provider: 'ollama', model: 'gemma4:e4b', thinkingLevel: 'fast' },
+    // PC hybrid brain/body split: brain gemma4:e4b for quality, body gemma4:e2b for speed.
+    // Per-role windows: brain 32K (quality), body 16K (speed + VRAM). Speed comes from
+    // smaller weights (e2b 4.6GB vs e4b 6.6GB) AND the smaller body window.
+    brain: { provider: 'ollama', model: 'gemma4:e4b-it-q4_K_M', thinkingLevel: 'standard', numCtx: 32_768 },
+    body:  { provider: 'ollama', model: 'gemma4:e2b-it-q4_K_M', thinkingLevel: 'off', numCtx: 16_384 },
   },
   ollamaBaseUrl: 'http://localhost:11434',
   embeddingModel: 'mxbai-embed-large',
   // Multimodal model for vision.read (screenshot → text). Must support images.
-  visionModel: 'gemma4:e4b',
+  visionModel: 'gemma4:e4b-it-q4_K_M',
   domainTiers: {},
   bypassDomainTiers: false,
   profileJson: '',
   preferences: '',
+  // Legacy single-window fallback (budget.ts DEFAULT_NUM_CTX). Per-role
+  // agent.brain/body.numCtx take precedence; the orchestrator clamps each.
+  // Raise only after verifying VRAM with `ollama ps`.
   numCtx: 32_768,
+  structuredToolCalls: false,
+  limitedResources: false,
 };
 
-/** Treat a bare model name as equal to its `:latest` tag (Ollama's default). */
+/** Treat a bare model name as equal to its `:latest` tag (Ollama's default).
+ *  Also equates quantization-suffixed variants of the same size
+ *  (gemma4:e4b == gemma4:e4b-it-q4_K_M == gemma4:e4b-it-q8_0) so stale
+ *  bare-tag fallbacks still match the installed q4 pull. Size stays distinct:
+ *  e4b variants never equal e2b variants (different weights). */
 export function sameModel(a: string, b: string): boolean {
-  const norm = (s: string) => (s.includes(':') ? s : `${s}:latest`);
+  const norm = (s: string) => {
+    const withTag = s.includes(':') ? s : `${s}:latest`;
+    const [name, tag = ''] = withTag.split(':');
+    // Strip the quant/IT suffix: e4b-it-q4_K_M → e4b, e2b-it-q4_K_M → e2b.
+    // A bare size tag (e4b) already equals the stripped form.
+    const base = tag.split('-')[0];
+    return `${name}:${base}`;
+  };
   return norm(a) === norm(b);
+}
+
+/** Settings-ingest guard for the Ollama base URL.
+ *  Allowlist: http/https on loopback only (localhost or 127.0.0.1).
+ *  Rejects userinfo, private/RFC1918/link-local addresses, and any
+ *  non-loopback host — SSRF against the local machine is the key risk,
+ *  so this fails closed at settings-ingest time and again in setBaseUrl.
+ */
+export function assertAllowedOllamaBaseUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid Ollama base URL: ${url}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Ollama base URL must use http or https: ${url}`);
+  }
+  if (parsed.username !== '') {
+    throw new Error(`Ollama base URL must not contain userinfo: ${url}`);
+  }
+  if (parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
+    throw new Error(`Ollama base URL must point at loopback (localhost/127.0.0.1): ${url}`);
+  }
 }
 
 // ---- timeline events shown to the user ----

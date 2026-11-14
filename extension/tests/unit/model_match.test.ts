@@ -29,7 +29,10 @@ describe('DEFAULT_SETTINGS', () => {
     expect(DEFAULT_SETTINGS.visionModel).toBeTruthy();
     expect(DEFAULT_SETTINGS.embeddingModel).toBeTruthy();
   });
-  it('brain and body default to the same model', () => {
-    expect(sameModel(DEFAULT_SETTINGS.agent?.brain.model ?? '', DEFAULT_SETTINGS.agent?.body.model ?? '')).toBe(true);
+  it('brain/body default to hybrid split (e4b brain, e2b body)', () => {
+    // Hybrid by design: sameModel strips quant but not model size, so e4b vs e2b is false.
+    expect(DEFAULT_SETTINGS.agent?.brain.model).toBe('gemma4:e4b-it-q4_K_M');
+    expect(DEFAULT_SETTINGS.agent?.body.model).toBe('gemma4:e2b-it-q4_K_M');
+    expect(sameModel(DEFAULT_SETTINGS.agent?.brain.model ?? '', DEFAULT_SETTINGS.agent?.body.model ?? '')).toBe(false);
   });
 });

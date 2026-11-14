@@ -25,13 +25,20 @@ export function clampNumCtx(n: number | undefined): number {
 // Kept differentiated (Planner needs the most). Budgets scale with the window so a
 // bigger num_ctx coherently widens the curated state (a big window holding RELEVANT
 // state beats a big window of raw dump — lost-in-the-middle).
-export function budgetsFor(numCtx: number): Record<Role, number> {
+export function budgetsFor(numCtx: number, limitedResources = false): Record<Role, number> {
   const scale = numCtx / DEFAULT_NUM_CTX;
+  const planner = Math.round(30_000 * scale);
+  const executor = Math.round(26_000 * scale);
+  const evaluator = Math.round(28_000 * scale);
+  const compactor = Math.round(26_000 * scale);
+  // Off path is byte-identical to the baseline — no cap applied.
+  if (!limitedResources) return { planner, executor, evaluator, compactor };
+  // On: hard 4K cap on every role budget.
   return {
-    planner: Math.round(30_000 * scale),
-    executor: Math.round(26_000 * scale),
-    evaluator: Math.round(28_000 * scale),
-    compactor: Math.round(26_000 * scale),
+    planner: Math.min(planner, 4_096),
+    executor: Math.min(executor, 4_096),
+    evaluator: Math.min(evaluator, 4_096),
+    compactor: Math.min(compactor, 4_096),
   };
 }
 
@@ -39,13 +46,23 @@ export function budgetsFor(numCtx: number): Record<Role, number> {
  *  the PER-READ page cap stays FIXED — the ARIA tool caps extraction at this size, and a 4B reads a
  *  single page more accurately in a focused chunk than a sprawling one (lost-in-the-middle). A bigger
  *  window's value for long multi-step tasks is remembering MORE across turns, not larger single reads. */
-export function capsFor(numCtx: number): { page: number; scratch: number; observed: number; salvage: number } {
+export function capsFor(
+  numCtx: number,
+  limitedResources = false,
+): { page: number; scratch: number; observed: number; salvage: number } {
   const scale = numCtx / DEFAULT_NUM_CTX;
+  const page = 12_000;
+  const scratch = Math.round(12_000 * scale);
+  const observed = Math.round(60_000 * scale);
+  const salvage = Math.round(24_000 * scale);
+  // Off path is byte-identical to the baseline — page stays fixed, cross-turn caps scale.
+  if (!limitedResources) return { page, scratch, observed, salvage };
+  // On: page fixed by design; cross-turn caps hard-limited to 4K chars.
   return {
-    page: 12_000,
-    scratch: Math.round(12_000 * scale),
-    observed: Math.round(60_000 * scale),
-    salvage: Math.round(24_000 * scale),
+    page,
+    scratch: Math.min(scratch, 4_096),
+    observed: Math.min(observed, 4_096),
+    salvage: Math.min(salvage, 4_096),
   };
 }
 
@@ -63,9 +80,10 @@ export function checkBudget(
   prompt: string,
   est: TokenRatioEstimator,
   numCtx: number = DEFAULT_NUM_CTX,
+  limitedResources = false,
 ): BudgetCheck {
   const tokens = est.approxTokens(prompt);
-  const budget = budgetsFor(numCtx)[role];
+  const budget = budgetsFor(numCtx, limitedResources)[role];
   return {
     tokens,
     budget,

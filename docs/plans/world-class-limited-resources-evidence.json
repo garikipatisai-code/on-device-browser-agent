@@ -1,0 +1,57 @@
+{
+  "plan": "docs/plans/world-class-limited-resources.md",
+  "plan_sha256": "7fdd2fd553577e79c162acb7ed3239a22bfb107de488eaba1ec294c4a61ce0a1",
+  "tasks": [
+    {
+      "task": "T1",
+      "verify": "vitest tests/unit/limited_resources.test.ts (Task 1 gate: DEFAULT_SETTINGS.limitedResources === false; Partial<Settings> missing key merges to baseline) + npm run typecheck",
+      "exit": 0,
+      "at": "2026-11-13T21:59:14Z"
+    },
+    {
+      "task": "T2",
+      "verify": "vitest tests/unit/limited_resources.test.ts (Task 2 budgets: off executor 26000 byte-identical; on every role ≤4096; page cap fixed 12000) + npm run typecheck",
+      "exit": 0,
+      "at": "2026-11-13T21:59:14Z"
+    },
+    {
+      "task": "T3",
+      "verify": "vitest tests/unit/limited_resources.test.ts (Task 3 Ollama chat body: temperature 1.0 default; no format/KV unless set; keep_alive 10m default / env honored; num_ctx ceiling) + npm run typecheck",
+      "exit": 0,
+      "at": "2026-11-13T21:59:14Z"
+    },
+    {
+      "task": "T4",
+      "verify": "vitest tests/unit/limited_resources.test.ts (Task 4 domain tiers: 12-case matrix assertAccessPolicy === assertCanAct; blocklist wins before bypass; click-only needs explicit opt-in) + npm run typecheck",
+      "exit": 0,
+      "at": "2026-11-13T21:59:14Z"
+    },
+    {
+      "task": "T5",
+      "verify": "vitest tests/unit/limited_resources.test.ts (Task 5 redaction: redactDeep maxDepth 16 cap, no throw on 25-deep; redactEvent stays depth 8) + npm run typecheck",
+      "exit": 0,
+      "at": "2026-11-13T21:59:14Z"
+    },
+    {
+      "task": "T6",
+      "verify": "vitest tests/unit/limited_resources.test.ts (Task 6 page.fetch SSRF: private URL blocked before fetch; redirect target response.url re-checked; public→private redirect blocked before body read; public→public follows hops) + npm run typecheck",
+      "exit": 0,
+      "at": "2026-11-13T21:59:14Z"
+    }
+  ],
+  "bench": {
+    "completed": 67,
+    "correct": 56,
+    "grounded": 67
+  },
+  "live": {
+    "build": 0,
+    "wikiRefs": 134327
+  },
+  "debts": [
+    "package.json pre-existing",
+    "DNS-rebind F1",
+    "dead guard",
+    "throw-vs-graceful"
+  ]
+}

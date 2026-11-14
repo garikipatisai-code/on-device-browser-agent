@@ -230,17 +230,19 @@ function migrateSettings(raw: Settings): Settings {
     agent: {
       brain: {
         provider: bProv,
-        model: bProv === 'ollama' ? (raw.plannerModel ?? 'gemma4:e4b') : raw.frontier!.model,
+        model: bProv === 'ollama' ? (raw.plannerModel ?? 'gemma4:e4b-it-q4_K_M') : raw.frontier!.model,
         apiKey: bProv !== 'ollama' ? raw.frontier?.apiKey : undefined,
         baseUrl: bProv === 'openai-compatible' ? (raw.frontier as Extract<typeof raw.frontier, {provider:'openai-compatible'}>)?.baseUrl : undefined,
         thinkingLevel: bThink,
+        numCtx: raw.numCtx ?? 32_768,
       },
       body: {
         provider: hProv,
-        model: hProv === 'ollama' ? (raw.executorModel ?? 'gemma4:e4b') : ((raw.helperFrontier as FrontierConfig)?.model ?? raw.frontier!.model),
+        model: hProv === 'ollama' ? (raw.executorModel ?? 'gemma4:e2b-it-q4_K_M') : ((raw.helperFrontier as FrontierConfig)?.model ?? raw.frontier!.model),
         apiKey: hProv !== 'ollama' ? ((raw.helperFrontier as FrontierConfig)?.apiKey ?? raw.frontier?.apiKey) : undefined,
         baseUrl: hProv === 'openai-compatible' ? ((raw.helperFrontier as Extract<typeof raw.helperFrontier, {provider:'openai-compatible'}>)?.baseUrl ?? (raw.frontier as Extract<typeof raw.frontier, {provider:'openai-compatible'}>)?.baseUrl) : undefined,
         thinkingLevel: hThink,
+        numCtx: raw.numCtx ?? 16_384,
       },
     },
   };

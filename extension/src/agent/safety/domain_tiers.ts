@@ -66,14 +66,34 @@ export function migrateLegacyTier(tier: DomainTier): DomainTier {
   return tier;
 }
 
-export function assertCanAct(
+/**
+ * Canonical access policy, written once and composed by every call site.
+ * Order (security-critical, do not reorder):
+ *   1. Protocol blocklist — applies UNCONDITIONALLY, even when bypass is set
+ *      (file:/chrome:/javascript:/… are security boundaries, not access tiers).
+ *   2. Bypass — relaxes only the site-access tiers (read-only/click-only).
+ *   3. Tier comparison — required tier must be <= actual tier ordinal.
+ *
+ * The second call site that composes these checks (orchestrator.ts's consent gating) must go
+ * through this function so blocklist→bypass→tier ordering can never diverge between sites.
+ */
+export function assertAccessPolicy(
   url: string,
   required: DomainTier,
   tiers: Record<string, DomainTier>,
   bypass = false,
 ): void {
   if (isBlockedUrl(url)) {
-    throw new DomainTierError(`Blocked URL scheme: ${url}`, '', required, 'read-only');
+    // Never echo the full URL here: blocked-scheme URLs (file:/data:/javascript:…)
+    // can carry tokens/codes in path/query that must not leak to the LLM/frontier.
+    // Hostname-only, mirroring page.fetch's SSRF-guard phrasing.
+    let safeHost = '';
+    try {
+      safeHost = new URL(url).hostname;
+    } catch {
+      safeHost = '';
+    }
+    throw new DomainTierError(`Blocked URL scheme${safeHost ? `: ${safeHost}` : ''}`, '', required, 'read-only');
   }
   // The opt-in bypass relaxes only the site-access tiers (read-only/click-only) — the protocol
   // blocklist above STILL applies (file:/chrome:/javascript: are security, not access).
@@ -88,4 +108,14 @@ export function assertCanAct(
       actual,
     );
   }
+}
+
+export function assertCanAct(
+  url: string,
+  required: DomainTier,
+  tiers: Record<string, DomainTier>,
+  bypass = false,
+): void {
+  // Delegate to the single canonical implementation — behavior identical, ordering centralized.
+  assertAccessPolicy(url, required, tiers, bypass);
 }

@@ -3,11 +3,13 @@
 // SPAs, JS-rendered content, dynamic loading, API queries.
 
 import { z } from 'zod';
-import type { ToolDefDescriptor, ToolContext } from '../registry';
+import type { ToolDefDescriptor } from '../registry';
 import { withCdp } from './lifecycle';
-import { assertCanAct, isBlockedUrl } from '@/agent/safety/domain_tiers';
+import { assertCanAct, DomainTierError, isBlockedUrl } from '@/agent/safety/domain_tiers';
 import { clearExtractionCache } from './aria_tool';
 
+// Per-role numCtx: brain 32K (quality) vs body 16K (speed) — enforced by the
+// orchestrator via agent.brain/body.numCtx (see messages.ts DEFAULT_SETTINGS).
 /** SSRF guard — reject URLs targeting internal/private addresses.
  *  page.fetch runs in the extension service worker with privileged network access,
  *  so it must not be used to probe internal services. Block private IP ranges
@@ -21,6 +23,20 @@ function isPrivateTarget(url: string): boolean {
   } catch {
     return true; // invalid URL → treat as unsafe
   }
+}
+// Accepted (F1): PRIVATE_HOST_RE blocks by hostname only. DNS rebinding — a public
+// hostname that resolves to a private IP at request time — cannot be detected here because the MV3
+// service worker has no DNS API, so a rebinding public host slips past the guard. Manual-redirect
+// validation stays as defense in depth; closing the rebinding gap requires a DNS-capable layer.
+
+// Safe denial reason for tier/blocked denials. Uses DomainTierError's structured
+// host field (hostname-only) — never the raw error message, which used to echo
+// the full blocked URL (tokens/codes in path/query leaked to the LLM/frontier).
+function tierDenyReason(err: unknown): string {
+  if (err instanceof DomainTierError) {
+    return err.host ? `host ${err.host} is not permitted for this action` : 'blocked URL scheme';
+  }
+  return 'blocked by domain-tier policy';
 }
 
 // ── dom.query ─────────────────────────────────────────────
@@ -72,9 +88,9 @@ export const domQueryTool: ToolDefDescriptor<{ tabId: number; selector?: string;
   async dispatch({ tabId, selector, maxResults }, ctx) {
     const url = await new Promise<string>((resolve) => chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')));
     assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
-    if (isBlockedUrl(url)) {
-      return { ok: false, content: `Cannot query DOM on this URL (blocked protocol).` };
-    }
+    // Redundant isBlockedUrl check removed: assertCanAct already throws DomainTierError for every
+    // blocked protocol (even with bypass), so a separate guard here was unreachable. No behavior
+    // change for non-blocked URLs.
     const result = await withCdp(tabId, async (send) => {
       await send('Runtime.enable');
       const { result: res } = await send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
@@ -127,7 +143,11 @@ export const domClickSelectorTool: ToolDefDescriptor<{ tabId: number; selector: 
   }),
   async dispatch({ tabId, selector }, ctx) {
     const url = await new Promise<string>((resolve) => chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')));
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    try {
+      assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    } catch (err) {
+      return { ok: false, content: `Cannot click on this page: ${tierDenyReason(err)}`, fatal: true };
+    }
     const result = await withCdp(tabId, async (send) => {
       await send('Runtime.enable');
       const { result: res } = await send<{ result?: { value?: string } }>('Runtime.evaluate', {
@@ -178,7 +198,16 @@ export const pageWaitForTool: ToolDefDescriptor<{ tabId: number; selector: strin
     selector: z.string().describe('CSS selector to wait for (e.g. ".search-results", "[data-loaded=true]", "table")'),
     timeoutMs: z.number().int().min(1000).max(60000).optional().describe('Max wait time in ms (default 15000)'),
   }),
-  async dispatch({ tabId, selector, timeoutMs }) {
+  async dispatch({ tabId, selector, timeoutMs }, ctx) {
+    const url = await new Promise<string>((resolve) => chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')));
+    if (isBlockedUrl(url)) {
+      return { ok: false, content: 'Cannot wait on this page: blocked URL scheme.', fatal: true };
+    }
+    try {
+      assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    } catch (err) {
+      return { ok: false, content: `Cannot wait on this page: ${tierDenyReason(err)}`, fatal: true };
+    }
     const timeout = timeoutMs ?? 15000;
     const result = await withCdp(tabId, async (send) => {
       await send('Runtime.enable');
@@ -226,20 +255,62 @@ export const pageFetchTool: ToolDefDescriptor<{
       return { ok: false, content: `SSRF guard: cannot fetch private/internal URL (${new URL(url).hostname}). page.fetch is for external REST APIs only.` };
     }
     // Apply domain-tier restrictions — page.fetch is a write-level action
-    try { assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers); } catch { return { ok: false, content: `Domain tier blocks fetch to this host.` }; }
+    try { assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers); } catch { return { ok: false, content: `Domain tier blocks fetch to this host.`, fatal: true }; }
     try {
-      const response = await fetch(url, {
-        method,
-        headers: { ...headers },
-        body: method !== 'GET' && method !== 'HEAD' && body ? body : undefined,
-      });
-      const ct = response.headers.get('content-type') || '';
+      // SSRF defense in depth: follow redirects manually (redirect: 'manual') so the
+      // privileged extension-context fetch never contacts a private/internal host — even
+      // via a 30x redirect (which leaks headers/timing). Validate each Location with
+      // isPrivateTarget before following; only read the body once every hop is validated.
+      // Max 3 hops bounds redirect loops.
+      const MAX_REDIRECT_HOPS = 3;
+      let currentUrl = url;
+      let response: Response | null = null;
+      for (let hops = 0; ; hops++) {
+        response = await fetch(currentUrl, {
+          method,
+          headers: { ...headers },
+          redirect: 'manual',
+          body: method !== 'GET' && method !== 'HEAD' && body ? body : undefined,
+        });
+        // Not a redirect → terminal response, stop following.
+        if (response.status < 300 || response.status >= 400) break;
+        // Redirect: validate the Location before following.
+        if (hops >= MAX_REDIRECT_HOPS) {
+          return {
+            ok: false,
+            content: `SSRF guard: too many redirects (max ${MAX_REDIRECT_HOPS}). page.fetch is for external REST APIs only.`,
+          };
+        }
+        const location = response.headers.get('location');
+        if (!location) break; // redirect without a Location — treat as terminal
+        const targetUrl = new URL(location, currentUrl).href;
+        if (isPrivateTarget(targetUrl)) {
+          return {
+            ok: false,
+            content: `SSRF guard: redirect leads to private/internal URL (${new URL(targetUrl).hostname}). page.fetch is for external REST APIs only.`,
+          };
+        }
+        currentUrl = targetUrl;
+      }
+      const finalResponse = response!;
+      // Re-check the FINAL URL after all hops (response.url is empty for same-document/
+      // no-URL responses — nothing to re-check). `new URL(...)` parsed once and reused.
+      if (finalResponse.url) {
+        const finalUrl = new URL(finalResponse.url);
+        if (isPrivateTarget(finalResponse.url)) {
+          return {
+            ok: false,
+            content: `SSRF guard: redirect leads to private/internal URL (${finalUrl.hostname}). page.fetch is for external REST APIs only.`,
+          };
+        }
+      }
+      const ct = finalResponse.headers.get('content-type') || '';
       const isJson = ct.includes('json') || ct.includes('javascript');
-      const text = isJson ? JSON.stringify(await response.json(), null, 2) : await response.text();
+      const text = isJson ? JSON.stringify(await finalResponse.json(), null, 2) : await finalResponse.text();
       const truncated = text.length > 50000 ? text.substring(0, 50000) + '\n... [truncated at 50KB]' : text;
       return {
-        ok: response.ok,
-        content: `HTTP ${response.status} ${response.statusText}\n\n${truncated}`,
+        ok: finalResponse.ok,
+        content: `HTTP ${finalResponse.status} ${finalResponse.statusText}\n\n${truncated}`,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -248,6 +319,8 @@ export const pageFetchTool: ToolDefDescriptor<{
   },
 };
 
+// Graceful denial: click_selector/expect/fetch return {ok:false, fatal:true} on tier/blocked
+// (same contract as tab.open) so the orchestrator salvages instead of retrying.
 // ── page.expect ─────────────────────────────────────────────
 // Deterministic postcondition checkpoint: run a JS expression against the page
 // and verify it evaluates to true. Use after an action to catch failures fast
@@ -273,7 +346,11 @@ export const pageExpectTool: ToolDefDescriptor<{ tabId: number; expression: stri
   }),
   async dispatch({ tabId, expression, description }, ctx) {
     const url = await new Promise<string>((resolve) => chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')));
-    assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    try {
+      assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    } catch (err) {
+      return { ok: false, content: `Cannot check on this page: ${tierDenyReason(err)}`, fatal: true };
+    }
     const result = await withCdp(tabId, async (send) => {
       await send('Runtime.enable');
       const { result: res } = await send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
@@ -358,7 +435,16 @@ export const pageWaitMutationTool: ToolDefDescriptor<{ tabId: number; selector?:
     selector: z.string().optional().describe('CSS selector to wait for (e.g. ".new-content"). Without this, waits for any DOM addition.'),
     timeoutMs: z.number().int().min(1000).max(30000).optional().describe('Max wait time in ms (default 10000)'),
   }),
-  async dispatch({ tabId, selector, timeoutMs }) {
+  async dispatch({ tabId, selector, timeoutMs }, ctx) {
+    const url = await new Promise<string>((resolve) => chrome.tabs.get(tabId, (t) => resolve(t?.url ?? '')));
+    if (isBlockedUrl(url)) {
+      return { ok: false, content: 'Cannot watch this page: blocked URL scheme.', fatal: true };
+    }
+    try {
+      assertCanAct(url, 'click-only', ctx.settings.domainTiers, ctx.settings.bypassDomainTiers);
+    } catch (err) {
+      return { ok: false, content: `Cannot watch this page: ${tierDenyReason(err)}`, fatal: true };
+    }
     const timeout = timeoutMs ?? 10000;
     const result = await withCdp(tabId, async (send) => {
       await send('Runtime.enable');
