@@ -92,7 +92,9 @@ export interface OllamaSamplingOptions {
  *  Gemma 4's official sampling (model card): temp 1.0, top_p 0.95, top_k 64.
  *  `cache_prompt` is honored by the llama.cpp backend only (llama-only):
  *  Ollama forwards it to llama.cpp's prompt-cache path; non-llama backends
- *  ignore it. No speculative-decoding / drafting keys are set here — keep
+ *  ignore it. Likewise n-gram / unconditional-draft (UD) speculative-decoding
+ *  keys are llama-only and intentionally unset here — a UD bench needs an
+ *  exact llama UD tag + approval before any run. No speculative-decoding / drafting keys are set here — keep
  *  this allowlist tight (temperature/top_p/top_k/num_ctx/cache_prompt). */
 export function buildOllamaOptions(o: OllamaSamplingOptions = {}): Record<string, unknown> {
   return {
@@ -103,9 +105,10 @@ export function buildOllamaOptions(o: OllamaSamplingOptions = {}): Record<string
       ? {
           num_ctx: (() => {
             const env = process.env.OLLAMA_CONTEXT_LENGTH;
-            if (env == null) return o.numCtx;
+            if (env == null || env.trim() === '') return o.numCtx;
             const len = Number(env);
-            return Number.isFinite(len) ? Math.min(o.numCtx, len) : o.numCtx;
+            if (!Number.isFinite(len) || len <= 0) return o.numCtx;
+            return Math.min(o.numCtx, len);
           })(),
         }
       : {}),

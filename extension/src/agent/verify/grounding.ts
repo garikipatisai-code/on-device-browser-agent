@@ -315,8 +315,9 @@ export function assertNumbersEntitiesGrounded(
 // Cheap confidence probe adjacent to `isFinishAdmissible`: fraction of the
 // summary's data tokens (numbers + entities, same extractors as the T2 gate)
 // grounded in `observed`, rounded to 2 decimals. Empty summary → 0; a summary
-// with no data tokens → 1 (vacuously confident). Pure: no imports, no I/O,
-// no LLM calls. Callers compare against PROBE_* thresholds in budget.ts.
+// with no data tokens → 0 (fail-closed, never skip on vacuous confidence).
+// Pure: no imports, no I/O, no LLM calls. Callers compare against PROBE_*
+// thresholds in budget.ts.
 
 /** Grounded fraction of a summary in 0..1 (2-decimal). */
 export function groundingProbeConfidence(summary: string, observed: string): number {
@@ -326,7 +327,7 @@ export function groundingProbeConfidence(summary: string, observed: string): num
   const numToks = [...new Set(extractMatches(GATE_NUM_RE, s))];
   const capToks = extractEntityTokens(s);
   const total = numToks.length + capToks.length;
-  if (total === 0) return 1;
+  if (total === 0) return 0;
   const obsNumToks = extractMatches(GATE_NUM_RE, o);
   let grounded = 0;
   for (const t of numToks) if (isNumberGrounded(t, o, obsNumToks)) grounded += 1;

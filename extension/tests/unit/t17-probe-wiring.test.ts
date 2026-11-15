@@ -26,10 +26,11 @@ describe('groundingProbeConfidence fraction (T17)', () => {
     ).toBe(0.71);
   });
 
-  it('is empty-safe (empty summary -> 0) and vacuously confident with no data tokens', () => {
+  it('is empty-safe (empty summary -> 0) and fail-closed with no data tokens', () => {
     expect(groundingProbeConfidence('', 'anything')).toBe(0);
     expect(groundingProbeConfidence('   ', 'anything')).toBe(0);
-    expect(groundingProbeConfidence('hello world', 'unrelated text')).toBe(1);
+    // Fail-closed: total==0 returns 0 (never skip on vacuous probe).
+    expect(groundingProbeConfidence('hello world', 'unrelated text')).toBe(0);
   });
 
   it('grounds numbers the same way the T2 gate does', () => {

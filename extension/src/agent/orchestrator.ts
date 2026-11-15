@@ -389,12 +389,32 @@ export function wavesFor(steps: DagStep[]): DagStep[][] {
   return waves;
 }
 
+/** T21 DAG enablement (BRAIN-only, pure): centralizes the flag-to-dispatch
+ *  seam. On when `enabled` OR `canary` is truthy; `kill` wins over both
+ *  (forces off verbatim). Missing opts count as off (fail-closed). */
+export function resolveDagEnabled(opts?: {
+  enabled?: boolean;
+  canary?: boolean;
+  kill?: boolean;
+}): boolean {
+  if (opts?.kill) return false;
+  return !!opts?.enabled || !!opts?.canary;
+}
+
 /** T16 DEBT (deferred to scheduler, NOT this seam): two open questions stay
  *  scheduler-owned — (1) empty-steps warn: an empty step list still emits the
  *  on-path `cyclic/unresolved needs` warn shadow log instead of staying silent;
  *  (2) retry idempotence: the parallel-failure sequential fallback re-runs wave
  *  steps, which may re-execute a side-effecting step — the scheduler must bound
  *  retries and make redispatch idempotent before production threading.
+ *
+ *  T21 extends the seam with canary/kill: `resolveDagEnabled({ enabled,
+ *  canary, kill })` decides; kill forces off verbatim (no emits).
+ *
+ *  T22 DEBT (scheduler-owned, NOT this seam): T21 open Q stays open —
+ *  empty-steps warn vs silent: an empty step list currently emits the
+ *  on-path warn shadow log; whether it should stay silent is a scheduler
+ *  decision, not this seam's.
  *
  *  T16 DAG wiring (BRAIN-only, 0 LLM calls): the flag-to-dispatch seam.
  *  Off (`enabled` falsy) = legacy sequential verbatim (in-order, no emits).
@@ -405,12 +425,12 @@ export function wavesFor(steps: DagStep[]): DagStep[][] {
 export async function dispatchDagPlan<T>(
   steps: DagStep[],
   run: (step: DagStep) => Promise<T>,
-  opts?: { enabled?: boolean; emit?: (event: TimelineEvent) => void },
+  opts?: { enabled?: boolean; canary?: boolean; kill?: boolean; emit?: (event: TimelineEvent) => void },
 ): Promise<T[]> {
   const shadow = (level: 'info' | 'warn', message: string): void => {
     opts?.emit?.({ kind: 'log', ts: Date.now(), level, message });
   };
-  if (!opts?.enabled) {
+  if (!resolveDagEnabled(opts)) {
     const out: T[] = [];
     for (const s of steps) out.push(await run(s));
     return out;
@@ -1173,7 +1193,9 @@ export class Orchestrator {
    *  maxTurns-only retry); unknown signatures spend no budget.
    *  T18 DEBT (scheduler-owned, NOT this seam): T16 empty-steps warn +
    *  retry idempotence stay open; T17 probe wiring stays flag-gated with
-   *  zero production call-sites; steerNotes cap-5 FIFO stays without priority. */
+   *  zero production call-sites; steerNotes cap-5 FIFO stays without priority.
+   *  T23 DEBT (scheduler-owned, NOT this seam): T22 open Qs stay open —
+   *  empty-steps warn vs silent + retry idempotence deferred to the scheduler. */
   private tryBacktrackBank(reason: string): boolean {
     if (this.bankAttemptsUsed >= RECOVERY_BANK_MAX_ATTEMPTS) return false;
     const hit = lookupRecovery(reason ?? '');

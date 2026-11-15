@@ -121,6 +121,12 @@ export interface Settings {
    *  the off path is byte-identical sequential; cyclic/invalid graphs fail
    *  closed to sequential even when on. */
   dagDispatch?: boolean;
+  /** Opt-in canary: enables DAG wave dispatch without flipping `dagDispatch`
+   *  (T21). Off by default. `dagKill` wins over both when true. */
+  dagCanary?: boolean;
+  /** Kill-switch: when true, forces sequential verbatim even if `dagDispatch`
+   *  or `dagCanary` is set (T21). Off by default. */
+  dagKill?: boolean;
   /** Opt-in: anchor FACTS+ANCHOR through compaction and enforce the strict
    *  numbers+entities finish gate (T20). Off by default — the off path is
    *  byte-identical legacy (scratch tail slice + passthrough finish, no strict
@@ -175,6 +181,8 @@ export const DEFAULT_SETTINGS: Settings = {
   limitedResources: false,
   anchoredGate: false,
   dagDispatch: false,
+  dagCanary: false,
+  dagKill: false,
 };
 
 /** Treat a bare model name as equal to its `:latest` tag (Ollama's default).
