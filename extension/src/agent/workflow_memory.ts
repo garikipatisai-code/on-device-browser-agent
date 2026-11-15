@@ -835,6 +835,15 @@ export interface HybridQuery {
   topK?: number;
 }
 
+/** Default recall bound (ScaleMCP top-k). */
+export const DEFAULT_TOPK = 5;
+
+/** Clamp a topK param: bad (undefined/≤0/NaN/non-finite) → default 5, else floor. */
+export function normalizeTopK(topK?: number): number {
+  if (!Number.isFinite(topK as number) || (topK as number) <= 0) return DEFAULT_TOPK;
+  return Math.floor(topK as number);
+}
+
 export interface HybridHit {
   anchor: string;
   summary: string;
@@ -944,7 +953,7 @@ export class HybridRetriever {
   }
 
   query(q: HybridQuery): HybridHit[] {
-    const topK = q.topK ?? 5;
+    const topK = normalizeTopK(q.topK);
     if (this.docs.length === 0) return [];
     // Flat fallback: keyword-only linear scan.
     if (!isBinaryMrl512(q.vec512)) {
@@ -974,11 +983,16 @@ export class HybridRetriever {
     return this.resolveParents(ranked).slice(0, topK);
   }
 
+  /** Thin top-k seam: same ranking as query, explicit bound (clamped). */
+  queryTopK(q: HybridQuery, topK?: number): HybridHit[] {
+    return this.query({ ...q, topK: topK !== undefined ? topK : q.topK });
+  }
+
   /** T10 cascade: MRL-256 prefix prefilter → full-vector rescore → RRF fusion → score cutoff.
    *  Pure stub (no model): deterministic, sync, 0 LLM calls.
    *  NOTE: zero production call-sites as of T10 — intentional stub; wiring deferred to scheduler. */
   queryCascade(q: HybridQuery, prefilterTopK: number = CASCADE_PREFILTER_TOPK, cutoff: number = CASCADE_SCORE_CUTOFF): HybridHit[] {
-    const topK = q.topK ?? 5;
+    const topK = normalizeTopK(q.topK);
     if (this.docs.length === 0) return [];
     if (!isBinaryMrl512(q.vec512)) {
       const ranked = this.docs
@@ -989,7 +1003,7 @@ export class HybridRetriever {
     }
     const qv = q.vec512;
     // Cheap MRL-256 pass: keep the closest prefilterTopK by prefix Hamming.
-    const preK = Number.isFinite(prefilterTopK) ? Math.max(1, Math.floor(prefilterTopK)) : CASCADE_PREFILTER_TOPK;
+    const preK = normalizeTopK(prefilterTopK);
     const preRanked = this.docs
       .map((d, i) => ({ d, i, dist: hammingDistance256(qv, d.vec512) }))
       .sort((a, b) => a.dist - b.dist || a.i - b.i)
@@ -1013,6 +1027,45 @@ export class HybridRetriever {
       .map(({ anchor, summary, score, mode }) => ({ anchor, summary, score, mode }));
     return cascadeCutoff(this.resolveParents(ranked), cutoff).slice(0, topK);
   }
+}
+
+// ---- T14 top-k caller wiring (BRAIN-only, pure) ----------------------------
+// The planner caller path renders the single best recipe today (matchWorkflow +
+// renderRecipe in the orchestrator). This seam threads an explicit top-k recall
+// through the SAME scoring so a future caller can render a bounded set.
+// Omitting topK recalls DEFAULT_TOPK (byte-identical to passing 5); a bad topK
+// (<=0/NaN/non-finite) clamps the same way via normalizeTopK. The existing
+// single-match sequential path (matchWorkflow) is untouched below.
+
+/** Ranked top-k recall for a goal: same order as matchWorkflow (curated rank
+ *  first, then score), so index [0] is the sequential single match. */
+export function matchWorkflows(
+  goal: string,
+  workflows: Workflow[],
+  topK: number = DEFAULT_TOPK,
+  threshold = 0.25,
+): Workflow[] {
+  const tokens = tokenize(goal);
+  const host = hostFromGoal(goal);
+  return workflows
+    .map((wf, i) => ({ wf, i, s: scoreWorkflow(tokens, host, wf), rank: originRank(wf.origin) }))
+    .filter((r) => r.s >= threshold)
+    .sort((a, b) => b.rank - a.rank || b.s - a.s || a.i - b.i)
+    .slice(0, normalizeTopK(topK))
+    .map((r) => r.wf);
+}
+
+/** Bounded caller render: top-k matched recipes for the planner prompt, each via
+ *  renderRecipe. `undefined` when nothing matches (same convention as the
+ *  single-recipe `workflowRecipe` slot). */
+export function renderTopRecipes(
+  goal: string,
+  workflows: Workflow[],
+  topK: number = DEFAULT_TOPK,
+): string | undefined {
+  const matches = matchWorkflows(goal, workflows, topK);
+  if (matches.length === 0) return undefined;
+  return matches.map(renderRecipe).join('\n---\n');
 }
 
 // ---- T8 PALADIN recovery bank (BRAIN-only, pure) ----------------------------
