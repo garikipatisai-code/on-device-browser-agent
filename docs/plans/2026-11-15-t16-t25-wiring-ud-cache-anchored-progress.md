@@ -11,7 +11,7 @@
 - [x] T24 Cache wiring (deferred to scheduler — measurement only unless bench demands it)
 - [x] T25 Final gate T16–T25 (BRAIN verify v2, no src edits): TYPE:0 LINT:0 TEST:0 — 98 files passed / 1 skipped (99), 987 tests passed / 1 skipped (988)
 
-## Status: T16–T25 LOCKED + T25 GATE PASSED
+## Status: T16–T25 LOCKED + T25 GATE PASSED + Q4 migration verified (2026-11-15 BRAIN live trial)
 
 Gate (2026-11-15 v2 BRAIN verify, `extension/`):
 - `npm run typecheck` EXIT:0

@@ -203,11 +203,46 @@ export async function saveActiveSessionId(id: string | null): Promise<void> {
 
 // ---------- Settings ----------
 
+/** Post-Q4 stored-model migration (PC baseline: brain e4b-q4 + body e2b-q4 + vision e4b-q4).
+ *  Rule: ONLY the exact bare legacy tag `gemma4:e4b` is rewritten —
+ *    brain.model `gemma4:e4b` → `gemma4:e4b-it-q4_K_M`
+ *    body.model  `gemma4:e4b` → `gemma4:e2b-it-q4_K_M` (hybrid body is e2b for speed)
+ *    visionModel `gemma4:e4b` → `gemma4:e4b-it-q4_K_M`
+ *  Any other stored tag (q4/q8 pulls, frontier models, user-custom tags) is left untouched.
+ *  Returns the same reference when nothing changed so callers can skip the write-back. */
+function migrateStoredModelTags(s: Settings): Settings {
+  const LEGACY_E4B_BASE = 'gemma4:e4b';
+  const brainModel = s.agent?.brain.model;
+  const bodyModel = s.agent?.body.model;
+  const visionModel = s.visionModel;
+  if (brainModel !== LEGACY_E4B_BASE && bodyModel !== LEGACY_E4B_BASE && visionModel !== LEGACY_E4B_BASE) {
+    return s;
+  }
+  return {
+    ...s,
+    agent: s.agent
+      ? {
+          brain: brainModel === LEGACY_E4B_BASE
+            ? { ...s.agent.brain, model: 'gemma4:e4b-it-q4_K_M' }
+            : s.agent.brain,
+          body: bodyModel === LEGACY_E4B_BASE
+            ? { ...s.agent.body, model: 'gemma4:e2b-it-q4_K_M' }
+            : s.agent.body,
+        }
+      : s.agent,
+    visionModel: visionModel === LEGACY_E4B_BASE ? 'gemma4:e4b-it-q4_K_M' : visionModel,
+  };
+}
+
 /** One-time migration from v0 (scattered model/frontier/thinking fields) to
  *  v1 (AgentConfig with brain/body RoleGroupConfigs). Writes the migrated
  *  shape back to storage so the old fields are never read again. */
 function migrateSettings(raw: Settings): Settings {
-  if (raw.schemaVersion !== undefined && raw.agent) return raw; // already migrated
+  if (raw.schemaVersion !== undefined && raw.agent) {
+    const next = migrateStoredModelTags(raw);
+    if (next !== raw) _storage.set(SETTINGS_KEY, next).catch(() => undefined);
+    return next;
+  }
 
   // v0 default was "no override" which meant roles used their own thinking:true.
   // Map: explicitly off → 'off', explicitly on with effort → mapped level,
@@ -247,8 +282,9 @@ function migrateSettings(raw: Settings): Settings {
     },
   };
   // Write back so the old fields are never read again
-  _storage.set(SETTINGS_KEY, migrated).catch(() => undefined);
-  return migrated;
+  const normalized = migrateStoredModelTags(migrated);
+  _storage.set(SETTINGS_KEY, normalized).catch(() => undefined);
+  return normalized;
 }
 
 export async function loadSettings(): Promise<Settings> {
