@@ -745,7 +745,7 @@ export function deriveDomain(
 
 // ---- T9 flat MCP catalog + parent_child retrieval (BRAIN-only, pure) ----
 // T8 debt carried forward (deferred to scheduler, NOT fixed here):
-// - recovery-bank retries are bounded only by maxTurns (no dedicated bank budget);
+// - T18 bounds recovery-bank retries by RECOVERY_BANK_MAX_ATTEMPTS (no longer maxTurns-only);
 // - steerNotes cap-5 eviction is FIFO without priority. See orchestrator notes.
 
 /** True when any `anyOf`/`oneOf` union key appears anywhere in the schema tree. */
@@ -1029,6 +1029,24 @@ export class HybridRetriever {
   }
 }
 
+// ---- T19 threaded recall (BRAIN-only, pure) --------------------------------
+// Single threaded entry for the scheduler's future call-site: threads topK →
+// normalizeTopK, MRL-256 prefilter → full rescore → RRF-60 fusion → cutoff →
+// parent-dedupe → slice in one call. Thin delegate over queryCascade (same
+// ranking, no fork) — mirrors the queryTopK seam. 0 LLM calls (pure stub).
+// NOTE: zero production call-sites as of T19 — intentional seam; wiring
+// deferred to scheduler (same as the T10 cascade / T16 DAG notes).
+
+/** Threaded recall: same ranking as queryCascade, bounds threaded through. */
+export function retrieveThreaded(
+  r: HybridRetriever,
+  q: HybridQuery,
+  prefilterTopK: number = CASCADE_PREFILTER_TOPK,
+  cutoff: number = CASCADE_SCORE_CUTOFF,
+): HybridHit[] {
+  return r.queryCascade(q, prefilterTopK, cutoff);
+}
+
 // ---- T14 top-k caller wiring (BRAIN-only, pure) ----------------------------
 // The planner caller path renders the single best recipe today (matchWorkflow +
 // renderRecipe in the orchestrator). This seam threads an explicit top-k recall
@@ -1080,6 +1098,12 @@ export interface RecoveryEntry {
   /** Single short steer instruction (<1 step: no replan, no multi-part plan). */
   fix: string;
 }
+
+/** T18 bank-attempt bound (BRAIN-only, pure): dedicated per-run budget for
+ *  recovery-bank steer fixes — the bank no longer retries until maxTurns.
+ *  Width 2 mirrors the backtrack width-2 retry (cheap fix, then fall through
+ *  to backtrack → replan). */
+export const RECOVERY_BANK_MAX_ATTEMPTS = 2;
 
 export const RECOVERY_BANK: RecoveryEntry[] = [
   { pattern: 'aria.extract returned empty', fix: 'Re-read the page with aria.extract once more; if still empty, report the field as not shown — never invent it.' },

@@ -42,14 +42,14 @@ import { currentStep, newPlan, walkPlan } from './plan';
 import { buildPlannerMessages, wrapPageContent } from './prompts';
 import { timed } from './metrics';
 import { redact, redactDeep, redactEvent } from './safety/redact';
-import { mentionsMissing } from './verify/grounding';
+import { groundingProbeConfidence, getPostState, isFinishAdmissible, mentionsMissing } from './verify/grounding';
 import { findConsentDismiss } from './tools/browser/consent';
 import { detectAntiBotBlock } from './tools/browser/antibot';
 import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domain_tiers';
 import { sleep } from '@/background/signal';
 import { waitForTabSettled } from './tools/browser/tab';
 import { clearSearchResults } from './tools/browser/search';
-import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, traceWorthLearning, markWorkflowTrusted, quarantineWorkflow, deriveDomain, lookupRecovery, type Workflow } from './workflow_memory';
+import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, traceWorthLearning, markWorkflowTrusted, quarantineWorkflow, deriveDomain, lookupRecovery, RECOVERY_BANK_MAX_ATTEMPTS, type Workflow } from './workflow_memory';
 import { renderProfileBlock } from './profile';
 
 // Tools whose output IS page content. The orchestrator carries the most recent
@@ -148,6 +148,42 @@ export function shouldSkipTool(opts: { tool: string; probeConfidence?: number; r
   return conf >= PROBE_TOOL_SKIP_CONFIDENCE;
 }
 
+/** T17 probe wiring (BRAIN-only, pure, 0 LLM calls): the flag-to-probe seam.
+ *  Off (`enabled` falsy) = legacy verbatim: base `routeThink` + never skip
+ *  (byte-identical to the pre-probe path; `confidence` reports 0 = disabled).
+ *  On = `groundingProbeConfidence(summary, observed)` fed into both T7 gates
+ *  (`routeThinkProbe` + `shouldSkipTool`). NaN-safe by construction: the probe
+ *  always returns a finite 0..1 fraction, so the gates' NaN→no-skip rule holds.
+ *  NOTE: zero production call-sites as of T17 — intentional seam; wiring deferred to scheduler. */
+export interface ProbeWiringOpts {
+  stepCount: number;
+  turn: number;
+  tool: string;
+  redundant: boolean;
+  summary: string;
+  observed: string;
+  enabled?: boolean;
+}
+
+/** Result of the T17 probe wiring: think route + tool-skip + probe fraction. */
+export interface ProbeWiringResult {
+  route: ThinkRoute;
+  skip: boolean;
+  confidence: number;
+}
+
+export function resolveProbeRouting(opts: ProbeWiringOpts): ProbeWiringResult {
+  if (!opts.enabled) {
+    return { route: routeThink({ stepCount: opts.stepCount, turn: opts.turn }), skip: false, confidence: 0 };
+  }
+  const confidence = groundingProbeConfidence(opts.summary ?? '', opts.observed ?? '');
+  return {
+    route: routeThinkProbe({ stepCount: opts.stepCount, turn: opts.turn, probeConfidence: confidence }),
+    skip: shouldSkipTool({ tool: opts.tool, probeConfidence: confidence, redundant: opts.redundant }),
+    confidence,
+  };
+}
+
 /** T10 anchored compact input (BRAIN-only, pure, 0 LLM calls). */
 export interface AnchoredCompactInput {
   goal: string;
@@ -180,6 +216,91 @@ export function anchoredCompact(input: AnchoredCompactInput): string {
   const header = `${goalPrefix}${goal.slice(0, goalRoom)}${goalSuffix}${fixed}`;
   const room = maxChars - header.length;
   return header + scratch.slice(0, room);
+}
+
+/** T20 anchored-compaction wiring (BRAIN-only, pure, 0 LLM calls): the flag-to-compact seam.
+ *  Off (`enabled` falsy) = legacy verbatim: scratch tail slice (byte-identical to the
+ *  pre-anchor path; no header, FACTS/ANCHOR not injected). On = `anchoredCompact`
+ *  (header preserves goal+facts+anchor, FACTS+ANCHOR never cut, header-intact over
+ *  budget). NOTE: zero production call-sites as of T20 — intentional seam; production
+ *  threading (settings.anchoredGate → compact input) deferred to scheduler.
+ *  T20 DEBT (scheduler-owned, NOT this seam): T18 open Q (steerNotes cap-5 FIFO stays
+ *  without priority; bank best-effort backtrack ordering) stays open; T19 UD bench gap —
+ *  UD-Q4_K_XL / n-gram / cache bench blocked — no tag, needs approval + exact tag before
+ *  any bench run, no bench executed in T20; T16 empty-steps warn + retry idempotence stay
+ *  open; T17 probe wiring stays flag-gated with zero production call-sites. */
+export interface AnchoredCompactionOpts {
+  goal: string;
+  facts: string;
+  anchor: string;
+  scratch: string;
+  maxChars: number;
+  enabled?: boolean;
+}
+
+export function resolveAnchoredCompaction(opts: AnchoredCompactionOpts): string {
+  const scratch = opts.scratch ?? '';
+  const maxChars = Number.isFinite(opts.maxChars) && opts.maxChars > 0 ? Math.floor(opts.maxChars) : 0;
+  if (!opts.enabled) {
+    if (maxChars <= 0) return '';
+    return scratch.slice(-maxChars);
+  }
+  return anchoredCompact({
+    goal: opts.goal ?? '',
+    facts: opts.facts ?? '',
+    anchor: opts.anchor ?? '',
+    scratch,
+    maxChars,
+  });
+}
+
+/** T20 finish-gate wiring (BRAIN-only, pure, 0 LLM calls): the flag-to-strict-gate seam.
+ *  Off (`enabled` falsy) = legacy verbatim passthrough (no strict gate; byte-identical to
+ *  the pre-gate path — verdict/summary returned unchanged with admitted=true even when
+ *  ungrounded). On = full gate via `isFinishAdmissible` (which delegates to the T2
+ *  `assertNumbersEntitiesGrounded` numbers+entities check): grounded + post-state passed
+ *  admits verbatim; anything else fails closed (admitted=false, success downgraded to
+ *  partial with the `[unverified against page: …]` note, mirroring gateFinishSummary).
+ *  NOTE: zero production call-sites as of T20 — intentional seam; wiring into
+ *  runUntilTerminal/finalizeFinish deferred to scheduler (off path keeps current
+ *  verifyFinish/gateFinishSummary behavior byte-identical). */
+export interface AnchoredFinishOpts {
+  verdict: string;
+  summary: string;
+  observed: string;
+  postPassed: boolean;
+  enabled?: boolean;
+}
+
+export interface AnchoredFinishResult {
+  verdict: string;
+  summary: string;
+  admitted: boolean;
+  reason: string;
+}
+
+export function resolveFinishGate(opts: AnchoredFinishOpts): AnchoredFinishResult {
+  const verdict = opts.verdict ?? '';
+  const summary = opts.summary ?? '';
+  const observed = opts.observed ?? '';
+  if (!opts.enabled) {
+    return { verdict, summary, admitted: true, reason: '' };
+  }
+  const gate = isFinishAdmissible(
+    { verdict, summary },
+    observed,
+    getPostState({ passed: opts.postPassed === true }),
+  );
+  if (gate.ok) {
+    return { verdict, summary, admitted: true, reason: '' };
+  }
+  const downgraded = verdict === 'success' ? 'partial' : verdict;
+  return {
+    verdict: downgraded,
+    summary: `${summary}\n\n[unverified against page: ${gate.reason}]`,
+    admitted: false,
+    reason: gate.reason,
+  };
 }
 
 /** Structured-output format for the executor path. Returns the GBNF schema
@@ -238,6 +359,73 @@ export async function dispatchDagWave<T>(
     for (const s of steps) out.push(await run(s));
     return out;
   }
+}
+
+/** T16 DAG waves (BRAIN-only, pure): group steps into dependency waves in input
+ *  order — a step joins the earliest wave whose predecessors are all done.
+ *  Fail-closed (`[]`): empty input, duplicate ids, self-needs, dangling
+ *  needs, or any cycle. Callers treat `[]` as "no DAG, run sequential". */
+export function wavesFor(steps: DagStep[]): DagStep[][] {
+  if (!steps.length) return [];
+  const ids = new Set(steps.map((s) => s.id));
+  if (ids.size !== steps.length) return [];
+  for (const s of steps) {
+    for (const n of s.needs ?? []) {
+      if (n === s.id || !ids.has(n)) return [];
+    }
+  }
+  const done = new Set<string>();
+  const remaining = [...steps];
+  const waves: DagStep[][] = [];
+  while (remaining.length) {
+    const wave = remaining.filter((s) => (s.needs ?? []).every((n) => done.has(n)));
+    if (!wave.length) return [];
+    for (const s of wave) {
+      done.add(s.id);
+      remaining.splice(remaining.indexOf(s), 1);
+    }
+    waves.push(wave);
+  }
+  return waves;
+}
+
+/** T16 DEBT (deferred to scheduler, NOT this seam): two open questions stay
+ *  scheduler-owned — (1) empty-steps warn: an empty step list still emits the
+ *  on-path `cyclic/unresolved needs` warn shadow log instead of staying silent;
+ *  (2) retry idempotence: the parallel-failure sequential fallback re-runs wave
+ *  steps, which may re-execute a side-effecting step — the scheduler must bound
+ *  retries and make redispatch idempotent before production threading.
+ *
+ *  T16 DAG wiring (BRAIN-only, 0 LLM calls): the flag-to-dispatch seam.
+ *  Off (`enabled` falsy) = legacy sequential verbatim (in-order, no emits).
+ *  On = per-wave `dispatchDagWave` (parallel, input-order results, sequential
+ *  fallback) plus one info shadow log; cyclic/invalid graphs fail closed to
+ *  sequential plus a warn shadow log. The runner is injected (0 LLM calls in
+ *  test); production threads a `runHelper`-backed runner (T17+). */
+export async function dispatchDagPlan<T>(
+  steps: DagStep[],
+  run: (step: DagStep) => Promise<T>,
+  opts?: { enabled?: boolean; emit?: (event: TimelineEvent) => void },
+): Promise<T[]> {
+  const shadow = (level: 'info' | 'warn', message: string): void => {
+    opts?.emit?.({ kind: 'log', ts: Date.now(), level, message });
+  };
+  if (!opts?.enabled) {
+    const out: T[] = [];
+    for (const s of steps) out.push(await run(s));
+    return out;
+  }
+  const waves = wavesFor(steps);
+  if (!waves.length) {
+    shadow('warn', `dag: cyclic/unresolved needs — sequential fallback (${steps.length} steps)`);
+    const out: T[] = [];
+    for (const s of steps) out.push(await run(s));
+    return out;
+  }
+  shadow('info', `dag: dispatching ${steps.length} steps in ${waves.length} waves`);
+  const out: T[] = [];
+  for (const w of waves) out.push(...(await dispatchDagWave(w, run)));
+  return out;
 }
 
 /** The exact shape the executor role returns (tool, args, result, eval counts). */
@@ -327,6 +515,9 @@ export class Orchestrator {
   // page can be restored so the executor retries from a known-good position instead.
   private pageHistory: Array<{ tool: string; url?: string; content: string }> = [];
   private backtracksUsed = 0;
+  /** T18 dedicated bank budget (per run): bounds recovery-bank steer fixes
+   *  so the bank no longer retries until maxTurns. Reset in start(). */
+  private bankAttemptsUsed = 0;
   // The tool sequence executed this run — generalized into a recipe on success (Phase 2).
   private trace: Array<{ tool: string; args: Record<string, unknown> }> = [];
   // Distinct page URLs read this run — surfaced as citations on the finish.
@@ -372,6 +563,7 @@ export class Orchestrator {
     this.lastRead = null;
     this.pageHistory = [];
     this.backtracksUsed = 0;
+    this.bankAttemptsUsed = 0;
     this.observedText = '';
     this.verifyAttempts = 0;
     this.turns = 0;
@@ -971,17 +1163,22 @@ export class Orchestrator {
     return true;
   }
 
-  /** T8 PALADIN recovery bank: on an evaluator FAIL, try a single-step bank fix
-   *  (steer + best-effort backtrack) before burning a full replan. Returns true
-   *  when a bank entry matched (caller retries the step); false lets the existing
-   *  backtrack → replan path run. Marks the run dirty so a recovered run is never
-   *  distilled into a recipe.
-   *  T8 DEBT (deferred to scheduler, NOT fixed here): the bank retries until
-   *  maxTurns with no dedicated bank budget — a scheduler should bound bank
-   *  attempts per run. */
+  /** T18 bank wiring (BRAIN-only, 0 LLM calls): on an evaluator FAIL, try a
+   *  single-step bank fix (lookupRecovery steer + best-effort tryBacktrack)
+   *  before burning a full replan. Order: lookupRecovery → tryBacktrack →
+   *  replan. Returns true when a bank entry matched within budget (caller
+   *  retries the step); false lets the backtrack → replan path run. Marks
+   *  the run dirty so a recovered run is never distilled into a recipe.
+   *  Bound: at most RECOVERY_BANK_MAX_ATTEMPTS bank fixes per run (no
+   *  maxTurns-only retry); unknown signatures spend no budget.
+   *  T18 DEBT (scheduler-owned, NOT this seam): T16 empty-steps warn +
+   *  retry idempotence stay open; T17 probe wiring stays flag-gated with
+   *  zero production call-sites; steerNotes cap-5 FIFO stays without priority. */
   private tryBacktrackBank(reason: string): boolean {
+    if (this.bankAttemptsUsed >= RECOVERY_BANK_MAX_ATTEMPTS) return false;
     const hit = lookupRecovery(reason ?? '');
     if (!hit) return false;
+    this.bankAttemptsUsed += 1;
     this.markDirty(`recovery:${hit.pattern}`);
     this.steer(`Recovery: ${hit.fix}`);
     this.tryBacktrack(); // best-effort: also restore the earlier page when there is one

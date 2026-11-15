@@ -79,6 +79,40 @@ export interface EmbedOptions {
   signal?: AbortSignal;
 }
 
+/** Pinned chat sampling inputs (BRAIN-only, pure subset of ChatOptions). */
+export interface OllamaSamplingOptions {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  numCtx?: number;
+  cachePrompt?: boolean;
+}
+
+/** Pinned `/api/chat` options allowlist (BRAIN-only, pure, 0 LLM calls).
+ *  Gemma 4's official sampling (model card): temp 1.0, top_p 0.95, top_k 64.
+ *  `cache_prompt` is honored by the llama.cpp backend only (llama-only):
+ *  Ollama forwards it to llama.cpp's prompt-cache path; non-llama backends
+ *  ignore it. No speculative-decoding / drafting keys are set here — keep
+ *  this allowlist tight (temperature/top_p/top_k/num_ctx/cache_prompt). */
+export function buildOllamaOptions(o: OllamaSamplingOptions = {}): Record<string, unknown> {
+  return {
+    temperature: o.temperature ?? 1.0,
+    top_p: o.topP ?? 0.95,
+    top_k: o.topK ?? 64,
+    ...(o.numCtx
+      ? {
+          num_ctx: (() => {
+            const env = process.env.OLLAMA_CONTEXT_LENGTH;
+            if (env == null) return o.numCtx;
+            const len = Number(env);
+            return Number.isFinite(len) ? Math.min(o.numCtx, len) : o.numCtx;
+          })(),
+        }
+      : {}),
+    cache_prompt: o.cachePrompt !== false,
+  };
+}
+
 export class OllamaClient {
   constructor(public baseUrl: string = 'http://localhost:11434') {
     assertAllowedOllamaBaseUrl(baseUrl);
@@ -208,22 +242,13 @@ export class OllamaClient {
       messages: opts.messages,
       stream,
       keep_alive: opts.keepAlive ?? process.env.OLLAMA_KEEP_ALIVE ?? '10m',
-      options: {
-        temperature: opts.temperature ?? 1.0,
-        top_p: opts.topP ?? 0.95,
-        top_k: opts.topK ?? 64,
-        ...(opts.numCtx
-          ? {
-              num_ctx: (() => {
-                const env = process.env.OLLAMA_CONTEXT_LENGTH;
-                if (env == null) return opts.numCtx;
-                const len = Number(env);
-                return Number.isFinite(len) ? Math.min(opts.numCtx, len) : opts.numCtx;
-              })(),
-            }
-          : {}),
-        cache_prompt: opts.cachePrompt !== false,
-      },
+      options: buildOllamaOptions({
+        temperature: opts.temperature,
+        topP: opts.topP,
+        topK: opts.topK,
+        numCtx: opts.numCtx,
+        cachePrompt: opts.cachePrompt,
+      }),
     };
     if (opts.tools && opts.tools.length) body.tools = opts.tools;
     if (opts.toolChoice) body.tool_choice = opts.toolChoice;

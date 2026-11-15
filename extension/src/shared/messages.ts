@@ -116,6 +116,17 @@ export interface Settings {
    *  stay byte-identical unless enabled. Only affects the local Ollama path; frontier
    *  providers ignore it (they have their own native tool-calling formats). */
   structuredToolCalls?: boolean;
+  /** Opt-in: dispatch independent DAG steps (`needs`/`provides`) in parallel waves
+   *  via dispatchDagPlan instead of legacy sequential order. Off by default —
+   *  the off path is byte-identical sequential; cyclic/invalid graphs fail
+   *  closed to sequential even when on. */
+  dagDispatch?: boolean;
+  /** Opt-in: anchor FACTS+ANCHOR through compaction and enforce the strict
+   *  numbers+entities finish gate (T20). Off by default — the off path is
+   *  byte-identical legacy (scratch tail slice + passthrough finish, no strict
+   *  gate). On threads resolveAnchoredCompaction + resolveFinishGate. Zero
+   *  production call-sites as of T20 — wiring deferred to scheduler. */
+  anchoredGate?: boolean;
   /** Opt-in: constrict the agent for constrained hardware (small context window, low RAM/VRAM,
    *  one slow local model). Off by default — every downstream constriction is a no-op passthrough
    *  when false, so behavior is byte-identical to the baseline unless explicitly enabled. */
@@ -162,6 +173,8 @@ export const DEFAULT_SETTINGS: Settings = {
   numCtx: 32_768,
   structuredToolCalls: false,
   limitedResources: false,
+  anchoredGate: false,
+  dagDispatch: false,
 };
 
 /** Treat a bare model name as equal to its `:latest` tag (Ollama's default).
