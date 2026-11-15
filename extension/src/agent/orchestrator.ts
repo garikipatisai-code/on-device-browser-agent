@@ -361,6 +361,41 @@ export async function dispatchDagWave<T>(
   }
 }
 
+/** T27 probe wiring opts (BRAIN-only, pure): maps Settings to the probe seam.
+ *  `Settings.probeWiring` does not exist yet (messages.ts scheduler-owned) —
+ *  missing counts as off (fail-closed), so executeOne stays byte-identical
+ *  legacy until the flag lands.
+ *
+ *  T27 DEBT (scheduler-owned, NOT this seam): two T26 open Qs carried —
+ *  (1) executeOne threading: T26 routed executeOne through dispatchDagPlan
+ *  but only pinned dispatchDagPlan directly (executeOne is private); T27
+ *  pins the threading at source level (executeOne calls dispatchDagPlan +
+ *  resolveProbeRouting) — a real runUntilTerminal integration test stays
+ *  scheduler-owned. (2) merge-test tautology noted: the t26 missing-flags
+ *  test re-spreads the same hard-coded defaults it compares against
+ *  DEFAULT_SETTINGS, so it passes even if the mapping is wrong; fixing that
+ *  test file is out of scope for T27 (allowlist) — scheduler-owned. */
+export function probeWiringOpts(settings: Settings): { enabled?: boolean } {
+  // No Settings.probeWiring flag yet (messages.ts scheduler-owned): read it
+  // structurally so a missing flag counts as off (fail-closed) until it lands.
+  return { enabled: !!((settings as { probeWiring?: boolean }).probeWiring) };
+}
+
+/** T26 executeOne wiring (BRAIN-only, pure): maps Settings flags to the
+ *  dispatch seam. Missing flags count as off (fail-closed); kill wins
+ *  downstream via `resolveDagEnabled`. */
+export function dagDispatchOpts(
+  settings: Pick<Settings, 'dagDispatch' | 'dagCanary' | 'dagKill'>,
+  emit?: (event: TimelineEvent) => void,
+): { enabled?: boolean; canary?: boolean; kill?: boolean; emit?: (event: TimelineEvent) => void } {
+  return {
+    enabled: !!settings.dagDispatch,
+    canary: !!settings.dagCanary,
+    kill: !!settings.dagKill,
+    emit,
+  };
+}
+
 /** T16 DAG waves (BRAIN-only, pure): group steps into dependency waves in input
  *  order — a step joins the earliest wave whose predecessors are all done.
  *  Fail-closed (`[]`): empty input, duplicate ids, self-needs, dangling
@@ -446,6 +481,22 @@ export async function dispatchDagPlan<T>(
   const out: T[] = [];
   for (const w of waves) out.push(...(await dispatchDagWave(w, run)));
   return out;
+}
+
+/** T28 bank gate (BRAIN-only, pure, 0 LLM calls): centralizes the evaluator
+ *  FAIL gate for the recovery bank. True only on FAIL && shouldReplan —
+ *  the periodic (turn % 3) path (T18 pattern) routes through it; a missing
+ *  shouldReplan counts as off (fail-closed). The step-advance FAIL path
+ *  (advanceStep → evaluate → FAIL) has no bank hook — see T28 DEBT.
+ *
+ *  T28 DEBT (scheduler-owned, NOT this seam): (1) step-advance FAIL path
+ *  stays uncovered — only the periodic FAIL && shouldReplan branch tries
+ *  the bank (T18 pattern); wiring the bank into step-advance is deferred
+ *  to the scheduler. (2) T27 debt carried: executeOne dispatches a
+ *  single-step only (one DagStep through dispatchDagPlan); multi-step
+ *  fan-out across runUntilTerminal stays deferred. */
+export function shouldTryBankRecovery(opts: { verdict: string; shouldReplan?: boolean }): boolean {
+  return opts.verdict === 'FAIL' && opts.shouldReplan === true;
 }
 
 /** The exact shape the executor role returns (tool, args, result, eval counts). */
@@ -798,8 +849,8 @@ export class Orchestrator {
         if (ev.finishVerdict && ev.finishSummary) {
           return this.finalizeFinish(hot, ev.finishVerdict, ev.finishSummary);
         }
-        if (ev.verdict === 'FAIL' && ev.shouldReplan) {
-          // T8 recovery bank first: a known error signature gets a single-step
+        if (ev.verdict === 'FAIL' && ev.shouldReplan && shouldTryBankRecovery(ev)) {
+          // T8 recovery bank first (T28 gate seam above, behavior-identical): a known error signature gets a single-step
           // steer fix (cheaper than a replan); unknown signatures fall through.
           if (this.tryBacktrackBank(ev.reason)) continue;
           // Backtrack first: retrying from a remembered earlier page is cheaper than a replan
@@ -931,26 +982,57 @@ export class Orchestrator {
     // T3 think-routing seam: single-tool turns skip thinking (fast path), multi-turn
     // plans and every-3rd turn think. Layered over the body provider so the executor's
     // own hardcoded thinking flag is overridden per-turn without touching its code.
+    // T27 probe wiring (flag-gated): the think decision routes through
+    // resolveProbeRouting. Off (no Settings.probeWiring flag yet — missing
+    // counts as off) = routeThink verbatim (base route, never skip,
+    // confidence 0 — byte-identical to the T3 path). On feeds
+    // groundingProbeConfidence(priorSummary, groundingCorpus) into
+    // routeThinkProbe. Tool-skip stays inert here (tool '' + redundant
+    // false): applying shouldSkipTool pre-dispatch would need tool
+    // prediction — deferred to scheduler (see T27 DEBT).
     const stepCount = hot.plan?.steps.length ?? 1;
-    const thinkRoute = routeThink({ stepCount, turn: this.turns + 1 });
+    const probe = resolveProbeRouting({
+      stepCount,
+      turn: this.turns + 1,
+      tool: '',
+      redundant: false,
+      summary: this.priorSummary ?? '',
+      observed: this.groundingCorpus(),
+      enabled: probeWiringOpts(this.opts.settings).enabled,
+    });
+    const thinkRoute = probe.route;
     const thinkProvider = withThinkingOverride(
       this.helperProvider,
       thinkRoute === 'THINK',
       thinkRoute === 'THINK' ? 'medium' : undefined,
     );
 
-    const out = await timed('executor', () =>
-      runHelper(thinkProvider, {
-        ctx,
-        model: agent.body.model,
-        registry: this.opts.registry,
-        toolCtx,
-        toolFilter,
-        signal: this.signal,
-        numCtx: this.bodyNumCtx,
-        structured: !!this.opts.settings.structuredToolCalls,
-      }),
+    // T26 DAG wiring: settings-derived {enabled, canary, kill} routes the
+    // single step through dispatchDagPlan. Off/kill = sequential verbatim
+    // (byte-identical, no emits); on = wave dispatch + one shadow log.
+    // Multi-step fan-out across runUntilTerminal stays deferred (T27+).
+    const dagStep: DagStep = {
+      id: stepId,
+      description: hot.plan?.steps.find((s) => s.id === stepId)?.description ?? stepId,
+    };
+    const outs = await dispatchDagPlan(
+      [dagStep],
+      () =>
+        timed('executor', () =>
+          runHelper(thinkProvider, {
+            ctx,
+            model: agent.body.model,
+            registry: this.opts.registry,
+            toolCtx,
+            toolFilter,
+            signal: this.signal,
+            numCtx: this.bodyNumCtx,
+            structured: !!this.opts.settings.structuredToolCalls,
+          }),
+        ),
+      dagDispatchOpts(this.opts.settings, (e) => this.emit(e)),
     );
+    const out = outs[0];
 
     this.lastObserveTool = OBSERVATION_TOOLS.has(out.tool) ? out.tool : null;
 
