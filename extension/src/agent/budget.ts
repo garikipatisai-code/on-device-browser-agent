@@ -68,6 +68,19 @@ export function capsFor(
 
 export const COMPACT_TRIGGER_FRAC = 0.8;
 
+/** T7 probe-gate thresholds (BRAIN-only, 0 LLM calls). A cheap probe reports
+ *  0..1 confidence that the current page/workspace already holds the answer:
+ *  at/above the threshold the orchestrator may skip thinking (think) or skip a
+ *  redundant observe tool call (tool). Tuned once the probe exists; exported so
+ *  the gate and its tests pin the same value. */
+export const PROBE_THINK_SKIP_CONFIDENCE = 0.85;
+export const PROBE_TOOL_SKIP_CONFIDENCE = 0.9;
+
+/** Compact trigger: true once tokens cross frac of budget (default 80%). Pure BRAIN helper. */
+export function shouldCompact(tokens: number, budget: number, frac: number = COMPACT_TRIGGER_FRAC): boolean {
+  return tokens > budget * frac;
+}
+
 export interface BudgetCheck {
   tokens: number;
   budget: number;
@@ -88,6 +101,6 @@ export function checkBudget(
     tokens,
     budget,
     overBudget: tokens > budget,
-    shouldCompact: role === 'executor' && tokens > budget * COMPACT_TRIGGER_FRAC,
+    shouldCompact: role === 'executor' && shouldCompact(tokens, budget),
   };
 }

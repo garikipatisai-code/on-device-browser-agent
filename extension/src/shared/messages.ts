@@ -26,6 +26,18 @@ export interface Plan {
   created: number;
 }
 
+/** One node in a DAG plan (T6 seam). `needs` names the step ids that must
+ *  complete first; `provides` names the var this step publishes for `${var}`
+ *  joins in downstream steps. Lean: shape only, no executor wiring yet. */
+export interface DagStep {
+  id: string;
+  description: string;
+  successCriteria?: string;
+  toolHint?: string;
+  needs?: string[];
+  provides?: string;
+}
+
 export type DomainTier = 'read-only' | 'click-only';
 
 /** A persisted frontier config for the lead seat. 'anthropic' is Claude's own
@@ -193,6 +205,20 @@ export function assertAllowedOllamaBaseUrl(url: string): void {
   }
 }
 
+/** Canonical GBNF grammar-constrained tool-call schema (Ollama structured outputs).
+ *  `additionalProperties: false` is the teeth: the grammar rejects any key
+ *  outside {tool, args}, so a small model cannot smuggle free-form prose
+ *  alongside the tool call. Keep in sync with the executor's local copy. */
+export const TOOL_CALL_GBNF_SCHEMA = {
+  type: 'object',
+  properties: {
+    tool: { type: 'string', description: 'Exact tool name from the provided tool catalog' },
+    args: { type: 'object', description: "The tool's arguments object" },
+  },
+  required: ['tool'],
+  additionalProperties: false,
+} as const;
+
 // ---- timeline events shown to the user ----
 
 export type TimelineEvent =
@@ -312,3 +338,21 @@ export interface MetricsSnapshot {
 }
 
 export const PORT_NAME = 'browser-agent';
+
+// ---- T9 flat MCP catalog + parent_child contract (BRAIN-only, pure) ----
+
+/** One flattened tool entry for a small-model-safe MCP catalog: parameters
+ *  contain no nested `anyOf` (unions collapse to `string` at flatten time).
+ *  `parent` groups child tools under one retrieval anchor (e.g. page.*). */
+export interface FlatToolEntry {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  parent?: string;
+}
+
+/** Parent ↔ child link for parent_child retrieval (index chunks, return parents). */
+export interface ParentChildLink {
+  parent: string;
+  child: string;
+}

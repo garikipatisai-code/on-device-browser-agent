@@ -100,3 +100,31 @@ grep -n "bench]" bench-e2b-q4.log | tail -20
   `gemma4:e2b-it-q4_K_M` (4.6 GB, body), `mxbai-embed-large:latest` (669 MB, embeddingModel).
 - Disk after: `/dev/sda4 471G 133G 314G 30% /`.
 - Note: `nomic-embed-text` removed; `mxbai-embed-large` is the default embeddingModel. §2 mention of `nomic` is superseded.
+
+## 9. Quality no-perf-loss lock (2026-11-14, BRAIN-only docs)
+
+- Status: **locked**. Plan `docs/plans/quality-no-perf-loss.md`; ledger
+  `docs/plans/quality-no-perf-loss-progress.md`; evidence
+  `docs/plans/quality-no-perf-loss-evidence.json`.
+- Tasks (all passed, fast path **zero extra LLM calls**):
+  - T1 finish gate fail-closed — **6 passed**.
+  - T2 number+entity grounding — **14 passed**.
+  - T3 think-routing (retry fix) — **18 passed**.
+  - T4 hybrid stub — **72 passed**.
+  - T5 loop guards — **13 passed**.
+- Final gate: **TYPE 0 / LINT 0 / TEST 0 — 765 passed / 1 file**.
+- Properties: **fail-closed**, **single-source quick-chat**, per-role already locked.
+
+## 10. Quality T6–T10 lock (2026-11-15, BRAIN-only docs)
+
+- Status: **locked**. Evidence `docs/plans/quality-no-perf-loss-evidence.json`
+  (gate 866); ledger `docs/plans/quality-no-perf-loss-progress.md`.
+- Tasks (all passed, fast path **zero extra LLM rounds**):
+  - T6 DAG 4 passed — parse + join + deterministic dispatch gates 2/2.
+  - T7 probe 14 passed (NaN fix) — gates 2/2.
+  - T8 bank 63 passed — gates 2/2.
+  - T9 flat 12 passed (R@5 fix) — gates 2/2.
+  - T10 fusion 12 passed — gates 2/2.
+- Final gate: **TYPE 0 / LINT 0 / TEST 0 — 866 passed / 1 file**.
+- Properties: **fail-closed**, **single-source quick-chat**, RRF-60, MRL-256,
+  cascade, anchored compact, probes.

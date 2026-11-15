@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import type { ToolDefDescriptor } from '../registry';
+import type { ParentChildLink } from '@/shared/messages';
 import { withCdp } from './lifecycle';
 import { assertCanAct, DomainTierError, isBlockedUrl } from '@/agent/safety/domain_tiers';
 import { clearExtractionCache } from './aria_tool';
@@ -38,6 +39,31 @@ function tierDenyReason(err: unknown): string {
   }
   return 'blocked by domain-tier policy';
 }
+
+// T9 flat MCP parent grouping: page-level tools (DOM query, waits, fetch,
+// expect, mutation) are CHILD chunks of one flat parent anchor 'page'.
+// Parent_child retrieval indexes these children and returns the parent.
+// Agreement with workflow_memory.parentForTool (page.* + dom.* → 'page')
+// is pinned by the flat-retriever sync test.
+
+/** Flat parent anchor shared by all page-level child tools. */
+export const PAGE_PARENT = 'page' as const;
+
+/** Child tool names grouped under the flat 'page' parent. */
+export const PAGE_CHILD_TOOLS = [
+  'dom.query',
+  'dom.click_selector',
+  'page.wait_for',
+  'page.fetch',
+  'page.expect',
+  'page.wait_for_mutation',
+] as const;
+
+/** Parent ↔ child links for parent_child retrieval indexing of page tools. */
+export const PAGE_LINKS: ParentChildLink[] = PAGE_CHILD_TOOLS.map((child) => ({
+  parent: PAGE_PARENT,
+  child,
+}));
 
 // ── dom.query ─────────────────────────────────────────────
 // Query the rendered DOM by CSS selector. When called without a selector

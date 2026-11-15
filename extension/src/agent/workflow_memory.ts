@@ -11,6 +11,7 @@
 import { memoryGet, memorySet } from '@/background/state_store';
 import { redact } from './safety/redact';
 import { ulid } from './util';
+import type { FlatToolEntry, ParentChildLink } from '@/shared/messages';
 
 interface WorkflowStep {
   instruction: string;
@@ -740,4 +741,357 @@ export function deriveDomain(
     }
   }
   return hostFromGoal(goal) ?? '*';
+}
+
+// ---- T9 flat MCP catalog + parent_child retrieval (BRAIN-only, pure) ----
+// T8 debt carried forward (deferred to scheduler, NOT fixed here):
+// - recovery-bank retries are bounded only by maxTurns (no dedicated bank budget);
+// - steerNotes cap-5 eviction is FIFO without priority. See orchestrator notes.
+
+/** True when any `anyOf`/`oneOf` union key appears anywhere in the schema tree. */
+export function hasNestedAnyOf(schema: unknown): boolean {
+  if (Array.isArray(schema)) return schema.some(hasNestedAnyOf);
+  if (schema !== null && typeof schema === 'object') {
+    const rec = schema as Record<string, unknown>;
+    if (Array.isArray(rec.anyOf) || Array.isArray(rec.oneOf)) return true;
+    return Object.values(rec).some(hasNestedAnyOf);
+  }
+  return false;
+}
+
+function flattenNode(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(flattenNode);
+  if (node !== null && typeof node === 'object') {
+    const rec = node as Record<string, unknown>;
+    if (Array.isArray(rec.anyOf) || Array.isArray(rec.oneOf)) {
+      // Lean flat MCP: unions (anyOf/oneOf) collapse to string (small-model safe, no nested unions).
+      const out: Record<string, unknown> = { type: 'string' };
+      if (typeof rec.description === 'string') out.description = rec.description;
+      return out;
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rec)) out[k] = flattenNode(v);
+    return out;
+  }
+  return node;
+}
+
+/** Flatten one tool input schema: no `anyOf`/`oneOf` remains anywhere. */
+export function flattenJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  return flattenNode(schema) as Record<string, unknown>;
+}
+
+interface ToolDefLike {
+  function: { name: string; description?: string; parameters?: unknown };
+}
+
+/** Parent for flat-catalog grouping: page.* + dom.* tools share one anchor. */
+export function parentForTool(name: string): string | undefined {
+  if (name.startsWith('page.') || name.startsWith('dom.')) return 'page';
+  return undefined;
+}
+
+/** Flatten a registry `toolDefs()` array into small-model-safe entries. */
+export function flattenToolCatalog(defs: ToolDefLike[]): FlatToolEntry[] {
+  return defs.map((d) => {
+    const params =
+      d.function.parameters !== null && typeof d.function.parameters === 'object'
+        ? flattenJsonSchema(d.function.parameters as Record<string, unknown>)
+        : {};
+    const entry: FlatToolEntry = {
+      name: d.function.name,
+      description: d.function.description ?? '',
+      parameters: params,
+    };
+    const parent = parentForTool(d.function.name);
+    if (parent) entry.parent = parent;
+    return entry;
+  });
+}
+
+// ---- T4 hybrid retrieval stub (RRF + FLAT_FALLBACK, binary-MRL-512) ----------
+// T10: RRF K=60 pinned, MRL-256 prefix Hamming + full rescore, cascade cutoff
+// (pure stub, no model).
+
+/** RRF fusion constant (pinned: changing it reorders every fused ranking). */
+export const RRF_K = 60;
+
+/** MRL-256 prefix length in bytes (first 256 bits of the 512-bit vector). */
+export const MRL_PREFIX_BYTES = 32;
+
+/** Default cascade prefilter width (MRL-256 cheap pass). */
+export const CASCADE_PREFILTER_TOPK = 5;
+
+/** Default cascade score cutoff (pure score filter, no model). */
+export const CASCADE_SCORE_CUTOFF = 0.02;
+
+/** Fallback mode marker: keyword-only linear scan (no usable query vector). */
+export const FLAT_FALLBACK = 'FLAT_FALLBACK' as const;
+export type HybridRetrievalMode = 'RRF' | typeof FLAT_FALLBACK;
+
+export interface HybridQuery {
+  text: string;
+  vec512?: Uint8Array;
+  topK?: number;
+}
+
+export interface HybridHit {
+  anchor: string;
+  summary: string;
+  score: number;
+  mode: HybridRetrievalMode;
+}
+
+interface HybridDoc {
+  anchor: string;
+  summary: string;
+  vec512: Uint8Array;
+}
+
+function isBinaryMrl512(v: unknown): v is Uint8Array {
+  return v instanceof Uint8Array && v.length === 64;
+}
+
+function popcountByte(b: number): number {
+  let x = b & 0xff;
+  let c = 0;
+  while (x) {
+    c += x & 1;
+    x >>= 1;
+  }
+  return c;
+}
+
+function hamming64(a: Uint8Array, b: Uint8Array): number {
+  let d = 0;
+  for (let i = 0; i < 64; i++) d += popcountByte(a[i] ^ b[i]);
+  return d;
+}
+
+/** Full-vector Hamming distance (equal-length binary vectors). */
+export function hammingDistance(a: Uint8Array, b: Uint8Array): number {
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) throw new Error('vectors must be Uint8Array');
+  if (a.length !== b.length) throw new Error('vectors must be equal length');
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d += popcountByte(a[i] ^ b[i]);
+  return d;
+}
+
+/** MRL-256 prefix Hamming: first 32 bytes (256 bits) only. */
+export function hammingDistance256(a: Uint8Array, b: Uint8Array): number {
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) throw new Error('vectors must be Uint8Array');
+  if (a.length < MRL_PREFIX_BYTES || b.length < MRL_PREFIX_BYTES) throw new Error('vectors too short for MRL-256 prefix');
+  let d = 0;
+  for (let i = 0; i < MRL_PREFIX_BYTES; i++) d += popcountByte(a[i] ^ b[i]);
+  return d;
+}
+
+/** Pure cascade score cutoff (stub, no model): keep hits at/above cutoff, order preserved. */
+export function cascadeCutoff(hits: HybridHit[], cutoff: number = CASCADE_SCORE_CUTOFF): HybridHit[] {
+  if (!Array.isArray(hits)) return [];
+  if (!Number.isFinite(cutoff)) return [...hits];
+  return hits.filter((h) => h.score >= cutoff);
+}
+
+function keywordOverlap(queryText: string, summary: string): number {
+  const q = new Set(tokenize(queryText));
+  let overlap = 0;
+  for (const t of tokenize(summary)) if (q.has(t)) overlap += 1;
+  return overlap;
+}
+
+/** Minimal hybrid retriever: RRF fusion of keyword + binary-vector ranks,
+ *  flat keyword linear scan when no usable query vector is supplied.
+ *  T9 parent_child: index chunks via indexChild, queries return the PARENT
+ *  anchor (deduped, best-score wins). FLAT_FALLBACK mode is preserved. */
+export class HybridRetriever {
+  private docs: HybridDoc[] = [];
+  private childToParent = new Map<string, string>();
+  private parentSummaries = new Map<string, string>();
+
+  index(anchor: string, summary: string, vec512: Uint8Array): void {
+    if (!isBinaryMrl512(vec512)) throw new Error('vec512 must be Uint8Array(64)');
+    this.docs.push({ anchor, summary, vec512: new Uint8Array(vec512) });
+    this.parentSummaries.set(anchor, summary);
+  }
+
+  /** Index a child chunk under a parent anchor. Query hits on the child
+   *  resolve to the parent anchor (parent summary kept when the parent was
+   *  indexed, else the matching chunk summary). */
+  indexChild(parentAnchor: string, childAnchor: string, summary: string, vec512: Uint8Array): void {
+    if (!isBinaryMrl512(vec512)) throw new Error('vec512 must be Uint8Array(64)');
+    const link: ParentChildLink = { parent: parentAnchor, child: childAnchor };
+    this.docs.push({ anchor: link.child, summary, vec512: new Uint8Array(vec512) });
+    this.childToParent.set(link.child, link.parent);
+  }
+
+  private resolveParents(hits: HybridHit[]): HybridHit[] {
+    const seen = new Set<string>();
+    const out: HybridHit[] = [];
+    for (const h of hits) {
+      const parent = this.childToParent.get(h.anchor) ?? h.anchor;
+      if (seen.has(parent)) continue;
+      seen.add(parent);
+      if (parent === h.anchor) {
+        out.push(h);
+        continue;
+      }
+      // Child hit → parent anchor with the parent summary when the parent was
+      // indexed, else the matching chunk summary.
+      out.push({ ...h, anchor: parent, summary: this.parentSummaries.get(parent) ?? h.summary });
+    }
+    return out;
+  }
+
+  query(q: HybridQuery): HybridHit[] {
+    const topK = q.topK ?? 5;
+    if (this.docs.length === 0) return [];
+    // Flat fallback: keyword-only linear scan.
+    if (!isBinaryMrl512(q.vec512)) {
+      const ranked = this.docs
+        .map((d, i) => ({ d, i, s: keywordOverlap(q.text, d.summary) }))
+        .sort((a, b) => b.s - a.s || a.i - b.i)
+        .map(({ d, s }) => ({ anchor: d.anchor, summary: d.summary, score: s, mode: FLAT_FALLBACK as HybridRetrievalMode }));
+      return this.resolveParents(ranked).slice(0, topK);
+    }
+    const qv = q.vec512;
+    const kwRanked = this.docs
+      .map((d, i) => ({ d, i, s: keywordOverlap(q.text, d.summary) }))
+      .sort((a, b) => b.s - a.s || a.i - b.i);
+    const vecRanked = this.docs
+      .map((d, i) => ({ d, i, dist: hamming64(qv, d.vec512) }))
+      .sort((a, b) => a.dist - b.dist || a.i - b.i);
+    const K = RRF_K;
+    const fused = new Map<HybridDoc, number>();
+    kwRanked.forEach((r, rank) => fused.set(r.d, (fused.get(r.d) ?? 0) + 1 / (K + rank + 1)));
+    vecRanked.forEach((r, rank) => fused.set(r.d, (fused.get(r.d) ?? 0) + 1 / (K + rank + 1)));
+    const distByDoc = new Map<HybridDoc, number>(vecRanked.map((r) => [r.d, r.dist]));
+    const ranked = [...fused.entries()]
+      .map(([d, score]) => ({ anchor: d.anchor, summary: d.summary, score, dist: distByDoc.get(d) ?? 0, mode: 'RRF' as HybridRetrievalMode }))
+      // Full-vector rescore order: RRF score first, then full Hamming distance.
+      .sort((a, b) => b.score - a.score || a.dist - b.dist)
+      .map(({ anchor, summary, score, mode }) => ({ anchor, summary, score, mode }));
+    return this.resolveParents(ranked).slice(0, topK);
+  }
+
+  /** T10 cascade: MRL-256 prefix prefilter → full-vector rescore → RRF fusion → score cutoff.
+   *  Pure stub (no model): deterministic, sync, 0 LLM calls.
+   *  NOTE: zero production call-sites as of T10 — intentional stub; wiring deferred to scheduler. */
+  queryCascade(q: HybridQuery, prefilterTopK: number = CASCADE_PREFILTER_TOPK, cutoff: number = CASCADE_SCORE_CUTOFF): HybridHit[] {
+    const topK = q.topK ?? 5;
+    if (this.docs.length === 0) return [];
+    if (!isBinaryMrl512(q.vec512)) {
+      const ranked = this.docs
+        .map((d, i) => ({ d, i, s: keywordOverlap(q.text, d.summary) }))
+        .sort((a, b) => b.s - a.s || a.i - b.i)
+        .map(({ d, s }) => ({ anchor: d.anchor, summary: d.summary, score: s, mode: FLAT_FALLBACK as HybridRetrievalMode }));
+      return cascadeCutoff(this.resolveParents(ranked), cutoff).slice(0, topK);
+    }
+    const qv = q.vec512;
+    // Cheap MRL-256 pass: keep the closest prefilterTopK by prefix Hamming.
+    const preK = Number.isFinite(prefilterTopK) ? Math.max(1, Math.floor(prefilterTopK)) : CASCADE_PREFILTER_TOPK;
+    const preRanked = this.docs
+      .map((d, i) => ({ d, i, dist: hammingDistance256(qv, d.vec512) }))
+      .sort((a, b) => a.dist - b.dist || a.i - b.i)
+      .slice(0, preK);
+    const shortlist = new Set(preRanked.map((r) => r.d));
+    // Full-vector rescore on the shortlist only.
+    const vecRanked = preRanked
+      .map((r) => ({ d: r.d, i: r.i, dist: hamming64(qv, r.d.vec512) }))
+      .sort((a, b) => a.dist - b.dist || a.i - b.i);
+    const kwRanked = this.docs
+      .map((d, i) => ({ d, i, s: keywordOverlap(q.text, d.summary) }))
+      .filter((r) => shortlist.has(r.d))
+      .sort((a, b) => b.s - a.s || a.i - b.i);
+    const fused = new Map<HybridDoc, number>();
+    kwRanked.forEach((r, rank) => fused.set(r.d, (fused.get(r.d) ?? 0) + 1 / (RRF_K + rank + 1)));
+    vecRanked.forEach((r, rank) => fused.set(r.d, (fused.get(r.d) ?? 0) + 1 / (RRF_K + rank + 1)));
+    const distByDoc = new Map<HybridDoc, number>(vecRanked.map((r) => [r.d, r.dist]));
+    const ranked = [...fused.entries()]
+      .map(([d, score]) => ({ anchor: d.anchor, summary: d.summary, score, dist: distByDoc.get(d) ?? 0, mode: 'RRF' as HybridRetrievalMode }))
+      .sort((a, b) => b.score - a.score || a.dist - b.dist)
+      .map(({ anchor, summary, score, mode }) => ({ anchor, summary, score, mode }));
+    return cascadeCutoff(this.resolveParents(ranked), cutoff).slice(0, topK);
+  }
+}
+
+// ---- T8 PALADIN recovery bank (BRAIN-only, pure) ----------------------------
+//
+// Evaluator FAILs with recognizable error signatures get a single-step steer
+// fix (zero replans) instead of burning a full planner replan. Unknown
+// signatures return null so the caller falls back to backtrack → replan.
+
+export interface RecoveryEntry {
+  /** Lowercase substring matched against the (lowercased) FAIL reason. */
+  pattern: string;
+  /** Single short steer instruction (<1 step: no replan, no multi-part plan). */
+  fix: string;
+}
+
+export const RECOVERY_BANK: RecoveryEntry[] = [
+  { pattern: 'aria.extract returned empty', fix: 'Re-read the page with aria.extract once more; if still empty, report the field as not shown — never invent it.' },
+  { pattern: 'aria.extract timed out', fix: 'Wait for the tab to settle, then re-read once; act on the fresh page instead of retrying blindly.' },
+  { pattern: 'vision.read returned blank', fix: 'Re-read with vision.read after the page settles; report only what is actually visible in the vision image.' },
+  { pattern: 'element is no longer attached', fix: 'Re-read the page to refresh element indices, then click the new index — never reuse a stale index.' },
+  { pattern: 'element not clickable', fix: 'Scroll the element into view, then click once; if still blocked, use the nearest visible link instead.' },
+  { pattern: 'click index out of range', fix: 'Re-read the page for fresh indices and click the correct new index for the same target.' },
+  { pattern: 'type target field not found', fix: 'Re-read the page to find the input field, then type into the fresh index.' },
+  { pattern: 'field is readonly', fix: 'The field is readonly — do not type into it; read its displayed value and continue.' },
+  { pattern: 'select option not found', fix: 'Re-read the dropdown and pick the closest matching option text exactly as shown.' },
+  { pattern: 'no file chosen', fix: 'Attach the résumé via tab.upload_file with the stored file path — never click a hidden file input.' },
+  { pattern: 'blocked url', fix: 'The domain is blocked by tiers — stay on an allowed domain and answer from what was already read.' },
+  { pattern: 'invalid scheme', fix: 'Use an http(s) page URL for navigation — chrome/file schemes can never be opened.' },
+  { pattern: 'navigation timeout', fix: 'Wait for the tab to settle and re-read once before acting further.' },
+  { pattern: 'no active tab', fix: 'Open the target page first, then read it — there is no tab to act on yet.' },
+  { pattern: 'reached end of page', fix: 'Report what was collected so far and say the list may be partial — do not loop further.' },
+  { pattern: 'search returned no results', fix: 'Simplify the search query to fewer distinctive words and search once more.' },
+  { pattern: 'search query was empty', fix: 'Build a concrete query from the goal terms and search once.' },
+  { pattern: 'search rate limited', fix: 'Wait briefly, then retry the same search once with the same query.' },
+  { pattern: 'open_result index out of range', fix: 'Run the web search again to refresh results, then open a valid index.' },
+  { pattern: 'no prior search', fix: 'Run a web search first, then open one of its results.' },
+  { pattern: 'consent overlay', fix: 'Dismiss the consent overlay once, then read the real page content.' },
+  { pattern: 'captcha wall', fix: 'Pause and ask the human to resolve the check — never attempt to solve it.' },
+  { pattern: 'read-only domain', fix: 'This is a read-only domain — read and report only, never click or type here.' },
+  { pattern: 'click requires upgrade', fix: 'Clicking needs a domain upgrade — read what is visible and report instead.' },
+  { pattern: 'blocked scheme', fix: 'That URL scheme cannot be opened — use an http(s) page instead.' },
+  { pattern: 'ungrounded number', fix: 'Report only numbers exactly as grounded in the observations — never estimate.' },
+  { pattern: 'field reported absent', fix: 'Re-answer from the full corpus of earlier reads before claiming a field is missing.' },
+  { pattern: 'wrong page', fix: 'Go back to the earlier known-good page and try a different link from there.' },
+  { pattern: 'list incomplete', fix: 'Scroll or open the next page to capture the rest, then report every item.' },
+  { pattern: 'mixed comparison basis', fix: 'Re-gather every item from the same anchor source — never mix site bases.' },
+  { pattern: 'vague range', fix: 'Replace the vague range with the precise figure exactly as the source states it.' },
+  { pattern: 'hallucinated phone', fix: 'Report only contact fields exactly as shown on the page; mark the rest not shown.' },
+  { pattern: 'no citation', fix: 'Cite the specific sources used for each reported fact.' },
+  { pattern: 'prose answer not grounded', fix: 'Answer again using only values grounded in the observations already gathered.' },
+  { pattern: 'not in workspace', fix: 'Answer from the workspace observations already saved — do not open new tabs.' },
+  { pattern: 'repeated same tool call', fix: 'Stop repeating the call — try a different tool or method for this step.' },
+  { pattern: 'unknown tool loop', fix: 'Use only tools from the tool catalog — check the catalog names and retry.' },
+  { pattern: 'no tool call', fix: 'Emit one concrete tool call for the current step now.' },
+  { pattern: 'aria.extract back-to-back', fix: 'Act on the page just read instead of re-extracting it.' },
+  { pattern: 'plan has no steps', fix: 'Replan into concrete steps from the goal — one step per page or query.' },
+  { pattern: 'replan limit', fix: 'Salvage the best partial answer from the corpus instead of replanning.' },
+  { pattern: 'no such tab', fix: 'Open the page again to get a live tab, then continue from there.' },
+  { pattern: 'network error fetching', fix: 'Retry the same read once — transient network errors usually clear.' },
+  { pattern: 'page still loading', fix: 'Wait for the tab to settle, then re-read the fresh page.' },
+  { pattern: 'workspace entry missing', fix: 'Save the read to the workspace first, then cite the saved entry.' },
+  { pattern: 'scratchpad overflow', fix: 'Continue from the compacted scratchpad summary — do not re-read gathered pages.' },
+  { pattern: 'blocked but facts gathered', fix: 'Salvage the answer from the facts already gathered and report it.' },
+  { pattern: 'failed but answer in corpus', fix: 'Answer from the corpus of earlier reads instead of giving up.' },
+  { pattern: 'login required', fix: 'Stop and ask the human to log in — never attempt credentials yourself.' },
+  { pattern: 'subscribe to read', fix: 'Report the snippet content as a partial answer and note the rest is paywalled.' },
+  { pattern: 'submit button not found', fix: 'Re-read the form to locate the submit control, then proceed.' },
+  { pattern: 'file input is hidden', fix: 'Use tab.upload_file for the hidden input — never click it directly.' },
+  { pattern: 'rating graphic with no number', fix: 'Report the rating as not shown — a graphic without a number is unreadable.' },
+  { pattern: 'table too large', fix: 'Find the specific row asked for and report only that row.' },
+  { pattern: 'computed mentally', fix: 'Search the web for the conversion value instead of computing it.' },
+];
+
+/** First bank entry whose pattern appears in the reason (case-insensitive), else null. */
+export function lookupRecovery(reason: string): RecoveryEntry | null {
+  const hay = (reason ?? '').toLowerCase();
+  if (!hay) return null;
+  for (const entry of RECOVERY_BANK) {
+    if (hay.includes(entry.pattern)) return entry;
+  }
+  return null;
 }

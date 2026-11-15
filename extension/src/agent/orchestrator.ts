@@ -2,7 +2,8 @@
 // IDLE → PLANNING → EXECUTING → EVALUATING → EXECUTING (next step) → ... → DONE | ABORTED.
 
 import type { OllamaClient } from '@/background/ollama';
-import type { Plan, Settings, Step, TimelineEvent } from '@/shared/messages';
+import type { Plan, Settings, Step, DagStep, TimelineEvent } from '@/shared/messages';
+import { TOOL_CALL_GBNF_SCHEMA } from '@/shared/messages';
 import {
   type AgentStateHot,
   _setHot,
@@ -27,9 +28,9 @@ import { addGroundedFact, renderFacts, type Fact } from './facts';
 import { runHeadChef } from './framework/head_chef';
 import { runSousChef, verifyFinish, gateFinishSummary } from './framework/sous_chef';
 import { runHelper, runHelperCompaction } from './framework/helper';
-import { resolveProvider, type ModelProvider } from './framework/provider';
+import { resolveProvider, withThinkingOverride, type ModelProvider } from './framework/provider';
 import { actionHash, TokenRatioEstimator, ulid } from './util';
-import { checkBudget, clampNumCtx, NUM_CTX, capsFor } from './budget';
+import { checkBudget, clampNumCtx, NUM_CTX, capsFor, PROBE_THINK_SKIP_CONFIDENCE, PROBE_TOOL_SKIP_CONFIDENCE } from './budget';
 import {
   type BreakerState,
   checkBreaker,
@@ -48,7 +49,7 @@ import { getDomainTier, hostFor, isBlockedUrl, TIER_ORDER } from './safety/domai
 import { sleep } from '@/background/signal';
 import { waitForTabSettled } from './tools/browser/tab';
 import { clearSearchResults } from './tools/browser/search';
-import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, traceWorthLearning, markWorkflowTrusted, quarantineWorkflow, deriveDomain, type Workflow } from './workflow_memory';
+import { matchWorkflow, renderRecipe, loadWorkflows, saveWorkflow, traceToWorkflow, traceHasRedundancy, traceWorthLearning, markWorkflowTrusted, quarantineWorkflow, deriveDomain, lookupRecovery, type Workflow } from './workflow_memory';
 import { renderProfileBlock } from './profile';
 
 // Tools whose output IS page content. The orchestrator carries the most recent
@@ -66,6 +67,178 @@ const OBSERVATION_TOOLS = new Set(['aria.extract', 'vision.read']);
 // new page afterward (a small model often fails to re-read and re-uses stale element
 // indices, or produces no tool call when forced). tab.type counts only when it submits.
 const NAVIGATING_TOOLS = new Set(['tab.click', 'open_result', 'tab.open']);
+
+/** Think-routing: single-tool tasks run NO_THINK (fast, low VRAM); multi-turn
+ *  tasks and every-3rd turn run THINK (re Grounding before the next act). */
+export type ThinkRoute = 'NO_THINK' | 'THINK';
+
+/** Executor self-correction is bounded to a single nudge retry (first + 1). */
+export const EXECUTOR_RETRY_MAX = 1;
+
+/** True while another executor attempt is allowed (attempts so far < max). */
+export function shouldRetryExecutor(attemptsSoFar: number): boolean {
+  return attemptsSoFar < EXECUTOR_RETRY_MAX;
+}
+
+/** Quick-chat FAST_PATH helper — single source is background/quick_chat
+ *  (isTrivialChitchat); re-exported here under the orchestrator's name so
+ *  tests/callers have one seam. Helpers-only seam: stageGate/fast-path are
+ *  NOT yet wired into evaluate/index — wiring needs a bench run, deferred. */
+export { isTrivialChitchat as isQuickChat } from '@/background/quick_chat';
+
+/** Loop-guard escalation stages. Bounded: retry → reformat → switch → terminate,
+ *  then sticks at terminate (no extra action past it). */
+export type LoopGuardAction = 'retry' | 'reformat' | 'switch' | 'terminate';
+
+export class LoopGuard {
+  private failures = 0;
+
+  /** Evaluator stage-gate: only a PASS verdict advances the plan. */
+  stageGate(verdict: 'PASS' | 'FAIL'): boolean {
+    return verdict === 'PASS';
+  }
+
+  /** Record one failure; returns the bounded next action (<1 extra past terminate). */
+  recordFailure(): LoopGuardAction {
+    this.failures += 1;
+    if (this.failures <= 1) return 'retry';
+    if (this.failures <= 2) return 'reformat';
+    if (this.failures <= 3) return 'switch';
+    return 'terminate';
+  }
+
+  get failureCount(): number {
+    return this.failures;
+  }
+}
+
+/** Route think on/off: every-3rd turn always re-thinks; multi-step plans think;
+ *  otherwise (single-tool, non-3rd turn) skip thinking. `turn` is 1-based. */
+export function routeThink(opts: { stepCount: number; turn: number }): ThinkRoute {
+  if (opts.turn > 0 && opts.turn % 3 === 0) return 'THINK';
+  if (opts.stepCount > 1) return 'THINK';
+  return 'NO_THINK';
+}
+
+/** T7 probe-gated think routing (BRAIN-only, pure): layers a cheap confidence
+ *  probe over routeThink. A high-confidence probe (page/workspace already holds
+ *  the answer) downgrades a base THINK to NO_THINK; a base NO_THINK stays
+ *  NO_THINK. `probeConfidence` is 0..1 (missing/NaN counts as 0 = no skip).
+ *  T6 debt (deferred to scheduler, NOT this seam): DAG semantic validation
+ *  (cyclic `needs`, over-deep `${var}` chains) + dispatch fallback
+ *  idempotence (sequential retry may re-run a side-effecting wave step). */
+export function routeThinkProbe(opts: { stepCount: number; turn: number; probeConfidence?: number }): ThinkRoute {
+  const base = routeThink({ stepCount: opts.stepCount, turn: opts.turn });
+  if (base === 'NO_THINK') return 'NO_THINK';
+  const conf = typeof opts.probeConfidence === 'number' && Number.isFinite(opts.probeConfidence) ? opts.probeConfidence : 0;
+  if (conf >= PROBE_THINK_SKIP_CONFIDENCE) return 'NO_THINK';
+  return 'THINK';
+}
+
+/** T7 probe-gated tool skip (BRAIN-only, pure): true ONLY for a redundant
+ *  observe tool (`aria.extract`/`vision.read`) with probe confidence at/above
+ *  PROBE_TOOL_SKIP_CONFIDENCE. Never true for navigating/acting tools
+ *  (`tab.click`, `tab.open`, `open_result`, `tab.type`, …) or any non-observe
+ *  tool — a skipped act could strand the run; a skipped re-read only drops a
+ *  duplicate. `redundant` must be explicitly true (fail-closed). */
+export function shouldSkipTool(opts: { tool: string; probeConfidence?: number; redundant: boolean }): boolean {
+  if (!opts.redundant) return false;
+  if (!OBSERVATION_TOOLS.has(opts.tool)) return false;
+  const conf = typeof opts.probeConfidence === 'number' && Number.isFinite(opts.probeConfidence) ? opts.probeConfidence : 0;
+  return conf >= PROBE_TOOL_SKIP_CONFIDENCE;
+}
+
+/** T10 anchored compact input (BRAIN-only, pure, 0 LLM calls). */
+export interface AnchoredCompactInput {
+  goal: string;
+  facts: string;
+  anchor: string;
+  scratch: string;
+  maxChars: number;
+}
+
+/** T10 anchored compact (BRAIN-only, pure): header preserves goal+facts+anchor,
+ *  then fills with the scratch PREFIX (head, not tail) up to maxChars.
+ *  FACTS and ANCHOR are never truncated — goal is truncated first to fit, then
+ *  scratch; if the mandatory facts+anchor alone exceed the budget the full
+ *  header is returned intact (over budget) rather than cutting them.
+ *  NOTE: zero production call-sites as of T10 — intentional stub; wiring deferred to scheduler. */
+export function anchoredCompact(input: AnchoredCompactInput): string {
+  const goal = input.goal ?? '';
+  const facts = input.facts ?? '';
+  const anchor = input.anchor ?? '';
+  const scratch = input.scratch ?? '';
+  const maxChars = Number.isFinite(input.maxChars) && input.maxChars > 0 ? Math.floor(input.maxChars) : 0;
+  if (maxChars <= 0) return '';
+  const fixed = `FACTS: ${facts}\nANCHOR: ${anchor}\n`;
+  const goalPrefix = 'GOAL: ';
+  const goalSuffix = '\n';
+  if (fixed.length + goalPrefix.length + goalSuffix.length >= maxChars) {
+    return `GOAL: ${goal}\n${fixed}`;
+  }
+  const goalRoom = maxChars - fixed.length - goalPrefix.length - goalSuffix.length;
+  const header = `${goalPrefix}${goal.slice(0, goalRoom)}${goalSuffix}${fixed}`;
+  const room = maxChars - header.length;
+  return header + scratch.slice(0, room);
+}
+
+/** Structured-output format for the executor path. Returns the GBNF schema
+ *  (additionalProperties:false) when enabled, else undefined (byte-identical
+ *  default path). The executor consumes the boolean; this helper is the seam
+ *  that pins the exact schema the flag implies. */
+export function structuredToolCallFormat(structured: boolean): typeof TOOL_CALL_GBNF_SCHEMA | undefined {
+  return structured ? TOOL_CALL_GBNF_SCHEMA : undefined;
+}
+
+/** T6 DAG seam: parse a raw plan into validated DagSteps, fail-closed (`[]`
+ *  on any invalid shape). Pure + deterministic: input order preserved. */
+export function parseDagPlan(raw: unknown): DagStep[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const steps = (raw as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) return [];
+  const out: DagStep[] = [];
+  for (const s of steps) {
+    if (!s || typeof s !== 'object') return [];
+    const r = s as Record<string, unknown>;
+    if (typeof r.id !== 'string' || !r.id || typeof r.description !== 'string' || !r.description) return [];
+    const step: DagStep = { id: r.id, description: r.description };
+    if (typeof r.successCriteria === 'string') step.successCriteria = r.successCriteria;
+    if (typeof r.toolHint === 'string') step.toolHint = r.toolHint;
+    if (r.needs !== undefined) {
+      if (!Array.isArray(r.needs) || r.needs.some((n) => typeof n !== 'string')) return [];
+      step.needs = [...(r.needs as string[])];
+    }
+    if (r.provides !== undefined) {
+      if (typeof r.provides !== 'string' || !r.provides) return [];
+      step.provides = r.provides;
+    }
+    out.push(step);
+  }
+  return out;
+}
+
+/** Substitute `${var}` refs from `vars`; unknown vars become `''`.
+ *  Pure + deterministic (single left-to-right pass). */
+export function joinVarRefs(template: string, vars: Record<string, string>): string {
+  return template.replace(/\$\{([^}]+)\}/g, (_m, name: string) => vars[name] ?? '');
+}
+
+/** Fan one wave of independent steps out in parallel — `Promise.all` keeps
+ *  results in input order (deterministic). On any failure, fall back to a
+ *  sequential in-order retry. The runner is injected (0 LLM calls in test);
+ *  production passes a `runHelper`-backed runner. */
+export async function dispatchDagWave<T>(
+  steps: DagStep[],
+  run: (step: DagStep) => Promise<T>,
+): Promise<T[]> {
+  try {
+    return await Promise.all(steps.map((s) => run(s)));
+  } catch {
+    const out: T[] = [];
+    for (const s of steps) out.push(await run(s));
+    return out;
+  }
+}
 
 /** The exact shape the executor role returns (tool, args, result, eval counts). */
 type ExecutorOut = ExecutorOutput;
@@ -245,7 +418,9 @@ export class Orchestrator {
 
   /** Inject a mid-run user correction ("steer"). Surfaced as high-priority guidance on the next
    *  planner/executor turn — the user redirecting a live task without aborting it. Best-effort:
-   *  blank input is ignored; bounded to the last few so guidance can't grow unbounded. */
+   *  blank input is ignored; bounded to the last few so guidance can't grow unbounded.
+   *  T8 DEBT (deferred to scheduler, NOT fixed here): the cap-5 FIFO eviction drops the
+   *  oldest steer note without priority — a scheduler-owned queue should rank/persist them. */
   steer(text: string): void {
     const t = text.trim();
     if (!t) return;
@@ -307,12 +482,12 @@ export class Orchestrator {
         if (v.ok) {
           return this.finalizeFinish(hot, 'success', fin.summary);
         }
+        if (!shouldRetryExecutor(this.verifyAttempts)) {
+          return this.finishOk(hot, 'partial', `${fin.summary}\n\n[unverified against page: ${v.reason}]`);
+        }
         this.verifyAttempts += 1;
         this.markDirty('finish rejected (ungrounded)');
         this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `finish rejected (attempt ${this.verifyAttempts}): ${v.reason}` });
-        if (this.verifyAttempts >= 2) {
-          return this.finishOk(hot, 'partial', `${fin.summary}\n\n[unverified against page: ${v.reason}]`);
-        }
         // Corrective turn: nudge the executor to re-read or report honestly, then retry.
         const sp = await getScratchpad(this.taskId);
         await setScratchpad(
@@ -329,8 +504,12 @@ export class Orchestrator {
         if (execOut.tool === 'answer') {
           const v = verifyFinish(execOut.result.content ?? '', this.groundingCorpus(), this.facts);
           if (!v.ok) {
+            if (!shouldRetryExecutor(this.verifyAttempts)) {
+              return this.finishOk(hot, 'partial', `${execOut.result.content ?? ''}\n\n[unverified against page: ${v.reason}]`);
+            }
+            this.verifyAttempts += 1;
             this.markDirty('mid-plan prose answer ungrounded');
-            this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `prose answer rejected (${v.reason})` });
+            this.emit({ kind: 'log', ts: Date.now(), level: 'warn', message: `prose answer rejected (attempt ${this.verifyAttempts}): ${v.reason}` });
             const sp = await getScratchpad(this.taskId);
             await setScratchpad(
               this.taskId,
@@ -408,6 +587,9 @@ export class Orchestrator {
           return this.finalizeFinish(hot, ev.finishVerdict, ev.finishSummary);
         }
         if (ev.verdict === 'FAIL' && ev.shouldReplan) {
+          // T8 recovery bank first: a known error signature gets a single-step
+          // steer fix (cheaper than a replan); unknown signatures fall through.
+          if (this.tryBacktrackBank(ev.reason)) continue;
           // Backtrack first: retrying from a remembered earlier page is cheaper than a replan
           // and often enough (wrong product page → go back to the results list). Falls through
           // to the replan path when there's no usable history or the backtrack budget is spent.
@@ -534,8 +716,19 @@ export class Orchestrator {
     const blocked = this.lastObserveTool;
     const toolFilter = blocked ? (name: string) => name !== blocked : undefined;
 
+    // T3 think-routing seam: single-tool turns skip thinking (fast path), multi-turn
+    // plans and every-3rd turn think. Layered over the body provider so the executor's
+    // own hardcoded thinking flag is overridden per-turn without touching its code.
+    const stepCount = hot.plan?.steps.length ?? 1;
+    const thinkRoute = routeThink({ stepCount, turn: this.turns + 1 });
+    const thinkProvider = withThinkingOverride(
+      this.helperProvider,
+      thinkRoute === 'THINK',
+      thinkRoute === 'THINK' ? 'medium' : undefined,
+    );
+
     const out = await timed('executor', () =>
-      runHelper(this.helperProvider, {
+      runHelper(thinkProvider, {
         ctx,
         model: agent.body.model,
         registry: this.opts.registry,
@@ -775,6 +968,23 @@ export class Orchestrator {
     this.steer(
       `Backtrack: you are back on an earlier page${restored.url ? ` (${restored.url})` : ''}. The current approach FAILED — try a DIFFERENT link, tab, or method from here.`,
     );
+    return true;
+  }
+
+  /** T8 PALADIN recovery bank: on an evaluator FAIL, try a single-step bank fix
+   *  (steer + best-effort backtrack) before burning a full replan. Returns true
+   *  when a bank entry matched (caller retries the step); false lets the existing
+   *  backtrack → replan path run. Marks the run dirty so a recovered run is never
+   *  distilled into a recipe.
+   *  T8 DEBT (deferred to scheduler, NOT fixed here): the bank retries until
+   *  maxTurns with no dedicated bank budget — a scheduler should bound bank
+   *  attempts per run. */
+  private tryBacktrackBank(reason: string): boolean {
+    const hit = lookupRecovery(reason ?? '');
+    if (!hit) return false;
+    this.markDirty(`recovery:${hit.pattern}`);
+    this.steer(`Recovery: ${hit.fix}`);
+    this.tryBacktrack(); // best-effort: also restore the earlier page when there is one
     return true;
   }
 
